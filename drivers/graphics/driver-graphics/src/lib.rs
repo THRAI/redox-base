@@ -6,10 +6,9 @@ use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
 use std::ops::ControlFlow;
-use std::os::fd::BorrowedFd;
 use std::sync::{Arc, Mutex};
 
-use inputd::{DisplayHandle, VtEventKind};
+use inputd::{DisplayHandle, VtEvent, VtEventKind};
 use libredox::Fd;
 use redox_scheme::scheme::{SchemeSync, register_scheme_inner};
 use redox_scheme::{CallerCtx, OpenResult, Socket};
@@ -125,7 +124,7 @@ impl Framebuffer for () {}
 
 pub struct GraphicsScheme<T: GraphicsAdapter> {
     inner: GraphicsSchemeInner<T>,
-    inputd_handle: DisplayHandle,
+    _inputd_handle: DisplayHandle,
     handler: Blocking<Box<Socket>>,
 }
 
@@ -159,25 +158,20 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
         register_scheme_inner(&socket, &inner.scheme_name, cap_id)
             .expect("failed to register graphics scheme root");
 
-        let display_handle = if early {
-            DisplayHandle::new_early(&inner.scheme_name).unwrap()
-        } else {
-            DisplayHandle::new(&inner.scheme_name).unwrap()
-        };
+        let control_id = inner.handles.insert(Handle::Control);
+        let control_cap = Fd::new(socket.create_this_scheme_fd(0, control_id, 0, 0).unwrap());
+
+        let display_handle = DisplayHandle::new(&inner.scheme_name, control_cap, early).unwrap();
 
         Self {
             inner,
-            inputd_handle: display_handle,
+            _inputd_handle: display_handle,
             handler: Blocking::new(Box::new(socket), 16),
         }
     }
 
     pub fn event_handle(&self) -> &Fd {
         self.handler.socket().inner()
-    }
-
-    pub fn inputd_event_handle(&self) -> BorrowedFd<'_> {
-        self.inputd_handle.inner()
     }
 
     pub fn adapter(&self) -> &T {
@@ -198,18 +192,6 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
 
     pub fn adapter_and_kms_objects_mut(&mut self) -> (&mut T, &mut KmsObjects<T>) {
         (&mut self.inner.adapter, &mut self.inner.objects)
-    }
-
-    pub fn handle_vt_events(&mut self) {
-        while let Some(vt_event) = self
-            .inputd_handle
-            .read_vt_event()
-            .expect("driver-graphics: failed to read display handle")
-        {
-            match vt_event.kind {
-                VtEventKind::Activate => self.inner.activate_vt(vt_event.vt),
-            }
-        }
     }
 
     pub fn notify_displays_changed(&mut self) {
@@ -272,6 +254,7 @@ impl<T: GraphicsAdapter> VtState<T> {
 enum Handle<T: GraphicsAdapter> {
     V2(DrmHandle<T>),
     SchemeRoot,
+    Control,
 }
 
 struct DrmHandle<T: GraphicsAdapter> {
@@ -436,7 +419,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsSchemeInner<T> {
                     next_id: _,
                     buffers: _,
                 }) => write!(w, "v2/{vt}").unwrap(),
-                Handle::SchemeRoot => return Err(Error::new(EOPNOTSUPP)),
+                Handle::SchemeRoot | Handle::Control => return Err(Error::new(EOPNOTSUPP)),
             };
             Ok(())
         })
@@ -450,7 +433,6 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsSchemeInner<T> {
         _ctx: &CallerCtx,
     ) -> Result<usize> {
         match self.handles.get_mut(id)? {
-            Handle::SchemeRoot => return Err(Error::new(EOPNOTSUPP)),
             Handle::V2(handle) => ioctl::call_ioctl(
                 &mut self.adapter,
                 &mut self.objects,
@@ -460,6 +442,15 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsSchemeInner<T> {
                 metadata[0],
                 payload,
             ),
+            Handle::Control => {
+                let vt_event =
+                    unsafe { VtEvent::from_bytes(payload) }.ok_or_else(|| Error::new(EINVAL))?;
+                match vt_event.kind {
+                    VtEventKind::Activate => self.activate_vt(vt_event.vt),
+                }
+                Ok(0)
+            }
+            Handle::SchemeRoot => return Err(Error::new(EOPNOTSUPP)),
         }
     }
 
@@ -485,7 +476,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsSchemeInner<T> {
                     .unwrap(),
                 offset & (MAP_FAKE_OFFSET_MULTIPLIER as u64 - 1),
             ),
-            Handle::SchemeRoot => return Err(Error::new(EOPNOTSUPP)),
+            Handle::SchemeRoot | Handle::Control => return Err(Error::new(EOPNOTSUPP)),
         };
         let ptr = T::map_dumb_buffer(&mut self.adapter, framebuffer);
         Ok(unsafe { ptr.add(offset as usize) } as usize)

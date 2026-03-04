@@ -44,19 +44,11 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
 
     user_data! {
         enum Source {
-            Input,
             Irq,
             Scheme,
         }
     }
 
-    event_queue
-        .subscribe(
-            scheme.inputd_event_handle().as_raw_fd() as usize,
-            Source::Input,
-            event::EventFlags::READ,
-        )
-        .unwrap();
     event_queue
         .subscribe(
             irq_file.irq_handle().as_raw_fd() as usize,
@@ -76,13 +68,12 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
 
     daemon.ready();
 
-    let all = [Source::Input, Source::Irq, Source::Scheme];
+    let all = [Source::Irq, Source::Scheme];
     for event in all
         .into_iter()
         .chain(event_queue.map(|e| e.expect("ihdgd: failed to get next event").user_data))
     {
         match event {
-            Source::Input => scheme.handle_vt_events(),
             Source::Irq => {
                 let mut irq = [0; 8];
                 irq_file.irq_handle().read(&mut irq).unwrap();

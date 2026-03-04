@@ -1,12 +1,13 @@
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
-use std::mem::size_of;
+use std::io::{self, Write};
+use std::mem::{self, size_of};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::slice;
 
 use libredox::flag::{O_CLOEXEC, O_NONBLOCK, O_RDWR};
+use libredox::Fd;
 use orbclient::Event;
 use syscall::ESTALE;
 
@@ -23,12 +24,8 @@ fn read_to_slice<T: Copy>(
     }
 }
 
-pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     slice::from_raw_parts((p as *const T) as *const u8, size_of::<T>())
-}
-
-unsafe fn any_as_u8_slice_mut<T: Sized>(p: &mut T) -> &mut [u8] {
-    slice::from_raw_parts_mut((p as *mut T) as *mut u8, size_of::<T>())
 }
 
 pub struct ConsumerHandle(File);
@@ -132,30 +129,20 @@ pub struct KeymapActivate {
 pub struct DisplayHandle(File);
 
 impl DisplayHandle {
-    pub fn new<S: Into<String>>(scheme_name: S) -> io::Result<Self> {
-        let path = format!("/scheme/input/handle/{}", scheme_name.into());
-        Ok(Self(File::open(path)?))
-    }
-
-    pub fn new_early<S: Into<String>>(scheme_name: S) -> io::Result<Self> {
-        let path = format!("/scheme/input/handle_early/{}", scheme_name.into());
-        Ok(Self(File::open(path)?))
-    }
-
-    pub fn read_vt_event(&mut self) -> io::Result<Option<VtEvent>> {
-        let mut event = VtEvent {
-            kind: VtEventKind::Activate,
-            vt: usize::MAX,
-        };
-
-        let nread = self.0.read(unsafe { any_as_u8_slice_mut(&mut event) })?;
-
-        if nread == 0 {
-            Ok(None)
+    pub fn new<S: Into<String>>(scheme_name: S, control_cap: Fd, early: bool) -> io::Result<Self> {
+        let path = if early {
+            format!("/scheme/input/handle_early/{}", scheme_name.into())
         } else {
-            assert_eq!(nread, size_of::<VtEvent>());
-            Ok(Some(event))
-        }
+            format!("/scheme/input/handle/{}", scheme_name.into())
+        };
+        let handle = File::open(path)?;
+        libredox::call::call_wo(
+            handle.as_raw_fd() as usize,
+            &control_cap.into_raw().to_ne_bytes(),
+            syscall::CallFlags::FD,
+            &[],
+        )?;
+        Ok(Self(handle))
     }
 
     pub fn inner(&self) -> BorrowedFd<'_> {
@@ -195,6 +182,17 @@ pub enum VtEventKind {
 pub struct VtEvent {
     pub kind: VtEventKind,
     pub vt: usize,
+}
+
+impl VtEvent {
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { any_as_u8_slice(self) }
+    }
+
+    pub unsafe fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let bytes: &[u8; size_of::<Self>()] = bytes.try_into().ok()?;
+        Some(unsafe { mem::transmute::<[u8; _], Self>(*bytes) })
+    }
 }
 
 pub struct ProducerHandle(File);

@@ -14,19 +14,22 @@
 use core::mem::size_of;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::mem::transmute;
 use std::ops::ControlFlow;
 
 use inputd::{ControlEvent, VtEvent, VtEventKind};
 
 use libredox::errno::ESTALE;
+use libredox::Fd;
 use redox_scheme::scheme::SchemeSync;
 use redox_scheme::{CallerCtx, OpenResult, Response, SignalBehavior, Socket};
 
 use orbclient::{Event, EventOption};
 use scheme_utils::{Blocking, FpathWriter, HandleMap};
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error as SysError, EventFlags, EACCES, EBADF, EEXIST, EINVAL};
+use syscall::{
+    CallFlags, Error as SysError, EventFlags, FobtainFdFlags, EACCES, EBADF, EEXIST, EINVAL,
+    EOPNOTSUPP,
+};
 
 pub mod keymap;
 
@@ -47,8 +50,10 @@ enum Handle {
     },
     Display {
         events: EventFlags,
-        pending: Vec<VtEvent>,
-        notified: bool,
+        device: String,
+        device_control: Option<Fd>,
+        /// Control of all VT's gets handed over from earlyfb devices to the first non-earlyfb device.
+        is_earlyfb: bool,
     },
     Control,
     SchemeRoot,
@@ -67,7 +72,8 @@ enum ActiveDisplay {
     },
 }
 
-struct InputScheme {
+struct InputScheme<'a> {
+    socket: &'a Socket,
     handles: HandleMap<Handle>,
 
     next_vt_id: usize,
@@ -81,11 +87,13 @@ struct InputScheme {
     rshift: bool,
 
     has_new_events: bool,
+    pending_activate: Option<usize>,
 }
 
-impl InputScheme {
-    fn new() -> Self {
+impl<'a> InputScheme<'a> {
+    fn new(socket: &'a Socket) -> Self {
         Self {
+            socket,
             handles: HandleMap::new(),
 
             next_vt_id: 2, // VT 1 is reserved for the bootlog
@@ -99,6 +107,29 @@ impl InputScheme {
             lshift: false,
             rshift: false,
             has_new_events: false,
+            pending_activate: None,
+        }
+    }
+
+    fn send_vt_event_to_active_display(&mut self, event: VtEvent) {
+        match self.active_display {
+            ActiveDisplay::Unknown => {}
+            ActiveDisplay::Early { id, .. } | ActiveDisplay::Regular { id, .. } => {
+                match self.handles.get_mut(id).unwrap() {
+                    Handle::Display { device_control, .. } => {
+                        if let Some(device_control) = device_control {
+                            libredox::call::call_wo(
+                                device_control.raw(),
+                                event.as_bytes(),
+                                CallFlags::empty(),
+                                &[],
+                            )
+                            .unwrap(); // FIXME
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 
@@ -119,23 +150,10 @@ impl InputScheme {
             self.active_vt.unwrap_or(0)
         );
 
-        match self.active_display {
-            ActiveDisplay::Unknown => {}
-            ActiveDisplay::Early { id, .. } | ActiveDisplay::Regular { id, .. } => {
-                match self.handles.get_mut(id).unwrap() {
-                    Handle::Display {
-                        pending, notified, ..
-                    } => {
-                        pending.push(VtEvent {
-                            kind: VtEventKind::Activate,
-                            vt: new_active,
-                        });
-                        *notified = false;
-                    }
-                    _ => unreachable!(),
-                }
-            }
-        }
+        self.send_vt_event_to_active_display(VtEvent {
+            kind: VtEventKind::Activate,
+            vt: new_active,
+        });
 
         self.active_vt = Some(new_active);
     }
@@ -155,7 +173,7 @@ impl InputScheme {
     }
 }
 
-impl SchemeSync for InputScheme {
+impl SchemeSync for InputScheme<'_> {
     fn scheme_root(&mut self) -> syscall::Result<usize> {
         Ok(self.handles.insert(Handle::SchemeRoot))
     }
@@ -176,8 +194,8 @@ impl SchemeSync for InputScheme {
 
         let command = path_parts.next().ok_or(SysError::new(EINVAL))?;
 
-        let fd = match command {
-            "producer" => self.handles.insert(Handle::Producer),
+        let handle_ty = match command {
+            "producer" => Handle::Producer,
             "consumer" => {
                 let vt = self.next_vt_id;
                 self.next_vt_id += 1;
@@ -186,13 +204,13 @@ impl SchemeSync for InputScheme {
                 if self.active_vt.is_none() {
                     self.switch_vt(vt);
                 }
-                self.handles.insert(Handle::Consumer {
+                Handle::Consumer {
                     events: EventFlags::empty(),
                     pending: Vec::new(),
                     needs_handoff: false,
                     notified: false,
                     vt,
-                })
+                }
             }
             "consumer_bootlog" => {
                 if !self.vts.insert(1) {
@@ -200,72 +218,25 @@ impl SchemeSync for InputScheme {
                 }
 
                 self.switch_vt(1);
-                self.handles.insert(Handle::Consumer {
+                Handle::Consumer {
                     events: EventFlags::empty(),
                     pending: Vec::new(),
                     needs_handoff: false,
                     notified: false,
                     vt: 1,
-                })
+                }
             }
             "handle" | "handle_early" => {
-                self.has_new_events = true;
+                let display = path_parts.next().ok_or(SysError::new(EINVAL))?;
 
-                let fd = self.handles.insert(Handle::Display {
+                Handle::Display {
                     events: EventFlags::empty(),
-                    pending: if let Some(active_vt) = self.active_vt {
-                        vec![VtEvent {
-                            kind: VtEventKind::Activate,
-                            vt: active_vt,
-                        }]
-                    } else {
-                        vec![]
-                    },
-                    notified: false,
-                });
-
-                let needs_handoff = match command {
-                    "handle_early" => matches!(self.active_display, ActiveDisplay::Unknown),
-                    "handle" => matches!(
-                        self.active_display,
-                        ActiveDisplay::Unknown | ActiveDisplay::Early { .. }
-                    ),
-                    _ => unreachable!(),
-                };
-
-                if needs_handoff {
-                    let display = path_parts.next().ok_or(SysError::new(EINVAL))?;
-
-                    self.active_display = if command == "handle_early" {
-                        ActiveDisplay::Early {
-                            name: display.to_owned(),
-                            id: fd,
-                        }
-                    } else {
-                        ActiveDisplay::Regular {
-                            name: display.to_owned(),
-                            id: fd,
-                        }
-                    };
-
-                    for handle in self.handles.values_mut() {
-                        match handle {
-                            Handle::Consumer {
-                                needs_handoff,
-                                notified,
-                                ..
-                            } => {
-                                *needs_handoff = true;
-                                *notified = false;
-                            }
-                            _ => continue,
-                        }
-                    }
+                    device: display.to_owned(),
+                    device_control: None,
+                    is_earlyfb: command == "handle_early",
                 }
-
-                fd
             }
-            "control" => self.handles.insert(Handle::Control),
+            "control" => Handle::Control,
 
             _ => {
                 log::error!("invalid path '{path}'");
@@ -275,6 +246,7 @@ impl SchemeSync for InputScheme {
 
         log::debug!("{path} channel has been opened");
 
+        let fd = self.handles.insert(handle_ty);
         Ok(OpenResult::ThisScheme {
             number: fd,
             flags: NewFdFlags::empty(),
@@ -329,23 +301,10 @@ impl SchemeSync for InputScheme {
                 Ok(copy)
             }
 
-            Handle::Display { pending, .. } => {
-                if buf.len() % size_of::<VtEvent>() == 0 {
-                    let copy = core::cmp::min(pending.len(), buf.len() / size_of::<VtEvent>());
-
-                    for (i, event) in pending.drain(..copy).enumerate() {
-                        buf[i * size_of::<VtEvent>()..(i + 1) * size_of::<VtEvent>()]
-                            .copy_from_slice(&unsafe {
-                                transmute::<VtEvent, [u8; size_of::<VtEvent>()]>(event)
-                            });
-                    }
-                    Ok(copy * size_of::<VtEvent>())
-                } else {
-                    log::error!("display tried to read incorrectly sized event");
-                    return Err(SysError::new(EINVAL));
-                }
+            Handle::Display { .. } => {
+                log::error!("display tried to read");
+                return Err(SysError::new(EINVAL));
             }
-
             Handle::Producer => {
                 log::error!("producer tried to read");
                 return Err(SysError::new(EINVAL));
@@ -499,6 +458,73 @@ impl SchemeSync for InputScheme {
         Ok(buf.len())
     }
 
+    fn on_sendfd(
+        &mut self,
+        sendfd_request: &redox_scheme::SendFdRequest,
+    ) -> syscall::Result<usize> {
+        let handle = self.handles.get_mut(sendfd_request.id())?;
+
+        let (device, is_earlyfb) = match handle {
+            Handle::SchemeRoot | Handle::Producer | Handle::Consumer { .. } | Handle::Control => {
+                return Err(SysError::new(EOPNOTSUPP))
+            }
+            Handle::Display {
+                device,
+                device_control,
+                is_earlyfb,
+                ..
+            } => {
+                let mut new_fds = [usize::MAX];
+                sendfd_request.obtain_fd(self.socket, FobtainFdFlags::UPPER_TBL, &mut new_fds)?;
+                *device_control = Some(Fd::new(new_fds[0]));
+                (device.clone(), *is_earlyfb)
+            }
+        };
+
+        let needs_handoff = match is_earlyfb {
+            true => matches!(self.active_display, ActiveDisplay::Unknown),
+            false => matches!(
+                self.active_display,
+                ActiveDisplay::Unknown | ActiveDisplay::Early { .. }
+            ),
+        };
+
+        if needs_handoff {
+            self.has_new_events = true;
+            self.active_display = if is_earlyfb {
+                ActiveDisplay::Early {
+                    name: device,
+                    id: sendfd_request.id(),
+                }
+            } else {
+                ActiveDisplay::Regular {
+                    name: device,
+                    id: sendfd_request.id(),
+                }
+            };
+
+            for handle in self.handles.values_mut() {
+                match handle {
+                    Handle::Consumer {
+                        needs_handoff,
+                        notified,
+                        ..
+                    } => {
+                        *needs_handoff = true;
+                        *notified = false;
+                    }
+                    _ => continue,
+                }
+            }
+        }
+
+        if let Some(vt) = self.active_vt {
+            self.pending_activate = Some(vt);
+        }
+
+        Ok(0)
+    }
+
     fn fevent(
         &mut self,
         id: usize,
@@ -515,13 +541,8 @@ impl SchemeSync for InputScheme {
                 *notified = false;
                 Ok(EventFlags::empty())
             }
-            Handle::Display {
-                ref mut events,
-                ref mut notified,
-                ..
-            } => {
+            Handle::Display { ref mut events, .. } => {
                 *events = flags;
-                *notified = false;
                 Ok(EventFlags::empty())
             }
             Handle::Producer | Handle::Control => {
@@ -552,8 +573,8 @@ impl SchemeSync for InputScheme {
 fn daemon(daemon: daemon::SchemeDaemon) -> anyhow::Result<()> {
     // Create the ":input" scheme.
     let socket_file = Socket::create()?;
-    let mut scheme = InputScheme::new();
-    let mut handler = Blocking::new(Box::new(socket_file), 16);
+    let mut scheme = InputScheme::new(&socket_file);
+    let mut handler = Blocking::new(&socket_file, 16);
 
     let _ = daemon.ready_sync_scheme(handler.socket(), &mut scheme);
 
@@ -562,6 +583,13 @@ fn daemon(daemon: daemon::SchemeDaemon) -> anyhow::Result<()> {
         match handler.process_requests_nonblocking(&mut scheme)? {
             ControlFlow::Continue(()) => {}
             ControlFlow::Break(()) => unreachable!("scheme should be blocking"),
+        }
+
+        if let Some(vt) = scheme.pending_activate.take() {
+            scheme.send_vt_event_to_active_display(VtEvent {
+                kind: VtEventKind::Activate,
+                vt,
+            });
         }
 
         if !scheme.has_new_events {
@@ -581,24 +609,6 @@ fn daemon(daemon: daemon::SchemeDaemon) -> anyhow::Result<()> {
                         || *notified
                         || !events.contains(EventFlags::EVENT_READ)
                     {
-                        continue;
-                    }
-
-                    // Notify the consumer that we have some events to read. Yum yum.
-                    handler.socket().write_response(
-                        Response::post_fevent(*id, EventFlags::EVENT_READ.bits()),
-                        SignalBehavior::Restart,
-                    )?;
-
-                    *notified = true;
-                }
-                Handle::Display {
-                    events,
-                    pending,
-                    ref mut notified,
-                    ..
-                } => {
-                    if pending.is_empty() || *notified || !events.contains(EventFlags::EVENT_READ) {
                         continue;
                     }
 
