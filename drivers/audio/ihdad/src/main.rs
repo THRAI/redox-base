@@ -84,7 +84,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
             )
             .unwrap();
 
-        libredox::call::setrens(0, 0).expect("ihdad: failed to enter null namespace");
+        // libredox::call::setrens(0, 0).expect("ihdad: failed to enter null namespace"); Opens shm later!
 
         let all = [Source::Irq, Source::Scheme];
 
@@ -102,6 +102,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                     }
                     irq_file.irq_handle().write(&mut irq).unwrap();
 
+                    device.borrow_mut().process_audio_queue();
                     readiness_based
                         .poll_all_requests(&mut device)
                         .expect("ihdad: failed to poll requests");

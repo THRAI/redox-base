@@ -365,7 +365,13 @@ impl StreamBuffer {
         }
         let len = min(self.block_size(), buf.len());
 
-        //log::trace!("Phys: {:X} Virt: {:X} Offset: {:X} Len: {:X}", self.phys(), self.addr(), self.current_block() * self.block_size(), len);
+        log::trace!(
+            "Phys: {:X} Virt: {:X} Offset: {:X} Len: {:X}",
+            self.phys(),
+            self.addr(),
+            self.current_block() * self.block_size(),
+            len
+        );
         unsafe {
             copy_nonoverlapping(
                 buf.as_ptr(),

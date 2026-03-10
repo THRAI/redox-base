@@ -14,7 +14,9 @@ use redox_scheme::scheme::SchemeSync;
 use redox_scheme::CallerCtx;
 use redox_scheme::OpenResult;
 use scheme_utils::{FpathWriter, HandleMap};
-use syscall::error::{Error, Result, EACCES, EBADF, EIO, ENODEV, EWOULDBLOCK};
+use syscall::error::{
+    Error, Result, EACCES, EBADF, EEXIST, EIO, ENODEV, ENOENT, ENOTDIR, EWOULDBLOCK,
+};
 
 use spin::Mutex;
 use syscall::schemev2::NewFdFlags;
@@ -121,6 +123,9 @@ struct Regs {
     dpubase: Mmio<u32>, // 0x74
 }
 
+const HW_BUFFER_SIZE: usize = 512;
+pub type AudioChunk = [(i16, i16); HW_BUFFER_SIZE];
+
 pub struct IntelHDA {
     vend_prod: u32,
 
@@ -150,6 +155,7 @@ pub struct IntelHDA {
 
     int_counter: usize,
     handles: Mutex<HandleMap<Handle>>,
+    consumer: Option<redox_rings::user::Consumer<AudioChunk>>,
 }
 
 impl IntelHDA {
@@ -202,6 +208,7 @@ impl IntelHDA {
 
             int_counter: 0,
             handles: Mutex::new(HandleMap::new()),
+            consumer: None,
         };
 
         module.init()?;
@@ -240,8 +247,8 @@ impl IntelHDA {
 
     pub fn irq(&mut self) -> bool {
         self.int_counter += 1;
-
-        self.handle_interrupts()
+        let active = self.handle_interrupts();
+        active
     }
 
     pub fn int_count(&self) -> usize {
@@ -973,6 +980,52 @@ impl IntelHDA {
             _ => false,
         }
     }
+    pub fn process_audio_queue(&mut self) {
+        let consumer: &mut redox_rings::user::Consumer<AudioChunk> = match self.consumer.as_mut() {
+            Some(c) => c,
+            None => {
+                return;
+            }
+        };
+
+        let chunk = match consumer.pop() {
+            Ok(chunk) => chunk,
+            Err(_) => [(0, 0); HW_BUFFER_SIZE],
+        };
+
+        let num_input_streams = self.num_input_streams();
+        let num_output_streams = self.num_output_streams();
+        let base_addr = self.base;
+
+        let index = 0;
+
+        let output = unsafe {
+            if index < num_output_streams {
+                Some(
+                    &mut *((base_addr + 0x80 + num_input_streams * 0x20 + index * 0x20)
+                        as *mut StreamDescriptorRegs),
+                )
+            } else {
+                None
+            }
+        }
+        .unwrap();
+
+        let os = self.output_streams.get_mut(index).unwrap();
+
+        let open_block = (output.link_position() as usize) / os.block_size();
+        let current_block = os.current_block();
+
+        if current_block == (open_block + 3) % NUM_SUB_BUFFS {
+            return;
+        }
+
+        let buf_ptr = chunk.as_ptr() as *const u8;
+        let buf_len = std::mem::size_of_val(&chunk);
+        let buf = unsafe { std::slice::from_raw_parts(buf_ptr, buf_len) };
+
+        let _ = os.write_block(buf);
+    }
 }
 
 impl Drop for IntelHDA {
@@ -1016,20 +1069,66 @@ impl SchemeSync for IntelHDA {
         if ctx.uid != 0 {
             return Err(Error::new(EACCES));
         }
-        let handle = match path.trim_matches('/') {
-            //TODO: allow multiple codecs
-            "codec" => Handle::StrBuf(self.dump_codec(0).into_bytes()),
-            _ => Handle::Todo,
-        };
-        let id = self.handles.lock().insert(handle);
+        match parent_handle_type {
+            Handle::SchemeRoot => {
+                //let path: Vec<&str>;
+                /*
+                match str::from_utf8(_path) {
+                    Ok(p)  => {
+                            path = p.split("/").collect();
+                            if !self.validate_path(&path) {
+                                return Err(Error::new(EINVAL));
 
-        // TODO: always positioned?
-        Ok(OpenResult::ThisScheme {
-            number: id,
-            flags: NewFdFlags::POSITIONED,
-        })
+                        },
+                    Err(_) => {return Err(Error::new(EINVAL));},
+                }*/
+                let handle = match path.trim_matches('/') {
+                    //TODO: allow multiple codecs
+                    "codec" => Handle::StrBuf(self.dump_codec(0).into_bytes()),
+                    _ => Handle::Todo,
+                };
+                let id = self.handles.lock().insert(handle);
+
+                // TODO: always positioned?
+                Ok(OpenResult::ThisScheme {
+                    number: id,
+                    flags: NewFdFlags::POSITIONED,
+                })
+            }
+            Handle::Todo => {
+                if path != "audio_shm" {
+                    return Err(Error::new(ENOENT));
+                }
+
+                let shm_fd = libredox::Fd::open(
+                    "/scheme/shm/audio_shm",
+                    libredox::flag::O_CREAT
+                        | libredox::flag::O_RDWR
+                        | libredox::flag::O_CLOEXEC
+                        | libredox::flag::O_EXCL,
+                    0,
+                )
+                .map_err(|e| {
+                    log::error!("ihdad: failed to open 'audio_shm': {:?}", e);
+                    e
+                })?;
+
+                let fd = shm_fd.raw();
+
+                let consumer =
+                    redox_rings::user::Consumer::<AudioChunk>::from_fd(shm_fd, true, None)?;
+
+                if self.consumer.is_some() {
+                    return Err(Error::new(EEXIST));
+                } else {
+                    self.consumer = Some(consumer);
+                }
+
+                Ok(OpenResult::OtherScheme { fd })
+            }
+            _ => Err(Error::new(EBADF)),
+        }
     }
-
     fn read(
         &mut self,
         id: usize,

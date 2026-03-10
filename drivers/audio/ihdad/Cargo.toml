@@ -11,6 +11,8 @@ log.workspace = true
 redox_event.workspace = true
 redox_syscall.workspace = true
 spin.workspace = true
+redox-scheme.workspace = true
+redox-rings.workspace = true
 
 common = { path = "../../common" }
 daemon = { path = "../../../daemon" }
