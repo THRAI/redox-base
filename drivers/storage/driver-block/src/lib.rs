@@ -1,6 +1,7 @@
 use std::cmp;
 use std::future::{Future, IntoFuture};
 use std::io::{self, Read, Seek, SeekFrom};
+use std::slice;
 
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
@@ -8,17 +9,21 @@ use std::fmt::Write;
 use std::str;
 use std::task::Poll;
 
+use event::EventFlags;
 use executor::LocalExecutor;
-use libredox::Fd;
+use libredox::{flag, Fd};
 use partitionlib::{LogicalBlockSize, PartitionTable};
-use redox_scheme::scheme::{register_scheme_inner, SchemeAsync, SchemeState};
-use redox_scheme::{CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket};
+use redox_rings::raw::RingPushError;
+use redox_scheme::scheme::{register_scheme_inner, SchemeAsync, SchemeState, SchemeSync};
+use redox_scheme::{
+    CallerCtx, OpenResult, RecvFdRequest, RequestKind, Response, SignalBehavior, Socket,
+};
 use scheme_utils::{FpathWriter, HandleMap};
 use syscall::dirent::DirentBuf;
 use syscall::schemev2::NewFdFlags;
 use syscall::{
-    Error, Result, Stat, EACCES, EAGAIN, EBADF, EINTR, EINVAL, EISDIR, ENOENT, ENOLCK, EOPNOTSUPP,
-    EOVERFLOW, EWOULDBLOCK, MODE_DIR, MODE_FILE, O_DIRECTORY, O_STAT,
+    Error, FmoveFdFlags, Result, Stat, EACCES, EAGAIN, EBADF, EINTR, EINVAL, EISDIR, ENOENT,
+    ENOLCK, EOPNOTSUPP, EOVERFLOW, EPROTO, EWOULDBLOCK, MODE_DIR, MODE_FILE, O_DIRECTORY, O_STAT,
 };
 
 /// Split the read operation into a series of block reads.
@@ -363,37 +368,191 @@ struct DiskSchemeInner<T> {
     handles: HandleMap<Handle>,
 }
 
-pub trait ExecutorTrait {
-    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O;
+#[derive(Clone)]
+pub struct RingDiskWrapper<T> {
+    pub disk: T,
+    pub pt: Option<PartitionTable>,
 }
-impl<Hw: executor::Hardware> ExecutorTrait for LocalExecutor<Hw> {
-    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
-        LocalExecutor::block_on(self, fut)
-    }
-}
-#[deprecated = "use custom executor"]
-pub struct FuturesExecutor;
 
-#[allow(deprecated)]
-impl ExecutorTrait for FuturesExecutor {
-    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
-        futures::executor::block_on(fut.into_future())
-    }
-}
-pub struct TrivialExecutor;
-impl ExecutorTrait for TrivialExecutor {
-    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
-        let mut fut = std::pin::pin!(fut.into_future());
-        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-        loop {
-            match fut.as_mut().poll(&mut cx) {
-                Poll::Ready(v) => return v,
-                Poll::Pending => {
-                    log::warn!("TrivialExecutor: future wasn't trivial");
-                    continue;
-                }
+impl<T: Disk> RingDiskWrapper<T> {
+    pub fn pt(disk: &mut T, executor: &impl ExecutorTrait) -> Option<PartitionTable> {
+        let bs = match disk.block_size() {
+            512 => LogicalBlockSize::Lb512,
+            4096 => LogicalBlockSize::Lb4096,
+            _ => return None,
+        };
+        struct Device<'a, D: Disk, E: ExecutorTrait> {
+            disk: &'a mut D,
+            executor: &'a E,
+            offset: u64,
+        }
+
+        impl<'a, D: Disk, E: ExecutorTrait> Seek for Device<'a, D, E> {
+            fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+                let size = i64::try_from(self.disk.size()).or(Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Disk larger than 2^63 - 1 bytes",
+                )))?;
+
+                self.offset = match from {
+                    SeekFrom::Start(new_pos) => cmp::min(self.disk.size(), new_pos),
+                    SeekFrom::Current(new_pos) => {
+                        cmp::max(0, cmp::min(size, self.offset as i64 + new_pos)) as u64
+                    }
+                    SeekFrom::End(new_pos) => cmp::max(0, cmp::min(size + new_pos, size)) as u64,
+                };
+
+                Ok(self.offset)
             }
         }
+        // TODO: Perhaps this impl should be used in the rest of the scheme.
+        impl<'a, D: Disk, E: ExecutorTrait> Read for Device<'a, D, E> {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let blksize = self.disk.block_size();
+                let size_in_blocks = self.disk.size() / u64::from(blksize);
+
+                let disk = &mut self.disk;
+
+                let read_block = |block: u64, block_bytes: &mut [u8]| {
+                    if block >= size_in_blocks {
+                        return Err(io::Error::from_raw_os_error(syscall::EOVERFLOW));
+                    }
+
+                    let bytes = self.executor.block_on(disk.read(block, block_bytes))?;
+                    assert_eq!(bytes, block_bytes.len());
+                    Ok(())
+                };
+                let bytes_read = block_read(self.offset, blksize, buf, read_block)?;
+
+                self.offset += bytes_read as u64;
+                Ok(bytes_read)
+            }
+        }
+
+        partitionlib::get_partitions(
+            &mut Device {
+                disk,
+                offset: 0,
+                executor,
+            },
+            bs,
+        )
+        .ok()
+        .flatten()
+    }
+
+    pub fn new(mut disk: T, executor: &impl ExecutorTrait) -> Self {
+        Self {
+            pt: Self::pt(&mut disk, executor),
+            disk,
+        }
+    }
+
+    pub fn disk(&self) -> &T {
+        &self.disk
+    }
+
+    pub fn disk_mut(&mut self) -> &mut T {
+        &mut self.disk
+    }
+
+    pub fn block_size(&self) -> u32 {
+        self.disk.block_size()
+    }
+
+    pub fn size(&self) -> u64 {
+        self.disk.size()
+    }
+
+    pub async fn read(
+        &mut self,
+        part_num: Option<usize>,
+        block: u64,
+        buf: &mut [u8],
+    ) -> syscall::Result<usize> {
+        if buf.len() as u64 % u64::from(self.disk.block_size()) != 0 {
+            return Err(Error::new(EINVAL));
+        }
+
+        if let Some(part_num) = part_num {
+            let part = self
+                .pt
+                .as_ref()
+                .ok_or(syscall::Error::new(EBADF))?
+                .partitions
+                .get(part_num)
+                .ok_or(syscall::Error::new(EBADF))?;
+
+            if block >= part.size {
+                return Err(syscall::Error::new(EOVERFLOW));
+            }
+
+            let abs_block = part.start_lba + block;
+
+            self.disk.read(abs_block, buf).await
+        } else {
+            self.disk.read(block, buf).await
+        }
+    }
+
+    pub async fn write(
+        &mut self,
+        part_num: Option<usize>,
+        block: u64,
+        buf: &[u8],
+    ) -> syscall::Result<usize> {
+        if buf.len() as u64 % u64::from(self.disk.block_size()) != 0 {
+            return Err(Error::new(EINVAL));
+        }
+
+        if let Some(part_num) = part_num {
+            let part = self
+                .pt
+                .as_ref()
+                .ok_or(syscall::Error::new(EBADF))?
+                .partitions
+                .get(part_num)
+                .ok_or(syscall::Error::new(EBADF))?;
+
+            if block >= part.size {
+                return Err(syscall::Error::new(EOVERFLOW));
+            }
+
+            let abs_block = part.start_lba + block;
+
+            self.disk.write(abs_block, buf).await
+        } else {
+            self.disk.write(block, buf).await
+        }
+    }
+}
+pub trait EventSource {
+    async fn next(&mut self);
+}
+
+impl<Hw: executor::Hardware + 'static> EventSource for executor::ExternalEventSource<Hw> {
+    async fn next(&mut self) {
+        let _ = std::pin::Pin::new(self).next().await;
+    }
+}
+
+pub trait ExecutorTrait {
+    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O;
+    fn spawn(&self, fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>);
+    type Event: EventSource;
+    fn register_external_event(&self, fd: usize, flags: EventFlags) -> Self::Event;
+}
+
+impl<Hw: executor::Hardware + 'static> ExecutorTrait for std::rc::Rc<executor::LocalExecutor<Hw>> {
+    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
+        executor::LocalExecutor::block_on(self, fut)
+    }
+    fn spawn(&self, fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>) {
+        executor::LocalExecutor::spawn(self, fut)
+    }
+    type Event = executor::ExternalEventSource<Hw>;
+    fn register_external_event(&self, fd: usize, flags: EventFlags) -> Self::Event {
+        executor::LocalExecutor::register_external_event(self, fd, flags)
     }
 }
 
@@ -657,4 +816,692 @@ impl<D: Disk> DiskSchemeInner<D> {
     pub fn on_close(&mut self, id: usize) {
         let _ = self.handles.remove(id);
     }
+}
+
+pub struct RingDiskScheme<T, E> {
+    inner: RingDiskSchemeInner<T, E>,
+    state: SchemeState,
+}
+
+impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskScheme<T, E> {
+    pub fn new(
+        daemon: Option<daemon::Daemon>,
+        scheme_name: String,
+        disks: BTreeMap<u32, T>,
+        executor: E,
+    ) -> Self {
+        assert!(scheme_name.starts_with("disk"));
+        let socket = Socket::nonblock().expect("failed to create disk scheme");
+
+        let mut inner = RingDiskSchemeInner {
+            scheme_name,
+            socket,
+            disks: BTreeMap::from_iter(
+                disks
+                    .into_iter()
+                    .map(|(k, disk)| (k, RingDiskWrapper::new(disk, &executor))),
+            ),
+            next_id: 0,
+            handles: BTreeMap::new(),
+            executor,
+            shm_dir: libredox::Fd::open("/scheme/shm/disk", flag::O_DIRECTORY | flag::O_CLOEXEC, 0)
+                .expect("failed to open shm direcotry"),
+        };
+
+        let cap_id = inner.scheme_root().expect("failed to get this scheme root");
+        register_scheme_inner(&inner.socket, &inner.scheme_name, cap_id)
+            .expect("failed to register disk scheme root");
+
+        if let Some(daemon) = daemon {
+            daemon.ready();
+        }
+
+        Self {
+            inner,
+            state: SchemeState::new(),
+        }
+    }
+
+    pub fn event_handle(&self) -> &Fd {
+        self.inner.socket.inner()
+    }
+    /// Process pending and new requests.
+    ///
+    /// This needs to be called each time there is a new event on the scheme.
+    pub fn tick(&mut self) -> io::Result<()> {
+        // Handle new scheme requests
+        loop {
+            let request = match self.inner.socket.next_request(SignalBehavior::Interrupt) {
+                Ok(Some(request)) => request,
+                Ok(None) => {
+                    // Scheme likely got unmounted
+                    // TODO: return this to caller instead
+                    std::process::exit(0);
+                }
+                Err(error) if error.errno == EWOULDBLOCK || error.errno == EAGAIN => break,
+                Err(err) if err.errno == EINTR => continue,
+                Err(err) => return Err(err.into()),
+            };
+
+            let response = match request.kind() {
+                RequestKind::Call(call_request) => {
+                    // TODO: Spawn a separate task for each scheme call. This would however require the
+                    // use of a smarter buffer pool (or direct IO, or a buffer per fd) in order to do
+                    // parallel IO. It might also require async-aware locks so that a close() is
+                    // correctly ordered wrt IO on the same fd.
+                    call_request.handle_sync(&mut self.inner, &mut self.state)
+                }
+                RequestKind::SendFd(request) => Response::err(EOPNOTSUPP, request),
+                RequestKind::RecvFd(request) => {
+                    Response::open_dup_like(self.inner.on_recvfd(&request), request)
+                }
+                RequestKind::Cancellation(_cancellation_request) => {
+                    // FIXME implement cancellation
+                    continue;
+                }
+                RequestKind::MsyncMsg | RequestKind::MunmapMsg | RequestKind::MmapMsg => {
+                    unreachable!()
+                }
+                RequestKind::OnClose { id } => {
+                    self.inner.on_close(id);
+                    continue;
+                }
+                RequestKind::OnDetach { .. } => continue,
+            };
+            self.inner
+                .socket
+                .write_response(response, SignalBehavior::Restart)?;
+        }
+
+        Ok(())
+    }
+}
+
+enum RingHandle {
+    List(Vec<u8>), // entries
+    Disk {
+        num: u32,
+        pt: Option<usize>,
+        shm_fds: [usize; 3],
+    },
+    SchemeRoot,
+}
+
+struct RingDiskSchemeInner<T, E> {
+    scheme_name: String,
+    socket: Socket,
+    disks: BTreeMap<u32, RingDiskWrapper<T>>,
+    handles: HandleMap<Handle>,
+    executor: E,
+    shm_dir: Fd,
+}
+
+impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSchemeInner<T, E> {
+    // Checks if any conflicting handles already exist
+    fn check_locks(&self, disk_i: u32, part_i_opt: Option<usize>) -> Result<()> {
+        for (_, handle) in self.handles.iter() {
+            match handle {
+                RingHandle::Disk { num, pt, .. } => {
+                    let i = *num;
+                    if let Some(p) = *pt {
+                        if disk_i == i {
+                            match part_i_opt {
+                                Some(part_i) => {
+                                    if part_i == p {
+                                        return Err(Error::new(ENOLCK));
+                                    }
+                                }
+                                None => {
+                                    return Err(Error::new(ENOLCK));
+                                }
+                            }
+                        }
+                    } else {
+                        if disk_i == i {
+                            return Err(Error::new(ENOLCK));
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
+        Ok(())
+    }
+    fn on_close(&mut self, id: usize) {
+        let _ = self.handles.remove(&id);
+    }
+
+    fn setup_worker(
+        &mut self,
+        num: u32,
+        pt: Option<usize>,
+        disk: RingDiskWrapper<T>,
+    ) -> Result<[usize; 3]> {
+        let number_str = if let Some(part_num) = pt {
+            format!("{}p{}", num, part_num)
+        } else {
+            format!("{}", num)
+        };
+        let pool_path = format!("{}.pool", number_str);
+        let sq_path = format!("{}.sq", number_str);
+        let cq_path = format!("{}.cq", number_str);
+
+        let shm_fd = self.shm_dir.openat(
+            &pool_path,
+            flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC,
+            0,
+        )?;
+
+        syscall::ftruncate(shm_fd.raw(), POOL_SIZE)
+            .map_err(|e| format!("Failed to resize shm pool: {:?}", e))
+            .unwrap();
+
+        let shm_ptr = unsafe {
+            libredox::call::mmap(libredox::call::MmapArgs {
+                fd: shm_fd.raw(),
+                offset: 0,
+                length: POOL_SIZE,
+                prot: flag::PROT_READ | flag::PROT_WRITE,
+                flags: flag::MAP_SHARED,
+                addr: std::ptr::null_mut(),
+            })? as *mut u8
+        };
+
+        let sq_fd = self.shm_dir.openat(
+            &sq_path,
+            flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC | flag::O_EXCL,
+            0,
+        )?;
+
+        let cq_fd = self.shm_dir.openat(
+            &cq_path,
+            flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC | flag::O_EXCL,
+            0,
+        )?;
+
+        let shm_fds = [shm_fd.raw(), sq_fd.raw(), cq_fd.raw()];
+
+        let sq = BlockingConsumer::<DiskOpSqe>::from_fd(sq_fd, true, Some(RING_SIZE))?;
+        let cq = BlockingProducer::<DiskOpCqe>::from_fd(cq_fd, true, Some(RING_SIZE))?;
+
+        const BATCH_LIMIT: usize = 128;
+        let mut ring_worker = DiskWorker {
+            sq,
+            cq,
+            disk,
+            pt,
+            shm_base: shm_ptr,
+            shm_fd,
+        };
+
+        let exec_for_task = self.executor.clone();
+
+        self.executor.spawn(Box::pin(async move {
+            let time_path = format!("/scheme/time/{}", libredox::flag::CLOCK_MONOTONIC);
+            let time_handle = libredox::Fd::open(&time_path, libredox::flag::O_RDWR, 0)
+                .expect("failed to open time handle for nvme worker");
+
+            let mut time_events =
+                exec_for_task.register_external_event(time_handle.raw(), EventFlags::READ);
+            let mut queue: Vec<DiskOpSqe> = Vec::with_capacity(BATCH_LIMIT);
+
+            loop {
+                let mut spun = false;
+
+                for _ in 0..10_000 {
+                    match ring_worker.sq.try_pop() {
+                        Ok(req) => {
+                            queue.push(req);
+                            while queue.len() < BATCH_LIMIT {
+                                match ring_worker.sq.try_pop() {
+                                    Ok(req) => queue.push(req),
+                                    Err(_) => break,
+                                }
+                            }
+                            spun = true;
+                            break;
+                        }
+                        Err(redox_rings::raw::RingPopError::Empty) => {
+                            std::hint::spin_loop();
+                        }
+                        Err(e) => {
+                            log::error!("Failed to pop Sqe with error: {:?}", e);
+                            spun = true;
+                            break;
+                        }
+                    }
+                }
+
+                for req in queue.drain(..) {
+                    let _ = ring_worker.handle_request(req, &time_handle).await;
+                }
+
+                if spun {
+                    continue;
+                }
+
+                if let Err(e) = time_arm_ns(&time_handle, 1_000_000) {
+                    log::error!("Failed to arm timer: {}", e);
+                }
+
+                time_events.next().await;
+            }
+        }));
+
+        Ok(shm_fds)
+    }
+
+    fn on_recvfd(&mut self, recvfd_request: &RecvFdRequest) -> Result<OpenResult> {
+        let id = recvfd_request.id();
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        match handle {
+            RingHandle::Disk { shm_fds, .. } => {
+                if let Err(e) = recvfd_request.move_fd(&self.socket, FmoveFdFlags::CLONE, shm_fds) {
+                    log::error!("recvfd_inner: move_fd failed with error: {:?}", e);
+                    return Err(Error::new(EPROTO));
+                }
+
+                Ok(OpenResult::OtherSchemeMultiple {
+                    num_fds: recvfd_request.num_fds(),
+                })
+            }
+            RingHandle::SchemeRoot | RingHandle::List(_) => Err(Error::new(EBADF)),
+        }
+    }
+}
+
+impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
+    for RingDiskSchemeInner<T, E>
+{
+    fn scheme_root(&mut self) -> Result<usize> {
+        Ok(self.handles.insert(RingHandle::SchemeRoot))
+    }
+
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path_str: &str,
+        flags: usize,
+        _fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        if !matches!(
+            self.handles.get(&dirfd).ok_or(Error::new(EBADF))?,
+            RingHandle::SchemeRoot
+        ) {
+            return Err(Error::new(EACCES));
+        }
+
+        if ctx.uid != 0 {
+            return Err(Error::new(EACCES));
+        }
+        let path_str = path_str.trim_matches('/');
+
+        let handle = if path_str.is_empty() {
+            if flags & O_DIRECTORY == O_DIRECTORY || flags & O_STAT == O_STAT {
+                let mut list = String::new();
+
+                for (nsid, disk) in self.disks.iter() {
+                    write!(list, "{}\n", nsid).unwrap();
+
+                    if disk.pt.is_none() {
+                        continue;
+                    }
+                    for part_num in 0..disk.pt.as_ref().unwrap().partitions.len() {
+                        write!(list, "{}p{}\n", nsid, part_num).unwrap();
+                    }
+                }
+
+                RingHandle::List(list.into_bytes())
+            } else {
+                return Err(Error::new(EISDIR));
+            }
+        } else {
+            let (nsid, part_num_opt) = if let Some(p_pos) = path_str.chars().position(|c| c == 'p')
+            {
+                let nsid_str = &path_str[..p_pos];
+
+                if p_pos + 1 >= path_str.len() {
+                    return Err(Error::new(ENOENT));
+                }
+                let part_num_str = &path_str[p_pos + 1..];
+
+                let nsid = nsid_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
+                let part_num = part_num_str.parse::<usize>().or(Err(Error::new(ENOENT)))?;
+
+                let disk = self.disks.get(&nsid).ok_or(Error::new(ENOENT))?;
+
+                if disk
+                    .pt
+                    .as_ref()
+                    .ok_or(Error::new(ENOENT))?
+                    .partitions
+                    .get(part_num)
+                    .is_some()
+                {
+                    self.check_locks(nsid, Some(part_num))?;
+                }
+                (nsid, Some(part_num))
+            } else {
+                let nsid = path_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
+                self.check_locks(nsid, None)?;
+
+                if !self.disks.contains_key(&nsid) {
+                    return Err(Error::new(ENOENT));
+                }
+
+                (nsid, None)
+            };
+            let disk_wrapper = self.disks.get(&nsid).unwrap().clone();
+            let shm_fds = self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
+            RingHandle::Disk {
+                num: nsid,
+                pt: part_num_opt,
+                shm_fds,
+            }
+        };
+        let id = self.handles.insert(handle);
+        Ok(OpenResult::ThisScheme {
+            number: id,
+            flags: NewFdFlags::POSITIONED,
+        })
+    }
+
+    fn getdents<'buf>(
+        &mut self,
+        _id: usize,
+        _buf: DirentBuf<&'buf mut [u8]>,
+        _opaque_offset: u64,
+    ) -> Result<DirentBuf<&'buf mut [u8]>> {
+        // TODO
+        Err(Error::new(EOPNOTSUPP))
+    }
+
+    fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
+        match *self.handles.get(&id).ok_or(Error::new(EBADF))? {
+            RingHandle::List(ref data) => {
+                stat.st_mode = MODE_DIR;
+                stat.st_size = data.len() as u64;
+                Ok(())
+            }
+            RingHandle::Disk { num, pt, .. } => {
+                let disk = self.disks.get(&num).ok_or(Error::new(EBADF))?;
+                if let Some(part_num) = pt {
+                    let block_size = disk.block_size();
+                    let part = disk
+                        .pt
+                        .as_ref()
+                        .ok_or(Error::new(EBADF))?
+                        .partitions
+                        .get(part_num as usize)
+                        .ok_or(Error::new(EBADF))?;
+                    stat.st_mode = MODE_FILE;
+                    stat.st_size = part.size * u64::from(block_size);
+                    stat.st_blocks = part.size;
+                    stat.st_blksize = block_size;
+                    Ok(())
+                } else {
+                    let size = disk.size();
+                    let block_size = disk.block_size();
+                    stat.st_mode = MODE_FILE;
+                    stat.st_blocks = size / u64::from(block_size);
+                    stat.st_blksize = block_size as u32;
+                    stat.st_size = size;
+                    Ok(())
+                }
+            }
+            RingHandle::SchemeRoot => Err(Error::new(EBADF)),
+        }
+    }
+
+    fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+
+        let mut i = 0;
+
+        let scheme_name = self.scheme_name.as_bytes();
+        let mut j = 0;
+        // TODO: copy_from_slice
+        while i < buf.len() && j < scheme_name.len() {
+            buf[i] = scheme_name[j];
+            i += 1;
+            j += 1;
+        }
+
+        if i < buf.len() {
+            buf[i] = b':';
+            i += 1;
+        }
+
+        match handle {
+            RingHandle::List(_) => (),
+            RingHandle::Disk { num, pt, .. } => {
+                let number_str = if let Some(part_num) = pt {
+                    format!("{}p{}", num, part_num)
+                } else {
+                    format!("{}", num)
+                };
+
+                let number_bytes = number_str.as_bytes();
+                j = 0;
+                while i < buf.len() && j < number_bytes.len() {
+                    buf[i] = number_bytes[j];
+                    i += 1;
+                    j += 1;
+                }
+            }
+            RingHandle::SchemeRoot => return Err(Error::new(EBADF)),
+        }
+
+        Ok(i)
+    }
+
+    fn read(
+        &mut self,
+        id: usize,
+        buf: &mut [u8],
+        offset: u64,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
+        match *self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
+            RingHandle::List(ref handle) => {
+                let src = usize::try_from(offset)
+                    .ok()
+                    .and_then(|o| handle.get(o..))
+                    .unwrap_or(&[]);
+                let count = core::cmp::min(src.len(), buf.len());
+                buf[..count].copy_from_slice(&src[..count]);
+                Ok(count)
+            }
+            RingHandle::SchemeRoot | RingHandle::Disk { .. } => Err(Error::new(EBADF)),
+        }
+    }
+
+    fn fsize(&mut self, id: usize, _ctx: &CallerCtx) -> Result<u64> {
+        Ok(match *self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
+            RingHandle::List(ref handle) => handle.len() as u64,
+            RingHandle::Disk { num, pt, .. } => {
+                let disk = self.disks.get_mut(&num).ok_or(Error::new(EBADF))?;
+                if let Some(part_num) = pt {
+                    let part = disk
+                        .pt
+                        .as_ref()
+                        .ok_or(Error::new(EBADF))?
+                        .partitions
+                        .get(part_num as usize)
+                        .ok_or(Error::new(EBADF))?;
+
+                    part.size * u64::from(disk.block_size())
+                } else {
+                    disk.size()
+                }
+            }
+            RingHandle::SchemeRoot => return Err(Error::new(EBADF)),
+        })
+    }
+}
+
+use redox_rings::sync::{BlockingConsumer, BlockingProducer};
+
+const POOL_SIZE: usize = 16 * 1024 * 1024; // 16 MB pool
+const CHUNK_SIZE: usize = 256 * 1024;
+const RING_SIZE: usize = 65536; // 64 KB rings
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+enum DiskOpcode {
+    Read = 0,
+    Write = 1,
+}
+
+impl DiskOpcode {
+    pub fn try_from_raw(raw: u8) -> Option<Self> {
+        Some(match raw {
+            0 => Self::Read,
+            1 => Self::Write,
+            _ => return None,
+        })
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DiskOpSqe {
+    pub opcode: u8, // 0 = Read, 1 = Write
+    pub block: u64,
+    pub buf_offset: u32,
+    pub buf_len: u32,
+    pub id: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DiskOpCqe {
+    pub id: u64,
+    pub status: u16, // 0 = Success
+    pub count: u32,
+}
+
+pub struct DiskWorker<T> {
+    sq: BlockingConsumer<DiskOpSqe>,
+    cq: BlockingProducer<DiskOpCqe>,
+    disk: RingDiskWrapper<T>,
+    pt: Option<usize>,
+    shm_base: *mut u8,
+    shm_fd: Fd,
+}
+
+impl<T: Disk> DiskWorker<T> {
+    pub async fn handle_request(
+        &mut self,
+        req: DiskOpSqe,
+        _time_handle: &Fd,
+    ) -> std::result::Result<(), String> {
+        if req.buf_offset as usize + req.buf_len as usize > POOL_SIZE {
+            log::error!(
+                "Bounds Check Failed: Offset {} + Len {} > Pool {}",
+                req.buf_offset,
+                req.buf_len,
+                POOL_SIZE
+            );
+            return Err("Request buffer out of bounds".into());
+        }
+
+        let buffer = unsafe {
+            slice::from_raw_parts_mut(
+                self.shm_base.add(req.buf_offset as usize),
+                req.buf_len as usize,
+            )
+        };
+
+        let result = match DiskOpcode::try_from_raw(req.opcode) {
+            Some(opcode) => match opcode {
+                DiskOpcode::Read => self.disk.read(self.pt, req.block, buffer).await,
+                DiskOpcode::Write => self.disk.write(self.pt, req.block, buffer).await,
+            },
+            None => {
+                log::warn!("Unsupported opcode: {}", req.opcode);
+                Err(syscall::Error::new(syscall::EOPNOTSUPP))
+            }
+        };
+
+        let (status, count) = match result {
+            Ok(cnt) => (0, cnt as u32),
+            Err(e) => {
+                log::error!("Disk read Error: ID={} Errno={}", req.id, e.errno);
+                (e.errno as u16, 0)
+            }
+        };
+
+        let cqe = DiskOpCqe {
+            id: req.id,
+            status,
+            count,
+        };
+
+        loop {
+            match self.cq.try_push(cqe) {
+                Ok(_) => break,
+                Err(RingPushError::Full(_)) => {
+                    yield_now().await;
+                }
+                Err(e) => {
+                    log::error!("Failed to push Cqe {:?} with error: {:?}", cqe, e);
+                    return Err(format!("Failed to push response: {:?}", e));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn time_arm_ns(time_handle: &Fd, nanos: i64) -> syscall::Result<()> {
+    let mut time_buf = [0_u8; core::mem::size_of::<libredox::data::TimeSpec>()];
+    if time_handle
+        .read(&mut time_buf)
+        .map_err(|_| syscall::Error::new(syscall::EIO))?
+        < time_buf.len()
+    {
+        return Err(syscall::Error::new(syscall::EINVAL));
+    }
+
+    let mut time = libredox::data::timespec_from_mut_bytes(&mut time_buf);
+    time.tv_nsec += nanos as i64;
+
+    while time.tv_nsec >= 1_000_000_000 {
+        time.tv_sec += 1;
+        time.tv_nsec -= 1_000_000_000;
+    }
+
+    time_handle
+        .write(&time_buf)
+        .map_err(|_| syscall::Error::new(syscall::EIO))?;
+    Ok(())
+}
+
+pub struct YieldNow {
+    yielded: bool,
+}
+
+impl Future for YieldNow {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Self::Output> {
+        if self.yielded {
+            Poll::Ready(())
+        } else {
+            self.yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
+pub fn yield_now() -> YieldNow {
+    YieldNow { yielded: false }
 }

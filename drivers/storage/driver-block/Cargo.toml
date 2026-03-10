@@ -16,8 +16,10 @@ log.workspace = true
 futures = { version = "0.3.28", features = ["executor"] }
 
 redox_syscall = { workspace = true, features = ["std"] }
+redox_event.workspace = true
 redox-scheme.workspace = true
 scheme-utils = { path = "../../../scheme-utils" }
+redox-rings.workspace = true
 
 [lints]
 workspace = true
