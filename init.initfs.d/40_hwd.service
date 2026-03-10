@@ -1,6 +1,6 @@
 [unit]
 description = "Hardware manager"
-requires_weak = ["10_inputd.service", "10_lived.service", "20_graphics.target"]
+requires_weak = ["00_ipcd.service", "10_inputd.service", "20_graphics.target"]
 
 [service]
 cmd = "hwd"

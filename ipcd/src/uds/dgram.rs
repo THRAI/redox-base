@@ -1,8 +1,8 @@
 //! uds scheme for handling Unix Domain Socket datagram communication
 
 use super::{
-    get_uid_gid_from_pid, path_buf_to_str, read_msghdr_info, read_num, AncillaryData, Credential,
-    DataPacket, MsgWriter, MAX_DGRAM_MSG_LEN,
+    create_token_generator, get_uid_gid_from_pid, path_buf_to_str, read_msghdr_info, read_num,
+    AncillaryData, Credential, DataPacket, MsgWriter, MAX_DGRAM_MSG_LEN,
 };
 
 use libc::{AF_UNIX, SO_DOMAIN, SO_PASSCRED};
@@ -17,7 +17,7 @@ use scheme_utils::FpathWriter;
 use std::{
     cell::RefCell,
     cmp,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     mem,
     rc::Rc,
 };
@@ -30,7 +30,7 @@ pub struct Socket {
     state: State,
     peer: Option<usize>,
     messages: VecDeque<DataPacket>,
-    options: HashSet<i32>,
+    options: BTreeSet<i32>,
     fds: VecDeque<usize>,
     flags: usize,
     issued_token: Option<u64>,
@@ -128,7 +128,7 @@ impl Handle {
 }
 
 pub struct UdsDgramScheme<'sock> {
-    handles: HashMap<usize, Handle>,
+    handles: BTreeMap<usize, Handle>,
     next_id: usize,
     socket_tokens: HashMap<u64, Rc<RefCell<Socket>>>,
     socket: &'sock SchemeSocket,
@@ -139,7 +139,7 @@ pub struct UdsDgramScheme<'sock> {
 impl<'sock> UdsDgramScheme<'sock> {
     pub fn new(socket: &'sock SchemeSocket) -> Result<Self> {
         Ok(Self {
-            handles: HashMap::new(),
+            handles: BTreeMap::new(),
             next_id: 0,
             socket_tokens: HashMap::new(),
             socket,
@@ -150,7 +150,7 @@ impl<'sock> UdsDgramScheme<'sock> {
                     0,
                 )?
             },
-            rng: rand::make_rng(),
+            rng: create_token_generator(),
         })
     }
 
