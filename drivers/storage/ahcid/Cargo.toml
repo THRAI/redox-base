@@ -10,6 +10,7 @@ log.workspace = true
 redox_syscall = { workspace = true, features = ["std"] }
 
 common = { path = "../../common" }
+executor = { path = "../../executor" }
 daemon = { path = "../../../daemon" }
 driver-block = { path = "../driver-block" }
 pcid = { path = "../../pcid" }

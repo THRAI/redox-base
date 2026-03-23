@@ -832,6 +832,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
     ) -> Self {
         assert!(scheme_name.starts_with("disk"));
         let socket = Socket::nonblock().expect("failed to create disk scheme");
+        let shm_dir_name = format!("/scheme/shm/{}", scheme_name);
 
         let mut inner = RingDiskSchemeInner {
             scheme_name,
@@ -844,7 +845,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
             next_id: 0,
             handles: BTreeMap::new(),
             executor,
-            shm_dir: libredox::Fd::open("/scheme/shm/disk", flag::O_DIRECTORY | flag::O_CLOEXEC, 0)
+            shm_dir: libredox::Fd::open(&shm_dir_name, flag::O_DIRECTORY | flag::O_CLOEXEC, 0)
                 .expect("failed to open shm direcotry"),
         };
 
@@ -1368,19 +1369,21 @@ impl DiskOpcode {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct DiskOpSqe {
-    pub opcode: u8, // 0 = Read, 1 = Write
     pub block: u64,
+    pub id: u64,
     pub buf_offset: u32,
     pub buf_len: u32,
-    pub id: u64,
+    pub opcode: u8, // 0 = Read, 1 = Write
+    pub pad: [u8; 7],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct DiskOpCqe {
     pub id: u64,
-    pub status: u16, // 0 = Success
     pub count: u32,
+    pub status: u16, // 0 = Success
+    pub pad: u16,
 }
 
 pub struct DiskWorker<T> {
@@ -1438,6 +1441,7 @@ impl<T: Disk> DiskWorker<T> {
             id: req.id,
             status,
             count,
+            pad: 0,
         };
 
         loop {

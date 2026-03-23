@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::usize;
 
 use common::MemoryType;
-use driver_block::{Disk, DiskScheme};
+use driver_block::{Disk, RingDiskScheme};
 use pcid_interface::{irq_helpers, PciFunctionHandle};
 
 use crate::nvme::NvmeNamespace;
@@ -16,6 +16,7 @@ use self::nvme::Nvme;
 
 mod nvme;
 
+#[derive(Clone)]
 struct NvmeDisk {
     nvme: Arc<Nvme>,
     ns: NvmeNamespace,
@@ -107,7 +108,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     });
     log::debug!("Initialized!");
 
-    let scheme = Rc::new(RefCell::new(DiskScheme::new(
+    let scheme = Rc::new(RefCell::new(RingDiskScheme::new(
         Some(daemon),
         scheme_name,
         namespaces
@@ -122,7 +123,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                 )
             })
             .collect(),
-        &*executor,
+        executor.clone(),
     )));
 
     let mut scheme_events = Box::pin(executor.register_external_event(
@@ -130,14 +131,15 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
         event::EventFlags::READ,
     ));
 
-    libredox::call::setrens(0, 0).expect("nvmed: failed to enter null namespace");
+    // TODO: Drivers-block will open time fd.
+    // libredox::call::setrens(0, 0).expect("nvmed: failed to enter null namespace");
 
     log::debug!("Starting to listen for scheme events");
 
     executor.block_on(async {
         loop {
             log::trace!("new event iteration");
-            if let Err(err) = scheme.borrow_mut().tick().await {
+            if let Err(err) = scheme.borrow_mut().tick() {
                 log::error!("scheme error: {err}");
             }
             let _ = scheme_events.as_mut().next().await;

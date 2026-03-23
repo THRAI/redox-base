@@ -95,6 +95,8 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         }
     };
 
+    let executor = executor::init_trivial();
+
     let mut scheme = DiskScheme::new(
         None,
         disk_scheme_name,
@@ -105,7 +107,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
                 protocol: &mut *protocol,
             },
         )]),
-        &driver_block::FuturesExecutor,
+        &executor,
     );
 
     // FIXME should this wait notifying readiness until the disk scheme is created?
@@ -123,9 +125,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     for event in event_queue {
         match event.unwrap().user_data {
-            Event::Scheme => driver_block::FuturesExecutor
-                .block_on(scheme.tick())
-                .unwrap(),
+            Event::Scheme => executor.block_on(scheme.tick()).unwrap(),
         }
     }
 

@@ -7,8 +7,8 @@ use std::fs::File;
 
 use std::os::fd::AsRawFd;
 
+use driver_block::ExecutorTrait;
 use driver_block::{Disk, DiskScheme};
-use driver_block::{ExecutorTrait, TrivialExecutor};
 use libredox::call::MmapArgs;
 use libredox::flag;
 
@@ -144,6 +144,8 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         }
     };
 
+    let executor = executor::init_trivial();
+
     let mut scheme = DiskScheme::new(
         Some(daemon),
         "disk.live".to_owned(),
@@ -154,10 +156,10 @@ fn daemon(daemon: daemon::Daemon) -> ! {
                 std::process::exit(1)
             }),
         )]),
-        &TrivialExecutor,
+        &executor,
     );
 
-    libredox::call::setrens(0, 0).expect("nvmed: failed to enter null namespace");
+    libredox::call::setrens(0, 0).expect("lived: failed to enter null namespace");
 
     event_queue
         .subscribe(
@@ -169,7 +171,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     for event in event_queue {
         match event.unwrap().user_data {
-            Event::Scheme => TrivialExecutor.block_on(scheme.tick()).unwrap(),
+            Event::Scheme => executor.block_on(scheme.tick()).unwrap(),
         }
     }
 
