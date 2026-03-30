@@ -70,6 +70,14 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
         common::file_level(),
     );
 
+    unsafe {
+        if libc::setpriority(libc::PRIO_PROCESS, 0, 10) == -1 {
+            log::error!("nvmed: Failed to set nice value");
+        } else {
+            log::error!("nvmed: Successfully set process priority to 10");
+        }
+    }
+
     log::debug!("NVME PCI CONFIG: {:?}", pci_config);
 
     let address = unsafe { pcid_handle.map_bar(0, MemoryType::Uncacheable).ptr };
