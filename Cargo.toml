@@ -35,6 +35,7 @@ members = [
     "drivers/audio/sb16d",
 
     "drivers/graphics/console-draw",
+    "drivers/graphics/drawbench",
     "drivers/graphics/fbbootlogd",
     "drivers/graphics/driver-graphics",
     "drivers/graphics/fbcond",

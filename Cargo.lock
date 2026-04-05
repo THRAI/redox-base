@@ -623,6 +623,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "drawbench"
+version = "0.1.0"
+dependencies = [
+ "console-draw",
+ "graphics-ipc",
+ "inputd",
+]
+
+[[package]]
 name = "driver-block"
 version = "0.1.0"
 dependencies = [

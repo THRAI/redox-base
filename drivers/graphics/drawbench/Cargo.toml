@@ -1,0 +1,12 @@
+[package]
+name = "drawbench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+console-draw = { path = "../console-draw" }
+graphics-ipc = { path = "../graphics-ipc" }
+inputd = { path = "../../inputd" }
+
+[lints]
+workspace = true
