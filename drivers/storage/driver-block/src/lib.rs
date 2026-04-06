@@ -26,8 +26,9 @@ use scheme_utils::{FpathWriter, HandleMap};
 use syscall::dirent::DirentBuf;
 use syscall::schemev2::NewFdFlags;
 use syscall::{
-    Error, FmoveFdFlags, Result, Stat, EACCES, EAGAIN, EBADF, EINTR, EINVAL, EISDIR, ENOENT,
-    ENOLCK, EOPNOTSUPP, EOVERFLOW, EPROTO, EWOULDBLOCK, MODE_DIR, MODE_FILE, O_DIRECTORY, O_STAT,
+    Error, FmoveFdFlags, Result, Stat, TimeSpec, EACCES, EAGAIN, EBADF, EINTR, EINVAL, EISDIR,
+    ENOENT, ENOLCK, EOPNOTSUPP, EOVERFLOW, EPROTO, EWOULDBLOCK, MODE_DIR, MODE_FILE, O_DIRECTORY,
+    O_STAT,
 };
 
 /// Split the read operation into a series of block reads.
@@ -540,16 +541,15 @@ impl<Hw: executor::Hardware + 'static> EventSource for executor::ExternalEventSo
     }
 }
 
-struct RingEventSource<Hw: executor::Hardware>(Mutex<executor::ExternalEventSource<Hw>>);
+struct RingEventSource<Ev: EventSource>(Mutex<Ev>);
 
-impl<Hw: executor::Hardware + 'static> WaitNotifyAsync for RingEventSource<Hw> {
+impl<Ev: EventSource> WaitNotifyAsync for RingEventSource<Ev> {
     async fn wait_on_tail(
         &self,
         _expected_tail: u32,
         _deadline_opt: Option<&TimeSpec>,
     ) -> FutexWaitResult {
-        let mut source = self.0.lock().await;
-        source.next().await;
+        self.0.lock().unwrap().next().await;
         FutexWaitResult::Waited
     }
 
@@ -1055,7 +1055,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
             self.shm_dir
                 .openat(&cq_path, flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC, 0)?;
 
-        let ring_fds = [shm_fd.raw(), sq_fd.raw(), cq_fd.raw()];
+        let ring_fds = [shm_fd.raw(), sq_fd.raw(), cq_fd.raw(), pipe.raw()];
 
         let sq = BlockingConsumer::<DiskOpSqe>::from_fd(sq_fd, true, Some(RING_SIZE))?;
         let cq = BlockingProducer::<DiskOpCqe>::from_fd(cq_fd, true, Some(RING_SIZE))?;
@@ -1114,7 +1114,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
                     continue;
                 }
 
-                if let Ok(req) = ring_worker.sq.pop_async().await {
+                if let Ok(req) = ring_worker.sq.inner.inner.pop_async(&source, None).await {
                     queue.push(req);
                 }
             }
