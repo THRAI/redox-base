@@ -7,13 +7,17 @@ use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fmt::Write;
 use std::str;
+use std::sync::Mutex;
 use std::task::Poll;
 
 use event::EventFlags;
 use executor::LocalExecutor;
 use libredox::{flag, Fd};
 use partitionlib::{LogicalBlockSize, PartitionTable};
-use redox_rings::raw::RingPushError;
+use redox_rings::{
+    raw::RingPushError,
+    sync::{FutexWaitResult, WaitNotifyAsync},
+};
 use redox_scheme::scheme::{register_scheme_inner, SchemeAsync, SchemeState, SchemeSync};
 use redox_scheme::{
     CallerCtx, OpenResult, RecvFdRequest, RequestKind, Response, SignalBehavior, Socket,
@@ -536,6 +540,36 @@ impl<Hw: executor::Hardware + 'static> EventSource for executor::ExternalEventSo
     }
 }
 
+struct RingEventSource<Hw: executor::Hardware>(Mutex<executor::ExternalEventSource<Hw>>);
+
+impl<Hw: executor::Hardware + 'static> WaitNotifyAsync for RingEventSource<Hw> {
+    async fn wait_on_tail(
+        &self,
+        _expected_tail: u32,
+        _deadline_opt: Option<&TimeSpec>,
+    ) -> FutexWaitResult {
+        let mut source = self.0.lock().await;
+        source.next().await;
+        FutexWaitResult::Waited
+    }
+
+    fn notify_on_tail(&self) {
+        unimplemented!("notify_on_tail is not implemented for RingEventSource")
+    }
+
+    async fn wait_on_head(
+        &self,
+        _expected_head: u32,
+        _deadline_opt: Option<&TimeSpec>,
+    ) -> FutexWaitResult {
+        unimplemented!("wait_on_head is not implemented for RingEventSource")
+    }
+
+    fn notify_on_head(&self) {
+        unimplemented!("notify_on_head is not implemented for RingEventSource")
+    }
+}
+
 pub trait ExecutorTrait {
     fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O;
     fn spawn(&self, fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>);
@@ -847,6 +881,8 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
             executor,
             shm_dir: libredox::Fd::open(&shm_dir_name, flag::O_DIRECTORY | flag::O_CLOEXEC, 0)
                 .expect("failed to open shm direcotry"),
+            pipe_root: libredox::Fd::open("/scheme/pipe/scheme-root", flag::O_CLOEXEC, 0)
+                .expect("failed to open pipe root"),
         };
 
         let cap_id = inner.scheme_root().expect("failed to get this scheme root");
@@ -923,7 +959,7 @@ enum RingHandle {
     Disk {
         num: u32,
         pt: Option<usize>,
-        shm_fds: [usize; 3],
+        ring_fds: [usize; 4],
     },
     SchemeRoot,
 }
@@ -935,6 +971,7 @@ struct RingDiskSchemeInner<T, E> {
     handles: HandleMap<Handle>,
     executor: E,
     shm_dir: Fd,
+    pipe_root: Fd,
 }
 
 impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSchemeInner<T, E> {
@@ -977,7 +1014,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
         num: u32,
         pt: Option<usize>,
         disk: RingDiskWrapper<T>,
-    ) -> Result<[usize; 3]> {
+    ) -> Result<[usize; 4]> {
         let number_str = if let Some(part_num) = pt {
             format!("{}p{}", num, part_num)
         } else {
@@ -1008,19 +1045,17 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
             })? as *mut u8
         };
 
-        let sq_fd = self.shm_dir.openat(
-            &sq_path,
-            flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC | flag::O_EXCL,
-            0,
-        )?;
+        let pipe = self.pipe_root.openat("", flag::O_CLOEXEC, 0)?;
 
-        let cq_fd = self.shm_dir.openat(
-            &cq_path,
-            flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC | flag::O_EXCL,
-            0,
-        )?;
+        let sq_fd =
+            self.shm_dir
+                .openat(&sq_path, flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC, 0)?;
 
-        let shm_fds = [shm_fd.raw(), sq_fd.raw(), cq_fd.raw()];
+        let cq_fd =
+            self.shm_dir
+                .openat(&cq_path, flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC, 0)?;
+
+        let ring_fds = [shm_fd.raw(), sq_fd.raw(), cq_fd.raw()];
 
         let sq = BlockingConsumer::<DiskOpSqe>::from_fd(sq_fd, true, Some(RING_SIZE))?;
         let cq = BlockingProducer::<DiskOpCqe>::from_fd(cq_fd, true, Some(RING_SIZE))?;
@@ -1033,17 +1068,15 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
             pt,
             shm_base: shm_ptr,
             shm_fd,
+            pipe,
         };
 
         let exec_for_task = self.executor.clone();
 
         self.executor.spawn(Box::pin(async move {
-            let time_path = format!("/scheme/time/{}", libredox::flag::CLOCK_MONOTONIC);
-            let time_handle = libredox::Fd::open(&time_path, libredox::flag::O_RDWR, 0)
-                .expect("failed to open time handle for nvme worker");
-
-            let mut time_events =
-                exec_for_task.register_external_event(time_handle.raw(), EventFlags::READ);
+            let source = RingEventSource(Mutex::new(
+                exec_for_task.register_external_event(ring_worker.pipe.raw(), EventFlags::READ),
+            ));
             let mut queue: Vec<DiskOpSqe> = Vec::with_capacity(BATCH_LIMIT);
 
             loop {
@@ -1074,30 +1107,29 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
                 }
 
                 for req in queue.drain(..) {
-                    let _ = ring_worker.handle_request(req, &time_handle).await;
+                    let _ = ring_worker.handle_request(req).await;
                 }
 
                 if spun {
                     continue;
                 }
 
-                if let Err(e) = time_arm_ns(&time_handle, 1_000_000) {
-                    log::error!("Failed to arm timer: {}", e);
+                if let Ok(req) = ring_worker.sq.pop_async().await {
+                    queue.push(req);
                 }
-
-                time_events.next().await;
             }
         }));
 
-        Ok(shm_fds)
+        Ok(ring_fds)
     }
 
     fn on_recvfd(&mut self, recvfd_request: &RecvFdRequest) -> Result<OpenResult> {
         let id = recvfd_request.id();
         let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
         match handle {
-            RingHandle::Disk { shm_fds, .. } => {
-                if let Err(e) = recvfd_request.move_fd(&self.socket, FmoveFdFlags::CLONE, shm_fds) {
+            RingHandle::Disk { ring_fds, .. } => {
+                if let Err(e) = recvfd_request.move_fd(&self.socket, FmoveFdFlags::CLONE, ring_fds)
+                {
                     log::error!("recvfd_inner: move_fd failed with error: {:?}", e);
                     return Err(Error::new(EPROTO));
                 }
@@ -1194,11 +1226,11 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                 (nsid, None)
             };
             let disk_wrapper = self.disks.get(&nsid).unwrap().clone();
-            let shm_fds = self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
+            let ring_fds = self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
             RingHandle::Disk {
                 num: nsid,
                 pt: part_num_opt,
-                shm_fds,
+                ring_fds,
             }
         };
         let id = self.handles.insert(handle);
@@ -1393,14 +1425,11 @@ pub struct DiskWorker<T> {
     pt: Option<usize>,
     shm_base: *mut u8,
     shm_fd: Fd,
+    pipe: Fd,
 }
 
 impl<T: Disk> DiskWorker<T> {
-    pub async fn handle_request(
-        &mut self,
-        req: DiskOpSqe,
-        _time_handle: &Fd,
-    ) -> std::result::Result<(), String> {
+    pub async fn handle_request(&mut self, req: DiskOpSqe) -> std::result::Result<(), String> {
         if req.buf_offset as usize + req.buf_len as usize > POOL_SIZE {
             log::error!(
                 "Bounds Check Failed: Offset {} + Len {} > Pool {}",
