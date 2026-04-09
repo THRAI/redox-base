@@ -1490,30 +1490,6 @@ impl<T: Disk> DiskWorker<T> {
     }
 }
 
-fn time_arm_ns(time_handle: &Fd, nanos: i64) -> syscall::Result<()> {
-    let mut time_buf = [0_u8; core::mem::size_of::<libredox::data::TimeSpec>()];
-    if time_handle
-        .read(&mut time_buf)
-        .map_err(|_| syscall::Error::new(syscall::EIO))?
-        < time_buf.len()
-    {
-        return Err(syscall::Error::new(syscall::EINVAL));
-    }
-
-    let mut time = libredox::data::timespec_from_mut_bytes(&mut time_buf);
-    time.tv_nsec += nanos as i64;
-
-    while time.tv_nsec >= 1_000_000_000 {
-        time.tv_sec += 1;
-        time.tv_nsec -= 1_000_000_000;
-    }
-
-    time_handle
-        .write(&time_buf)
-        .map_err(|_| syscall::Error::new(syscall::EIO))?;
-    Ok(())
-}
-
 pub struct YieldNow {
     yielded: bool,
 }
