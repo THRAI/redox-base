@@ -1082,7 +1082,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
             loop {
                 let mut spun = false;
 
-                for _ in 0..1_000 {
+                for _ in 0..100 {
                     match ring_worker.sq.try_pop() {
                         Ok(req) => {
                             queue.push(req);
