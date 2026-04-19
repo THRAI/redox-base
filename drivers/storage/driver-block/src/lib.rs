@@ -876,8 +876,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
                     .into_iter()
                     .map(|(k, disk)| (k, RingDiskWrapper::new(disk, &executor))),
             ),
-            next_id: 0,
-            handles: BTreeMap::new(),
+            handles: HandleMap::new(),
             executor,
             shm_dir: libredox::Fd::open(&shm_dir_name, flag::O_DIRECTORY | flag::O_CLOEXEC, 0)
                 .expect("failed to open shm direcotry"),
@@ -1006,7 +1005,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
         Ok(())
     }
     fn on_close(&mut self, id: usize) {
-        let _ = self.handles.remove(&id);
+        let _ = self.handles.remove(id);
     }
 
     fn setup_worker(
@@ -1125,7 +1124,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
 
     fn on_recvfd(&mut self, recvfd_request: &RecvFdRequest) -> Result<OpenResult> {
         let id = recvfd_request.id();
-        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let handle = self.handles.get(id)?;
         match handle {
             RingHandle::Disk { ring_fds, .. } => {
                 if let Err(e) = recvfd_request.move_fd(&self.socket, FmoveFdFlags::CLONE, ring_fds)
@@ -1158,10 +1157,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
         _fcntl_flags: u32,
         ctx: &CallerCtx,
     ) -> Result<OpenResult> {
-        if !matches!(
-            self.handles.get(&dirfd).ok_or(Error::new(EBADF))?,
-            RingHandle::SchemeRoot
-        ) {
+        if !matches!(self.handles.get(dirfd)?, RingHandle::SchemeRoot) {
             return Err(Error::new(EACCES));
         }
 
@@ -1251,7 +1247,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
     }
 
     fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
-        match *self.handles.get(&id).ok_or(Error::new(EBADF))? {
+        match *self.handles.get(id)? {
             RingHandle::List(ref data) => {
                 stat.st_mode = MODE_DIR;
                 stat.st_size = data.len() as u64;
@@ -1288,7 +1284,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
     }
 
     fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let handle = self.handles.get(id)?;
 
         let mut i = 0;
 
@@ -1337,7 +1333,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
         _fcntl_flags: u32,
         _ctx: &CallerCtx,
     ) -> Result<usize> {
-        match *self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
+        match *self.handles.get_mut(id)? {
             RingHandle::List(ref handle) => {
                 let src = usize::try_from(offset)
                     .ok()
@@ -1352,7 +1348,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
     }
 
     fn fsize(&mut self, id: usize, _ctx: &CallerCtx) -> Result<u64> {
-        Ok(match *self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
+        Ok(match *self.handles.get_mut(id)? {
             RingHandle::List(ref handle) => handle.len() as u64,
             RingHandle::Disk { num, pt, .. } => {
                 let disk = self.disks.get_mut(&num).ok_or(Error::new(EBADF))?;
