@@ -102,7 +102,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                     }
                     irq_file.irq_handle().write(&mut irq).unwrap();
 
-                    device.borrow_mut().process_audio_queue();
+                    device.process_audio_queue();
                     readiness_based
                         .poll_all_requests(&mut device)
                         .expect("ihdad: failed to poll requests");

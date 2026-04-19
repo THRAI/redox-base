@@ -19,6 +19,7 @@ use syscall::error::{
 };
 
 use spin::Mutex;
+use std::sync::atomic::Ordering;
 use syscall::schemev2::NewFdFlags;
 
 use super::common::*;
