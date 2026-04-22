@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::fs::File;
 use std::future::{Future, IntoFuture};
@@ -45,11 +45,25 @@ pub trait Hardware: Sized {
     fn vtable() -> &'static task::RawWakerVTable;
 
     fn try_submit(
-        ctxt: &Self::GlobalCtxt,
-        sq_id: Self::SqId,
-        success: impl FnOnce(Self::CmdId) -> Self::Sqe,
-        fail: impl FnOnce(),
-    ) -> Option<(Self::CqId, Self::CmdId)>;
+        _ctxt: &Self::GlobalCtxt,
+        _sq_id: Self::SqId,
+        _success: impl FnOnce(Self::CmdId) -> Self::Sqe,
+        _fail: impl FnOnce(),
+    ) -> Option<(Self::CqId, Self::CmdId)> {
+        unimplemented!("try_submit is unimplemented");
+    }
+
+    fn push_sqe(
+        _ctxt: &Self::GlobalCtxt,
+        _sq_id: Self::SqId,
+        _success: impl FnOnce(Self::CmdId) -> Self::Sqe,
+        _fail: impl FnOnce(),
+    ) -> Option<(Self::CqId, Self::CmdId)> {
+        unimplemented!("push_sqe is unimplemented");
+    }
+    fn submit(_ctxt: &Self::GlobalCtxt, _sq_id: Self::SqId) {
+        unimplemented!("submit is unimplemented");
+    }
     fn poll_cqes(ctxt: &Self::GlobalCtxt, handle: impl FnMut(Self::CqId, Self::Cqe));
 }
 
@@ -66,6 +80,8 @@ pub struct LocalExecutor<Hw: Hardware> {
     awaiting_submission: RefCell<HashMap<Hw::SqId, VecDeque<FutIdx>>>,
     awaiting_completion:
         RefCell<HashMap<Hw::CqId, HashMap<Hw::CmdId, (FutIdx, NonNull<Option<Hw::Cqe>>)>>>,
+
+    pending_submits: RefCell<HashSet<Hw::SqId>>,
 
     external_event: RefCell<HashMap<EventUserData, (FutIdx, NonNull<EventFlags>)>>,
     next_user_data: Cell<usize>,
@@ -144,6 +160,10 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
                 let mut futures = self.futures.borrow_mut();
                 futures[future_idx] = task;
             }
+        }
+        let mut pending_submits = self.pending_submits.borrow_mut();
+        for sq_id in pending_submits.drain() {
+            Hw::submit(&self.global_ctxt, sq_id);
         }
         self.is_polling.set(false);
 
@@ -321,7 +341,7 @@ impl<Hw: Hardware> Future for CqeFuture<Hw> {
             State::Submitting { sq_id, mut cmd } => {
                 let mut awaiting = executor.awaiting_submission.borrow_mut();
 
-                if let Some((cq_id, cmd_id)) = Hw::try_submit(
+                if let Some((cq_id, cmd_id)) = Hw::push_sqe(
                     &executor.global_ctxt,
                     sq_id,
                     |cmd_id| {
@@ -333,6 +353,7 @@ impl<Hw: Hardware> Future for CqeFuture<Hw> {
                         awaiting.entry(sq_id).or_default().push_back(idx);
                     },
                 ) {
+                    executor.pending_submits.borrow_mut().insert(sq_id);
                     executor
                         .awaiting_completion
                         .borrow_mut()
@@ -445,6 +466,7 @@ pub fn init_raw<Hw: Hardware>(
 
         awaiting_submission: RefCell::new(HashMap::new()),
         awaiting_completion: RefCell::new(HashMap::new()),
+        pending_submits: RefCell::new(HashSet::new()),
         external_event: RefCell::new(HashMap::new()),
         next_user_data: Cell::new(1),
         ready_futures: RefCell::new(VecDeque::new()),
@@ -513,6 +535,7 @@ pub fn init_trivial() -> Rc<TrivialExecutor> {
 
         awaiting_submission: RefCell::new(HashMap::new()),
         awaiting_completion: RefCell::new(HashMap::new()),
+        pending_submits: RefCell::new(HashSet::new()),
         external_event: RefCell::new(HashMap::new()),
         next_user_data: Cell::new(1),
         ready_futures: RefCell::new(VecDeque::new()),

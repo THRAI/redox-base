@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::iter;
-use std::sync::atomic::AtomicU16;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, ReentrantMutex, RwLock};
@@ -83,6 +83,8 @@ pub struct Nvme {
     // maps interrupt vectors with the completion queues they have
     thread_ctxts: RwLock<HashMap<Iv, Arc<ReentrantMutex<ThreadCtxt>>>>,
 
+    pendings: AtomicU16,
+
     next_sqid: AtomicSqId,
     next_cqid: AtomicCqId,
 }
@@ -138,6 +140,8 @@ impl Nvme {
 
             interrupt_vector: Mutex::new(interrupt_vector),
             pcid_interface: Mutex::new(pcid_interface),
+
+            pendings: AtomicU16::new(0),
 
             // TODO
             next_sqid: AtomicSqId::new(2),
@@ -319,7 +323,7 @@ impl Nvme {
     ) -> NvmeComp {
         self.submit_and_complete_command(0, cmd_init).await
     }
-    pub fn try_submit_raw(
+    pub fn push_sqe(
         &self,
         ctxt: &ThreadCtxt,
         sq_id: SqId,
@@ -333,17 +337,21 @@ impl Nvme {
                     return None;
                 }
                 let cmd_id = sq.tail;
-                let tail = sq.submit_unchecked(cmd_init(cmd_id));
+                let _tail = sq.submit_unchecked(cmd_init(cmd_id));
 
-                // TODO: Submit in bulk
-                unsafe {
-                    self.submission_queue_tail(sq_id, tail);
-                }
+                self.pendings.fetch_add(1, Ordering::Release);
+
                 Some((sq_id, cmd_id))
             }
         }
     }
-
+    pub fn submit(&self, ctxt: &ThreadCtxt, sq_id: SqId) {
+        match ctxt.queues.borrow_mut().get_mut(&sq_id).unwrap() {
+            (sq, _cq) => unsafe {
+                self.submission_queue_tail(sq_id, sq.tail);
+            },
+        }
+    }
     pub async fn create_io_completion_queue(
         &self,
         io_cq_id: CqId,

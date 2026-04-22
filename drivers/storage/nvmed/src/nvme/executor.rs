@@ -36,7 +36,7 @@ impl Hardware for NvmeHw {
     fn current() -> std::rc::Rc<executor::LocalExecutor<Self>> {
         THE_EXECUTOR.with(|exec| Rc::clone(exec.borrow().as_ref().unwrap()))
     }
-    fn try_submit(
+    fn push_sqe(
         nvme: &Arc<Nvme>,
         sq_id: Self::SqId,
         success: impl FnOnce(Self::CmdId) -> Self::Sqe,
@@ -45,7 +45,13 @@ impl Hardware for NvmeHw {
         let ctxt = nvme.cur_thread_ctxt();
         let ctxt = ctxt.lock();
 
-        nvme.try_submit_raw(&*ctxt, sq_id, success, fail)
+        nvme.push_sqe(&*ctxt, sq_id, success, fail)
+    }
+    fn submit(nvme: &Arc<Nvme>, sq_id: Self::SqId) {
+        let ctxt = nvme.cur_thread_ctxt();
+        let ctxt = ctxt.lock();
+
+        nvme.submit(&*ctxt, sq_id)
     }
     fn poll_cqes(nvme: &Arc<Nvme>, mut handle: impl FnMut(Self::CqId, Self::Cqe)) {
         let ctxt = nvme.cur_thread_ctxt();
