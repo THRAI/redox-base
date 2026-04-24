@@ -3,9 +3,10 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::usize;
 
+use common::dma::Dma;
 use common::MemoryType;
 use driver_block::{Disk, RingDiskScheme};
 use pcid_interface::{irq_helpers, PciFunctionHandle};
@@ -20,7 +21,7 @@ mod nvme;
 struct NvmeDisk {
     nvme: Arc<Nvme>,
     ns: NvmeNamespace,
-    pool: Option<Dma<[u8]>>,
+    pool: Arc<Mutex<Option<Dma<[u8]>>>>,
 }
 
 impl Disk for NvmeDisk {
@@ -33,9 +34,14 @@ impl Disk for NvmeDisk {
     }
 
     async fn read(&mut self, block: u64, buffer: &mut [u8]) -> syscall::Result<usize> {
-        if let Some(pool) = self.pool.as_ref() {
-            let virt_base = pool.as_ptr() as usize;
-            let phys_base = pool.physical();
+        let pool_info = {
+            let guard = self.pool.lock().unwrap();
+            guard
+                .as_ref()
+                .map(|pool| (pool.virt_addr(), pool.physical()))
+        };
+
+        if let Some((virt_base, phys_base)) = pool_info {
             let buf_virt = buffer.as_ptr() as usize;
             let phys_addr = phys_base + (buf_virt - virt_base);
             self.nvme
@@ -47,9 +53,14 @@ impl Disk for NvmeDisk {
     }
 
     async fn write(&mut self, block: u64, buffer: &[u8]) -> syscall::Result<usize> {
-        if let Some(pool) = self.pool.as_ref() {
-            let virt_base = pool.as_ptr() as usize;
-            let phys_base = pool.physical();
+        let pool_info = {
+            let guard = self.pool.lock().unwrap();
+            guard
+                .as_ref()
+                .map(|pool| (pool.virt_addr(), pool.physical()))
+        };
+
+        if let Some((virt_base, phys_base)) = pool_info {
             let buf_virt = buffer.as_ptr() as usize;
             let phys_addr = phys_base + (buf_virt - virt_base);
             self.nvme
@@ -71,7 +82,7 @@ impl Disk for NvmeDisk {
 
         let shm_ptr = pool.as_ptr() as *mut u8;
 
-        *self.pool = Some(pool);
+        *self.pool.lock().unwrap() = Some(pool);
 
         Ok(shm_ptr)
     }
@@ -164,7 +175,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                     NvmeDisk {
                         nvme: nvme.clone(),
                         ns,
-                        pool: None,
+                        pool: Arc::new(Mutex::new(None)),
                     },
                 )
             })
