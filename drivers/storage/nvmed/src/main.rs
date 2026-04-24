@@ -20,6 +20,7 @@ mod nvme;
 struct NvmeDisk {
     nvme: Arc<Nvme>,
     ns: NvmeNamespace,
+    pool: Option<Dma<[u8]>>,
 }
 
 impl Disk for NvmeDisk {
@@ -32,11 +33,47 @@ impl Disk for NvmeDisk {
     }
 
     async fn read(&mut self, block: u64, buffer: &mut [u8]) -> syscall::Result<usize> {
-        self.nvme.namespace_read(&self.ns, block, buffer).await
+        if let Some(pool) = self.pool.as_ref() {
+            let virt_base = pool.as_ptr() as usize;
+            let phys_base = pool.physical();
+            let buf_virt = buffer.as_ptr() as usize;
+            let phys_addr = phys_base + (buf_virt - virt_base);
+            self.nvme
+                .namespace_read_zerocopy(&self.ns, block, buffer, phys_addr as u64)
+                .await
+        } else {
+            self.nvme.namespace_read(&self.ns, block, buffer).await
+        }
     }
 
     async fn write(&mut self, block: u64, buffer: &[u8]) -> syscall::Result<usize> {
-        self.nvme.namespace_write(&self.ns, block, buffer).await
+        if let Some(pool) = self.pool.as_ref() {
+            let virt_base = pool.as_ptr() as usize;
+            let phys_base = pool.physical();
+            let buf_virt = buffer.as_ptr() as usize;
+            let phys_addr = phys_base + (buf_virt - virt_base);
+            self.nvme
+                .namespace_write_zerocopy(&self.ns, block, buffer, phys_addr as u64)
+                .await
+        } else {
+            self.nvme.namespace_write(&self.ns, block, buffer).await
+        }
+    }
+
+    fn allocate_dma_pool(&mut self, size: usize) -> syscall::Result<*mut u8> {
+        use common::dma::Dma;
+
+        let pool = unsafe {
+            Dma::zeroed_slice(size)
+                .map_err(|e| syscall::Error::new(e.errno()))?
+                .assume_init()
+        };
+
+        let shm_ptr = pool.as_ptr() as *mut u8;
+
+        *self.pool = Some(pool);
+
+        Ok(shm_ptr)
     }
 }
 
@@ -127,6 +164,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                     NvmeDisk {
                         nvme: nvme.clone(),
                         ns,
+                        pool: None,
                     },
                 )
             })

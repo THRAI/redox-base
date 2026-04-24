@@ -177,6 +177,22 @@ impl<T: ?Sized> Dma<T> {
     pub fn physical(&self) -> usize {
         self.phys
     }
+
+    /// Returns the address of the Dma memory in the virtual address space.
+    ///
+    /// # Returns
+    /// [usize] - the address of the Dma memory in the virtual address space.
+    pub fn virt_addr(&self) -> usize {
+        unsafe { self.virt as *mut u8 as usize }
+    }
+
+    /// Returns the pointer to the Dma memory in the virtual address space.
+    ///
+    /// # Returns
+    /// [*mut T] - the pointer to the Dma memory in the virtual address space.
+    pub fn virt(&self) -> *mut T {
+        self.virt
+    }
 }
 // TODO: there should exist a "context" struct that drivers create at start, which would be passed
 // to the respective functions

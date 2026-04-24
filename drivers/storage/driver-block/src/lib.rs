@@ -87,6 +87,10 @@ pub trait Disk {
     // FIXME maybe only operate on a single block worth of data?
     async fn read(&mut self, block: u64, buffer: &mut [u8]) -> syscall::Result<usize>;
     async fn write(&mut self, block: u64, buffer: &[u8]) -> syscall::Result<usize>;
+
+    fn allocate_dma_pool(&mut self, _size: usize) -> syscall::Result<*mut u8> {
+        Err(syscall::Error::new(EOPNOTSUPP))
+    }
 }
 
 impl<T: Disk + ?Sized> Disk for Box<T> {
@@ -104,6 +108,10 @@ impl<T: Disk + ?Sized> Disk for Box<T> {
 
     async fn write(&mut self, block: u64, buffer: &[u8]) -> syscall::Result<usize> {
         (**self).write(block, buffer).await
+    }
+
+    fn allocate_dma_pool(&mut self, size: usize) -> syscall::Result<*mut u8> {
+        (**self).allocate_dma_pool(size)
     }
 }
 
@@ -459,6 +467,10 @@ impl<T: Disk> RingDiskWrapper<T> {
 
     pub fn disk_mut(&mut self) -> &mut T {
         &mut self.disk
+    }
+
+    pub fn allocate_dma_pool(&mut self, size: usize) -> syscall::Result<*mut u8> {
+        self.disk.allocate_dma_pool(size)
     }
 
     pub fn block_size(&self) -> u32 {
@@ -958,10 +970,15 @@ enum RingHandle {
     Disk {
         num: u32,
         pt: Option<usize>,
-        ring_fds: [usize; 4],
+        ring_fds: [usize; 3],
+        pool_base: *mut u8,
+        pool_size: usize,
     },
     SchemeRoot,
 }
+
+unsafe impl Send for RingHandle {}
+unsafe impl Sync for RingHandle {}
 
 struct RingDiskSchemeInner<T, E> {
     scheme_name: String,
@@ -1012,37 +1029,17 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
         &mut self,
         num: u32,
         pt: Option<usize>,
-        disk: RingDiskWrapper<T>,
-    ) -> Result<[usize; 4]> {
+        mut disk: RingDiskWrapper<T>,
+    ) -> Result<([usize; 3], *mut u8)> {
         let number_str = if let Some(part_num) = pt {
             format!("{}p{}", num, part_num)
         } else {
             format!("{}", num)
         };
-        let pool_path = format!("{}.pool", number_str);
         let sq_path = format!("{}.sq", number_str);
         let cq_path = format!("{}.cq", number_str);
 
-        let shm_fd = self.shm_dir.openat(
-            &pool_path,
-            flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC,
-            0,
-        )?;
-
-        syscall::ftruncate(shm_fd.raw(), POOL_SIZE)
-            .map_err(|e| format!("Failed to resize shm pool: {:?}", e))
-            .unwrap();
-
-        let shm_ptr = unsafe {
-            libredox::call::mmap(libredox::call::MmapArgs {
-                fd: shm_fd.raw(),
-                offset: 0,
-                length: POOL_SIZE,
-                prot: flag::PROT_READ | flag::PROT_WRITE,
-                flags: flag::MAP_SHARED,
-                addr: std::ptr::null_mut(),
-            })? as *mut u8
-        };
+        let (shm_ptr) = disk.allocate_dma_pool(POOL_SIZE)?;
 
         let pipe = self.pipe_root.openat("", flag::O_CLOEXEC, 0)?;
 
@@ -1054,7 +1051,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
             self.shm_dir
                 .openat(&cq_path, flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC, 0)?;
 
-        let ring_fds = [shm_fd.raw(), sq_fd.raw(), cq_fd.raw(), pipe.raw()];
+        let ring_fds = [sq_fd.raw(), cq_fd.raw(), pipe.raw()];
 
         let sq = BlockingConsumer::<DiskOpSqe>::from_fd(sq_fd, true, Some(RING_SIZE))?;
         let cq = BlockingProducer::<DiskOpCqe>::from_fd(cq_fd, true, Some(RING_SIZE))?;
@@ -1066,7 +1063,6 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
             disk,
             pt,
             shm_base: shm_ptr,
-            shm_fd,
             pipe,
         };
 
@@ -1119,7 +1115,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
             }
         }));
 
-        Ok(ring_fds)
+        Ok((ring_fds, shm_ptr))
     }
 
     fn on_recvfd(&mut self, recvfd_request: &RecvFdRequest) -> Result<OpenResult> {
@@ -1222,11 +1218,13 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                 (nsid, None)
             };
             let disk_wrapper = self.disks.get(&nsid).unwrap().clone();
-            let ring_fds = self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
+            let (ring_fds, pool_base) = self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
             RingHandle::Disk {
                 num: nsid,
                 pt: part_num_opt,
                 ring_fds,
+                pool_base,
+                pool_size: POOL_SIZE,
             }
         };
         let id = self.handles.insert(handle);
@@ -1369,11 +1367,36 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
             RingHandle::SchemeRoot => return Err(Error::new(EBADF)),
         })
     }
+
+    fn mmap_prep(
+        &mut self,
+        id: usize,
+        offset: u64,
+        size: usize,
+        _flags: syscall::MapFlags,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
+        let handle = self.handles.get(id)?;
+        match handle {
+            RingHandle::Disk {
+                pool_base,
+                pool_size,
+                ..
+            } => {
+                let offset = offset as usize;
+                if offset + size > *pool_size {
+                    return Err(Error::new(EINVAL));
+                }
+                Ok(*pool_base as usize + offset)
+            }
+            _ => Err(Error::new(EBADF)),
+        }
+    }
 }
 
 use redox_rings::sync::{BlockingConsumer, BlockingProducer};
 
-const POOL_SIZE: usize = 16 * 1024 * 1024; // 16 MB pool
+const POOL_SIZE: usize = 4 * 1024 * 1024; // 4 MB pool
 const CHUNK_SIZE: usize = 256 * 1024;
 const RING_SIZE: usize = 65536; // 64 KB rings
 
@@ -1420,7 +1443,6 @@ pub struct DiskWorker<T> {
     disk: RingDiskWrapper<T>,
     pt: Option<usize>,
     shm_base: *mut u8,
-    shm_fd: Fd,
     pipe: Fd,
 }
 

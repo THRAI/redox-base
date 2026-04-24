@@ -546,4 +546,94 @@ impl Nvme {
 
         Ok(buf.len())
     }
+
+    async fn namespace_rw_zerocopy(
+        &self,
+        namespace: &NvmeNamespace,
+        lba: u64,
+        blocks_1: u16,
+        write: bool,
+        phys_addr: u64,
+    ) -> Result<()> {
+        let block_size = namespace.block_size;
+
+        let bytes = ((blocks_1 as u64) + 1) * block_size;
+        let (ptr0, ptr1) = if bytes <= 4096 {
+            (phys_addr, 0)
+        } else if bytes <= 8192 {
+            (phys_addr, phys_addr + 4096)
+        } else {
+            return Err(Error::new(syscall::EINVAL));
+        };
+
+        let mut cmd = NvmeCmd::default();
+        let comp = self
+            .submit_and_complete_command(1, |cid| {
+                cmd = if write {
+                    NvmeCmd::io_write(cid, namespace.id, lba, blocks_1, ptr0, ptr1)
+                } else {
+                    NvmeCmd::io_read(cid, namespace.id, lba, blocks_1, ptr0, ptr1)
+                };
+                cmd.clone()
+            })
+            .await;
+
+        let status = comp.status >> 1;
+        if status == 0 {
+            Ok(())
+        } else {
+            log::error!("command {:#x?} failed with status {:#x}", cmd, status);
+            Err(Error::new(EIO))
+        }
+    }
+
+    pub async fn namespace_read_zerocopy(
+        &self,
+        namespace: &NvmeNamespace,
+        mut lba: u64,
+        buf: &mut [u8],
+        mut phys_addr: u64,
+    ) -> Result<usize> {
+        let block_size = namespace.block_size as usize;
+
+        for chunk in buf.chunks_mut(/* TODO: buf len */ 8192) {
+            let blocks = (chunk.len() + block_size - 1) / block_size;
+
+            assert!(blocks > 0);
+            assert!(blocks <= 0x1_0000);
+
+            self.namespace_rw_zerocopy(namespace, lba, (blocks - 1) as u16, false, phys_addr)
+                .await?;
+
+            lba += blocks as u64;
+            phys_addr += chunk.len() as u64;
+        }
+
+        Ok(buf.len())
+    }
+
+    pub async fn namespace_write_zerocopy(
+        &self,
+        namespace: &NvmeNamespace,
+        mut lba: u64,
+        buf: &[u8],
+        mut phys_addr: u64,
+    ) -> Result<usize> {
+        let block_size = namespace.block_size as usize;
+
+        for chunk in buf.chunks(/* TODO: buf len */ 8192) {
+            let blocks = (chunk.len() + block_size - 1) / block_size;
+
+            assert!(blocks > 0);
+            assert!(blocks <= 0x1_0000);
+
+            self.namespace_rw_zerocopy(namespace, lba, (blocks - 1) as u16, true, phys_addr)
+                .await?;
+
+            lba += blocks as u64;
+            phys_addr += chunk.len() as u64;
+        }
+
+        Ok(buf.len())
+    }
 }
