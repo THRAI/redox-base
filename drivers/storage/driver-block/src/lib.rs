@@ -1199,12 +1199,12 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                     let (nsid, part_num_opt) = if let Some(p_pos) =
                         target_path.chars().position(|c| c == 'p')
                     {
-                        let nsid_str = &path_str[..p_pos];
+                        let nsid_str = &target_path[..p_pos];
 
-                        if p_pos + 1 >= path_str.len() {
+                        if p_pos + 1 >= target_path.len() {
                             return Err(Error::new(ENOENT));
                         }
-                        let part_num_str = &path_str[p_pos + 1..];
+                        let part_num_str = &target_path[p_pos + 1..];
 
                         let nsid = nsid_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
                         let part_num = part_num_str.parse::<usize>().or(Err(Error::new(ENOENT)))?;
@@ -1223,7 +1223,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                         }
                         (nsid, Some(part_num))
                     } else {
-                        let nsid = path_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
+                        let nsid = target_path.parse::<u32>().or(Err(Error::new(ENOENT)))?;
                         self.check_locks(nsid, None)?;
 
                         if !self.disks.contains_key(&nsid) {
