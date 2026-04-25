@@ -1232,6 +1232,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
             }
         };
         let id = self.handles.insert(handle);
+        println!("path: {}, id: {}", path_str, id);
         Ok(OpenResult::ThisScheme {
             number: id,
             flags: NewFdFlags::POSITIONED,
