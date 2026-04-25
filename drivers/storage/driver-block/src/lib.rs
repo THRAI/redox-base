@@ -862,7 +862,7 @@ impl<T: Disk> SchemeAsync for DiskSchemeInner<T> {
 impl<D: Disk> DiskSchemeInner<D> {
     pub fn on_close(&mut self, id: usize) {
         let _handle = self.handles.remove(id);
-        println!("removing handle: {:?}", _handle);
+        println!("removing handle: id: {}, {:?}", id, _handle);
     }
 }
 
@@ -1026,7 +1026,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
     }
     fn on_close(&mut self, id: usize) {
         let _handle = self.handles.remove(id);
-        println!("removing handle: {:?}", _handle);
+        println!("removing handle: id: {}, {:?}", id, _handle);
     }
 
     fn setup_worker(
