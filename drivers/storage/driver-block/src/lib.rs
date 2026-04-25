@@ -1254,7 +1254,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
             }
             RingHandle::Disk { num, pt } => {
                 let disk_wrapper = self.disks.get(&num).unwrap().clone();
-                let (ring_fds, pool_base) = self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
+                let (ring_fds, pool_base) = self.setup_worker(num, pt, disk_wrapper)?;
                 RingHandle::Ring {
                     num,
                     pt,
