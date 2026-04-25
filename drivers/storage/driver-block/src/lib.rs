@@ -1170,7 +1170,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                 }
                 let path_str = path_str.trim_matches('/');
 
-                let handle = if path_str.is_empty() {
+                if path_str.is_empty() {
                     if flags & O_DIRECTORY == O_DIRECTORY || flags & O_STAT == O_STAT {
                         let mut list = String::new();
 
@@ -1250,9 +1250,9 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                             pt: part_num_opt,
                         }
                     }
-                };
+                }
             }
-            RingHandle::Disk { num, pt } => {
+            RingHandle::Disk { ref num, ref pt } => {
                 let disk_wrapper = self.disks.get(&num).unwrap().clone();
                 let (ring_fds, pool_base) = self.setup_worker(num, pt, disk_wrapper)?;
                 RingHandle::Ring {
