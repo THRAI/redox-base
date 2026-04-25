@@ -368,6 +368,7 @@ impl<T: Disk> DiskScheme<T> {
     }
 }
 
+#[derive(Debug)]
 enum Handle {
     List(Vec<u8>),       // entries
     Disk(u32),           // disk num
@@ -860,7 +861,8 @@ impl<T: Disk> SchemeAsync for DiskSchemeInner<T> {
 
 impl<D: Disk> DiskSchemeInner<D> {
     pub fn on_close(&mut self, id: usize) {
-        let _ = self.handles.remove(id);
+        let _handle = self.handles.remove(id);
+        println!("removing handle: {:?}", _handle);
     }
 }
 
@@ -965,6 +967,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
     }
 }
 
+#[derive(Debug)]
 enum RingHandle {
     List(Vec<u8>), // entries
     Disk {
@@ -1022,7 +1025,8 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
         Ok(())
     }
     fn on_close(&mut self, id: usize) {
-        let _ = self.handles.remove(id);
+        let _handle = self.handles.remove(id);
+        println!("removing handle: {:?}", _handle);
     }
 
     fn setup_worker(
