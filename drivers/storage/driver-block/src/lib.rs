@@ -1163,94 +1163,109 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
         _fcntl_flags: u32,
         ctx: &CallerCtx,
     ) -> Result<OpenResult> {
-        if !matches!(self.handles.get(dirfd)?, RingHandle::SchemeRoot) {
-            return Err(Error::new(EACCES));
-        }
-
-        if ctx.uid != 0 {
-            return Err(Error::new(EACCES));
-        }
-        let path_str = path_str.trim_matches('/');
-
-        let handle = if path_str.is_empty() {
-            if flags & O_DIRECTORY == O_DIRECTORY || flags & O_STAT == O_STAT {
-                let mut list = String::new();
-
-                for (nsid, disk) in self.disks.iter() {
-                    write!(list, "{}\n", nsid).unwrap();
-
-                    if disk.pt.is_none() {
-                        continue;
-                    }
-                    for part_num in 0..disk.pt.as_ref().unwrap().partitions.len() {
-                        write!(list, "{}p{}\n", nsid, part_num).unwrap();
-                    }
+        let handle = match self.handles.get(dirfd)? {
+            RingHandle::SchemeRoot => {
+                if ctx.uid != 0 {
+                    return Err(Error::new(EACCES));
                 }
+                let path_str = path_str.trim_matches('/');
 
-                RingHandle::List(list.into_bytes())
-            } else {
-                return Err(Error::new(EISDIR));
-            }
-        } else {
-            let is_ring_req = path_str.ends_with("/ring");
-            let target_path = if is_ring_req {
-                path_str.trim_end_matches("/ring")
-            } else {
-                path_str
-            };
-            let (nsid, part_num_opt) =
-                if let Some(p_pos) = target_path.chars().position(|c| c == 'p') {
-                    let nsid_str = &path_str[..p_pos];
+                let handle = if path_str.is_empty() {
+                    if flags & O_DIRECTORY == O_DIRECTORY || flags & O_STAT == O_STAT {
+                        let mut list = String::new();
 
-                    if p_pos + 1 >= path_str.len() {
-                        return Err(Error::new(ENOENT));
+                        for (nsid, disk) in self.disks.iter() {
+                            write!(list, "{}\n", nsid).unwrap();
+
+                            if disk.pt.is_none() {
+                                continue;
+                            }
+                            for part_num in 0..disk.pt.as_ref().unwrap().partitions.len() {
+                                write!(list, "{}p{}\n", nsid, part_num).unwrap();
+                            }
+                        }
+
+                        RingHandle::List(list.into_bytes())
+                    } else {
+                        return Err(Error::new(EISDIR));
                     }
-                    let part_num_str = &path_str[p_pos + 1..];
-
-                    let nsid = nsid_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
-                    let part_num = part_num_str.parse::<usize>().or(Err(Error::new(ENOENT)))?;
-
-                    let disk = self.disks.get(&nsid).ok_or(Error::new(ENOENT))?;
-
-                    if disk
-                        .pt
-                        .as_ref()
-                        .ok_or(Error::new(ENOENT))?
-                        .partitions
-                        .get(part_num)
-                        .is_some()
-                    {
-                        self.check_locks(nsid, Some(part_num))?;
-                    }
-                    (nsid, Some(part_num))
                 } else {
-                    let nsid = path_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
-                    self.check_locks(nsid, None)?;
+                    let is_ring_req = path_str.ends_with("/ring");
+                    let target_path = if is_ring_req {
+                        path_str.trim_end_matches("/ring")
+                    } else {
+                        path_str
+                    };
+                    let (nsid, part_num_opt) = if let Some(p_pos) =
+                        target_path.chars().position(|c| c == 'p')
+                    {
+                        let nsid_str = &path_str[..p_pos];
 
-                    if !self.disks.contains_key(&nsid) {
-                        return Err(Error::new(ENOENT));
+                        if p_pos + 1 >= path_str.len() {
+                            return Err(Error::new(ENOENT));
+                        }
+                        let part_num_str = &path_str[p_pos + 1..];
+
+                        let nsid = nsid_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
+                        let part_num = part_num_str.parse::<usize>().or(Err(Error::new(ENOENT)))?;
+
+                        let disk = self.disks.get(&nsid).ok_or(Error::new(ENOENT))?;
+
+                        if disk
+                            .pt
+                            .as_ref()
+                            .ok_or(Error::new(ENOENT))?
+                            .partitions
+                            .get(part_num)
+                            .is_some()
+                        {
+                            self.check_locks(nsid, Some(part_num))?;
+                        }
+                        (nsid, Some(part_num))
+                    } else {
+                        let nsid = path_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
+                        self.check_locks(nsid, None)?;
+
+                        if !self.disks.contains_key(&nsid) {
+                            return Err(Error::new(ENOENT));
+                        }
+
+                        (nsid, None)
+                    };
+
+                    if is_ring_req {
+                        let disk_wrapper = self.disks.get(&nsid).unwrap().clone();
+                        let (ring_fds, pool_base) =
+                            self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
+                        RingHandle::Ring {
+                            num: nsid,
+                            pt: part_num_opt,
+                            ring_fds,
+                            pool_base,
+                            pool_size: POOL_SIZE,
+                        }
+                    } else {
+                        RingHandle::Disk {
+                            num: nsid,
+                            pt: part_num_opt,
+                        }
                     }
-
-                    (nsid, None)
                 };
-
-            if is_ring_req {
-                let disk_wrapper = self.disks.get(&nsid).unwrap().clone();
+            }
+            RingHandle::Disk { num, pt } => {
+                let disk_wrapper = self.disks.get(&num).unwrap().clone();
                 let (ring_fds, pool_base) = self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
                 RingHandle::Ring {
-                    num: nsid,
-                    pt: part_num_opt,
+                    num,
+                    pt,
                     ring_fds,
                     pool_base,
                     pool_size: POOL_SIZE,
                 }
-            } else {
-                RingHandle::Disk {
-                    num: nsid,
-                    pt: part_num_opt,
-                }
             }
+            _ => return Err(Error::new(EACCES)),
         };
+
         let id = self.handles.insert(handle);
         println!("path: {}, id: {}", path_str, id);
         Ok(OpenResult::ThisScheme {
