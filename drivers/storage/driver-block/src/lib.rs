@@ -973,6 +973,10 @@ enum RingHandle {
     Disk {
         num: u32,
         pt: Option<usize>,
+    },
+    Ring {
+        num: u32,
+        pt: Option<usize>,
         ring_fds: [usize; 3],
         pool_base: *mut u8,
         pool_size: usize,
@@ -998,7 +1002,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
     fn check_locks(&self, disk_i: u32, part_i_opt: Option<usize>) -> Result<()> {
         for (_, handle) in self.handles.iter() {
             match handle {
-                RingHandle::Disk { num, pt, .. } => {
+                RingHandle::Disk { num, pt, .. } | RingHandle::Ring { num, pt, .. } => {
                     let i = *num;
                     if let Some(p) = *pt {
                         if disk_i == i {
@@ -1126,7 +1130,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
         let id = recvfd_request.id();
         let handle = self.handles.get(id)?;
         match handle {
-            RingHandle::Disk { ring_fds, .. } => {
+            RingHandle::Ring { ring_fds, .. } => {
                 if let Err(e) = recvfd_request.move_fd(&self.socket, FmoveFdFlags::CLONE, ring_fds)
                 {
                     log::error!("recvfd_inner: move_fd failed with error: {:?}", e);
@@ -1137,7 +1141,9 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
                     num_fds: recvfd_request.num_fds(),
                 })
             }
-            RingHandle::SchemeRoot | RingHandle::List(_) => Err(Error::new(EBADF)),
+            RingHandle::SchemeRoot | RingHandle::List(_) | RingHandle::Disk { .. } => {
+                Err(Error::new(EBADF))
+            }
         }
     }
 }
@@ -1186,49 +1192,63 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                 return Err(Error::new(EISDIR));
             }
         } else {
-            let (nsid, part_num_opt) = if let Some(p_pos) = path_str.chars().position(|c| c == 'p')
-            {
-                let nsid_str = &path_str[..p_pos];
-
-                if p_pos + 1 >= path_str.len() {
-                    return Err(Error::new(ENOENT));
-                }
-                let part_num_str = &path_str[p_pos + 1..];
-
-                let nsid = nsid_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
-                let part_num = part_num_str.parse::<usize>().or(Err(Error::new(ENOENT)))?;
-
-                let disk = self.disks.get(&nsid).ok_or(Error::new(ENOENT))?;
-
-                if disk
-                    .pt
-                    .as_ref()
-                    .ok_or(Error::new(ENOENT))?
-                    .partitions
-                    .get(part_num)
-                    .is_some()
-                {
-                    self.check_locks(nsid, Some(part_num))?;
-                }
-                (nsid, Some(part_num))
+            let is_ring_req = path_str.ends_with("/ring");
+            let target_path = if is_ring_req {
+                path_str.trim_end_matches("/ring")
             } else {
-                let nsid = path_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
-                self.check_locks(nsid, None)?;
-
-                if !self.disks.contains_key(&nsid) {
-                    return Err(Error::new(ENOENT));
-                }
-
-                (nsid, None)
+                path_str
             };
-            let disk_wrapper = self.disks.get(&nsid).unwrap().clone();
-            let (ring_fds, pool_base) = self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
-            RingHandle::Disk {
-                num: nsid,
-                pt: part_num_opt,
-                ring_fds,
-                pool_base,
-                pool_size: POOL_SIZE,
+            let (nsid, part_num_opt) =
+                if let Some(p_pos) = target_path.chars().position(|c| c == 'p') {
+                    let nsid_str = &path_str[..p_pos];
+
+                    if p_pos + 1 >= path_str.len() {
+                        return Err(Error::new(ENOENT));
+                    }
+                    let part_num_str = &path_str[p_pos + 1..];
+
+                    let nsid = nsid_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
+                    let part_num = part_num_str.parse::<usize>().or(Err(Error::new(ENOENT)))?;
+
+                    let disk = self.disks.get(&nsid).ok_or(Error::new(ENOENT))?;
+
+                    if disk
+                        .pt
+                        .as_ref()
+                        .ok_or(Error::new(ENOENT))?
+                        .partitions
+                        .get(part_num)
+                        .is_some()
+                    {
+                        self.check_locks(nsid, Some(part_num))?;
+                    }
+                    (nsid, Some(part_num))
+                } else {
+                    let nsid = path_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
+                    self.check_locks(nsid, None)?;
+
+                    if !self.disks.contains_key(&nsid) {
+                        return Err(Error::new(ENOENT));
+                    }
+
+                    (nsid, None)
+                };
+
+            if is_ring_req {
+                let disk_wrapper = self.disks.get(&nsid).unwrap().clone();
+                let (ring_fds, pool_base) = self.setup_worker(nsid, part_num_opt, disk_wrapper)?;
+                RingHandle::Ring {
+                    num: nsid,
+                    pt: part_num_opt,
+                    ring_fds,
+                    pool_base,
+                    pool_size: POOL_SIZE,
+                }
+            } else {
+                RingHandle::Disk {
+                    num: nsid,
+                    pt: part_num_opt,
+                }
             }
         };
         let id = self.handles.insert(handle);
@@ -1282,6 +1302,11 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                     Ok(())
                 }
             }
+            RingHandle::Ring { pool_size, .. } => {
+                stat.st_mode = MODE_FILE;
+                stat.st_size = pool_size as u64;
+                Ok(())
+            }
             RingHandle::SchemeRoot => Err(Error::new(EBADF)),
         }
     }
@@ -1307,7 +1332,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
 
         match handle {
             RingHandle::List(_) => (),
-            RingHandle::Disk { num, pt, .. } => {
+            RingHandle::Disk { num, pt, .. } | RingHandle::Ring { num, pt, .. } => {
                 let number_str = if let Some(part_num) = pt {
                     format!("{}p{}", num, part_num)
                 } else {
@@ -1346,14 +1371,16 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                 buf[..count].copy_from_slice(&src[..count]);
                 Ok(count)
             }
-            RingHandle::SchemeRoot | RingHandle::Disk { .. } => Err(Error::new(EBADF)),
+            RingHandle::SchemeRoot | RingHandle::Disk { .. } | RingHandle::Ring { .. } => {
+                Err(Error::new(EBADF))
+            }
         }
     }
 
     fn fsize(&mut self, id: usize, _ctx: &CallerCtx) -> Result<u64> {
         Ok(match *self.handles.get_mut(id)? {
             RingHandle::List(ref handle) => handle.len() as u64,
-            RingHandle::Disk { num, pt, .. } => {
+            RingHandle::Disk { num, pt, .. } | RingHandle::Ring { num, pt, .. } => {
                 let disk = self.disks.get_mut(&num).ok_or(Error::new(EBADF))?;
                 if let Some(part_num) = pt {
                     let part = disk
@@ -1383,7 +1410,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
     ) -> Result<usize> {
         let handle = self.handles.get(id)?;
         match handle {
-            RingHandle::Disk {
+            RingHandle::Ring {
                 pool_base,
                 pool_size,
                 ..
