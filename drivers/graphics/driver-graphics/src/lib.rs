@@ -126,6 +126,7 @@ pub struct GraphicsScheme<T: GraphicsAdapter> {
     inner: GraphicsSchemeInner<T>,
     inputd_handle: DisplayHandle,
     state: SchemeState,
+    socket: Socket,
 }
 
 impl<T: GraphicsAdapter> GraphicsScheme<T> {
@@ -148,7 +149,6 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
             adapter,
             scheme_name,
             disable_graphical_debug,
-            socket,
             objects,
             handles: HandleMap::new(),
             active_vt: 0,
@@ -156,7 +156,7 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
         };
 
         let cap_id = inner.scheme_root().expect("failed to get this scheme root");
-        register_scheme_inner(&inner.socket, &inner.scheme_name, cap_id)
+        register_scheme_inner(&socket, &inner.scheme_name, cap_id)
             .expect("failed to register graphics scheme root");
 
         let display_handle = if early {
@@ -169,11 +169,12 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
             inner,
             inputd_handle: display_handle,
             state: SchemeState::new(),
+            socket,
         }
     }
 
     pub fn event_handle(&self) -> &Fd {
-        self.inner.socket.inner()
+        self.socket.inner()
     }
 
     pub fn inputd_event_handle(&self) -> BorrowedFd<'_> {
@@ -222,7 +223,7 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
     /// file.
     pub fn tick(&mut self) -> io::Result<()> {
         loop {
-            let request = match self.inner.socket.next_request(SignalBehavior::Restart) {
+            let request = match self.socket.next_request(SignalBehavior::Restart) {
                 Ok(Some(request)) => request,
                 Ok(None) => {
                     // Scheme likely got unmounted
@@ -242,8 +243,7 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
                 }
                 _ => continue,
             };
-            self.inner
-                .socket
+            self.socket
                 .write_response(response, SignalBehavior::Restart)
                 .expect("driver-graphics: failed to write response");
         }
@@ -257,7 +257,6 @@ struct GraphicsSchemeInner<T: GraphicsAdapter> {
 
     scheme_name: String,
     disable_graphical_debug: Option<File>,
-    socket: Socket,
     objects: KmsObjects<T>,
     handles: HandleMap<Handle<T>>,
 
