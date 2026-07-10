@@ -1,4 +1,5 @@
 use anyhow::Context;
+use std::ffi::CStr;
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
@@ -6,8 +7,8 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 
 mod sys;
 
-const DEFAULT_COLS: u32 = 80;
-const DEFAULT_LINES: u32 = 30;
+const DEFAULT_COLS: u16 = 80;
+const DEFAULT_LINES: u16 = 30;
 
 event::user_data! {
     enum EventData {
@@ -80,29 +81,33 @@ fn handle(
     process.wait()
 }
 
-fn getpty(columns: u32, lines: u32) -> io::Result<(RawFd, String)> {
-    let master = libredox::call::open(
+/// getpty, copied from getty
+pub fn getpty(columns: u16, lines: u16) -> anyhow::Result<(RawFd, String)> {
+    use libredox::{call as redox, flag};
+    let master = redox::open(
         "/scheme/pty/ptmx",
-        libredox::flag::O_CLOEXEC
-            | libredox::flag::O_RDWR
-            | libredox::flag::O_CREAT
-            | libredox::flag::O_NONBLOCK,
+        flag::O_CLOEXEC | flag::O_RDWR | flag::O_CREAT | flag::O_NONBLOCK,
         0,
-    )?;
+    )
+    .context("failed to create PTY")?;
 
-    if let Ok(winsize_fd) = libredox::call::dup(master, b"winsize") {
-        let _ = libredox::call::write(
+    if let Ok(winsize_fd) = redox::dup(master, b"winsize") {
+        redox::write(
             winsize_fd,
             &redox_termios::Winsize {
-                ws_row: lines as u16,
-                ws_col: columns as u16,
+                ws_row: lines,
+                ws_col: columns,
             },
-        );
-        let _ = libredox::call::close(winsize_fd);
+        )
+        .context("failed to get PTY winsize")?;
+        let _ = redox::close(winsize_fd);
     }
+    let _ = unsafe { libc::grantpt(master as RawFd) };
+    let _ = unsafe { libc::unlockpt(master as RawFd) };
 
-    let mut buf: [u8; 4096] = [0; 4096];
-    let count = libredox::call::fpath(master, &mut buf)?;
+    let name = unsafe { libc::ptsname(master as RawFd) };
+    let count = unsafe { libc::strlen(name) };
+    let buf = unsafe { &*std::ptr::slice_from_raw_parts(name.cast(), count) };
     Ok((master as RawFd, unsafe {
         String::from_utf8_unchecked(Vec::from(&buf[..count]))
     }))
@@ -115,13 +120,14 @@ fn inner() -> anyhow::Result<()> {
     let mut config_lines = config.lines();
 
     let (columns, lines) = (DEFAULT_COLS, DEFAULT_LINES);
-    let (master_fd, pty) = getpty(columns, lines)?;
+    let (master_fd, pty) = getpty(columns, lines).context("failed to get pty")?;
 
     let timeout_fd = libredox::call::open(
         "/scheme/time/4",
         libredox::flag::O_CLOEXEC | libredox::flag::O_RDWR | libredox::flag::O_NONBLOCK,
         0,
-    )? as RawFd;
+    )
+    .context("failed to get time")? as RawFd;
 
     let event_queue = event::EventQueue::new()?;
     event_queue.subscribe(master_fd as usize, EventData::Pty, event::EventFlags::READ)?;
@@ -131,9 +137,18 @@ fn inner() -> anyhow::Result<()> {
         event::EventFlags::READ,
     )?;
 
-    let slave_stdin = OpenOptions::new().read(true).open(&pty)?;
-    let slave_stdout = OpenOptions::new().write(true).open(&pty)?;
-    let slave_stderr = OpenOptions::new().write(true).open(&pty)?;
+    let slave_stdin = OpenOptions::new()
+        .read(true)
+        .open(&pty)
+        .context("failed to get pty stdin")?;
+    let slave_stdout = OpenOptions::new()
+        .write(true)
+        .open(&pty)
+        .context("failed to get pty stdout")?;
+    let slave_stderr = OpenOptions::new()
+        .write(true)
+        .open(&pty)
+        .context("failed to get pty stderr")?;
 
     let Some(name) = config_lines.next() else {
         anyhow::bail!("/etc/redoxerd does not specify command");
@@ -172,7 +187,7 @@ fn main() {
             sys::exit_success();
         }
         Err(err) => {
-            eprintln!("redoxerd: {:#}", err);
+            eprintln!("redoxerd: {}", err);
 
             // Wait a bit for the error message to get flushed through the tty subsystem before exiting.
             std::thread::sleep(std::time::Duration::from_millis(100));
