@@ -2,6 +2,7 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
+use scheme_utils::FpathWriter;
 use syscall::error::{Error, Result, EAGAIN, EINVAL, EWOULDBLOCK};
 use syscall::flag::{EventFlags, F_GETFL, F_SETFL, O_ACCMODE, O_NONBLOCK};
 
@@ -37,7 +38,10 @@ impl Resource for PtyControlTerm {
     }
 
     fn path(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.pty.borrow_mut().path(buf)
+        FpathWriter::with(buf, "pty", |w| {
+            write!(w, "ptmx").unwrap();
+            Ok(())
+        })
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {

@@ -7,6 +7,7 @@ edition = "2018"
 
 [dependencies]
 anyhow.workspace = true
+libc.workspace = true
 libredox.workspace = true
 redox_event.workspace = true
 redox_syscall.workspace = true

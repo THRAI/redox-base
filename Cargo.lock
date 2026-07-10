@@ -1931,6 +1931,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "common",
+ "libc",
  "libredox",
  "qemu-exit",
  "redox_event",
