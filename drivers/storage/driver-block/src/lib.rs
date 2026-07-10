@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::cmp;
 use std::future::{Future, IntoFuture};
 use std::io::{self, Read, Seek, SeekFrom};
+use std::rc::Rc;
 use std::slice;
 
 use std::collections::BTreeMap;
@@ -11,7 +13,6 @@ use std::sync::Mutex;
 use std::task::Poll;
 
 use event::EventFlags;
-use executor::LocalExecutor;
 use libredox::{flag, Fd};
 use partitionlib::{LogicalBlockSize, PartitionTable};
 use redox_rings::{
@@ -385,11 +386,11 @@ struct DiskSchemeInner<T> {
 #[derive(Clone)]
 pub struct RingDiskWrapper<T> {
     pub disk: T,
-    pub pt: Option<PartitionTable>,
+    pub pt: Option<Rc<PartitionTable>>,
 }
 
 impl<T: Disk> RingDiskWrapper<T> {
-    pub fn pt(disk: &mut T, executor: &impl ExecutorTrait) -> Option<PartitionTable> {
+    fn pt(disk: &mut T, executor: &impl ExecutorTrait) -> Option<PartitionTable> {
         let bs = match disk.block_size() {
             512 => LogicalBlockSize::Lb512,
             4096 => LogicalBlockSize::Lb4096,
@@ -457,7 +458,7 @@ impl<T: Disk> RingDiskWrapper<T> {
 
     pub fn new(mut disk: T, executor: &impl ExecutorTrait) -> Self {
         Self {
-            pt: Self::pt(&mut disk, executor),
+            pt: Self::pt(&mut disk, executor).map(Rc::new),
             disk,
         }
     }
@@ -1047,7 +1048,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
         let sq_path = format!("{}.sq", number_str);
         let cq_path = format!("{}.cq", number_str);
 
-        let (shm_ptr) = disk.allocate_dma_pool(POOL_SIZE)?;
+        let shm_ptr = disk.allocate_dma_pool(POOL_SIZE)?;
 
         let pipe = self.pipe_root.openat("", flag::O_CLOEXEC, 0)?;
 
@@ -1061,36 +1062,29 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
 
         let ring_fds = [sq_fd.raw(), cq_fd.raw(), pipe.raw()];
 
-        let sq = BlockingConsumer::<DiskOpSqe>::from_fd(sq_fd, true, Some(RING_SIZE))?;
+        let mut sq = BlockingConsumer::<DiskOpSqe>::from_fd(sq_fd, true, Some(RING_SIZE))?;
         let cq = BlockingProducer::<DiskOpCqe>::from_fd(cq_fd, true, Some(RING_SIZE))?;
 
         const BATCH_LIMIT: usize = 128;
-        let mut ring_worker = DiskWorker {
-            sq,
-            cq,
-            disk,
-            pt,
-            shm_base: shm_ptr,
-            pipe,
-        };
 
         let exec_for_task = self.executor.clone();
 
         self.executor.spawn(Box::pin(async move {
-            let source = RingEventSource(Mutex::new(
-                exec_for_task.register_external_event(ring_worker.pipe.raw(), EventFlags::READ),
-            ));
             let mut queue: Vec<DiskOpSqe> = Vec::with_capacity(BATCH_LIMIT);
+            let cq = Rc::new(Mutex::new(cq));
+            let source = RingEventSource(Mutex::new(
+                exec_for_task.register_external_event(pipe.raw(), EventFlags::READ),
+            ));
 
             loop {
                 let mut spun = false;
 
                 for _ in 0..100 {
-                    match ring_worker.sq.try_pop() {
+                    match sq.try_pop() {
                         Ok(req) => {
                             queue.push(req);
                             while queue.len() < BATCH_LIMIT {
-                                match ring_worker.sq.try_pop() {
+                                match sq.try_pop() {
                                     Ok(req) => queue.push(req),
                                     Err(_) => break,
                                 }
@@ -1110,14 +1104,25 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
                 }
 
                 for req in queue.drain(..) {
-                    let _ = ring_worker.handle_request(req).await;
+                    let disk = disk.clone();
+                    let cq = Rc::clone(&cq);
+                    let mut worker = DiskWorker {
+                        cq,
+                        disk,
+                        pt,
+                        shm_ptr,
+                    };
+
+                    exec_for_task.spawn(Box::pin(async move {
+                        worker.handle_request(req).await.unwrap();
+                    }));
                 }
 
                 if spun {
                     continue;
                 }
 
-                if let Ok(req) = ring_worker.sq.inner.inner.pop_async(&source, None).await {
+                if let Ok(req) = sq.inner.inner.pop_async(&source, None).await {
                     queue.push(req);
                 }
             }
@@ -1485,12 +1490,10 @@ pub struct DiskOpCqe {
 }
 
 pub struct DiskWorker<T> {
-    sq: BlockingConsumer<DiskOpSqe>,
-    cq: BlockingProducer<DiskOpCqe>,
+    cq: Rc<Mutex<BlockingProducer<DiskOpCqe>>>,
     disk: RingDiskWrapper<T>,
     pt: Option<usize>,
-    shm_base: *mut u8,
-    pipe: Fd,
+    shm_ptr: *mut u8,
 }
 
 impl<T: Disk> DiskWorker<T> {
@@ -1507,7 +1510,7 @@ impl<T: Disk> DiskWorker<T> {
 
         let buffer = unsafe {
             slice::from_raw_parts_mut(
-                self.shm_base.add(req.buf_offset as usize),
+                self.shm_ptr.add(req.buf_offset as usize),
                 req.buf_len as usize,
             )
         };
@@ -1539,7 +1542,7 @@ impl<T: Disk> DiskWorker<T> {
         };
 
         loop {
-            match self.cq.try_push(cqe) {
+            match self.cq.lock().unwrap().try_push(cqe) {
                 Ok(_) => break,
                 Err(RingPushError::Full(_)) => {
                     yield_now().await;

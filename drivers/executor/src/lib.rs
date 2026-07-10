@@ -211,7 +211,11 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
             if retval.borrow().is_some() {
                 break;
             }
-            if finished == 0 {
+
+            if finished == 0
+                && self.ready_futures.borrow().is_empty()
+                && self.pending_wakes.borrow().is_empty()
+            {
                 self.react();
             }
         }
