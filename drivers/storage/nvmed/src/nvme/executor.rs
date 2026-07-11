@@ -58,14 +58,12 @@ impl Hardware for NvmeHw {
         let ctxt = ctxt.lock();
 
         for (sq_cq_id, (sq, cq)) in ctxt.queues.borrow_mut().iter_mut() {
-            while let Some((new_head, cqe)) = cq.complete() {
-                unsafe {
-                    nvme.completion_queue_head(*sq_cq_id, new_head);
-                }
+            while let Some(cqe) = cq.complete() {
                 sq.head = cqe.sq_head;
-                log::trace!("new head {new_head} cqe {cqe:?}");
                 handle(*sq_cq_id, cqe);
             }
+
+            cq.kick();
         }
     }
     fn sq_cq(_ctxt: &Arc<Nvme>, id: Self::CqId) -> Self::SqId {
