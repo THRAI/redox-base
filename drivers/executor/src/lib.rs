@@ -358,7 +358,6 @@ impl<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> Future for CqeFuture<Hw, I> {
                     |cmd_id| {
                         let mut cmd = cmd_init(cmd_id);
                         Hw::set_sqe_cmdid(&mut cmd, cmd_id);
-                        log::trace!("About to submit {cmd:?}");
                         cmd
                     },
                     || {
@@ -377,14 +376,11 @@ impl<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> Future for CqeFuture<Hw, I> {
                 task::Poll::Pending
             }
             State::Completing { cq_id, cmd_id } => match this.comp.take() {
-                Some(comp) => {
-                    log::trace!("ready!");
-                    task::Poll::Ready(comp)
-                }
+                Some(comp) => task::Poll::Ready(comp),
 
                 // Shouldn't technically be possible
                 None => {
-                    log::trace!("spurious poll");
+                    log::error!("spurious poll");
                     executor
                         .awaiting_completion
                         .borrow_mut()
