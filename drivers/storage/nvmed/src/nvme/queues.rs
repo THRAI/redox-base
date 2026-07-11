@@ -1,3 +1,4 @@
+use common::io::{Io, Mmio};
 use std::cell::UnsafeCell;
 use std::ptr;
 use syscall::Result;
@@ -50,22 +51,25 @@ pub struct NvmeComp {
 
 /// Completion queue
 pub struct NvmeCompQueue {
+    // Size must be a power of two.
     pub data: Dma<[UnsafeCell<NvmeComp>]>,
     pub head: u16,
     pub phase: bool,
+    pub doorbell: &'static mut Mmio<u32>,
 }
 
 impl NvmeCompQueue {
-    pub fn new() -> Result<Self> {
+    pub fn new(doorbell: &'static mut Mmio<u32>) -> Result<Self> {
         Ok(Self {
             data: unsafe { Dma::zeroed_slice(256)?.assume_init() },
             head: 0,
             phase: true,
+            doorbell,
         })
     }
 
     /// Get a new completion queue entry, or return None if no entry is available yet.
-    pub(crate) fn complete(&mut self) -> Option<(u16, NvmeComp)> {
+    pub(crate) fn complete(&mut self) -> Option<NvmeComp> {
         let entry = unsafe { ptr::read_volatile(self.data[usize::from(self.head)].get()) };
 
         if ((entry.status & 1) == 1) == self.phase {
@@ -73,24 +77,26 @@ impl NvmeCompQueue {
             if self.head == 0 {
                 self.phase = !self.phase;
             }
-            Some((self.head, entry))
+            Some(entry)
         } else {
             None
         }
     }
 
     /// Get a new CQ entry, busy waiting until an entry appears.
-    pub fn complete_spin(&mut self) -> (u16, NvmeComp) {
+    pub fn complete_spin(&mut self) -> NvmeComp {
         log::debug!("Waiting for new CQ entry");
         loop {
             if let Some(some) = self.complete() {
                 return some;
             } else {
-                unsafe {
-                    std::hint::spin_loop();
-                }
+                core::hint::spin_loop();
             }
         }
+    }
+
+    pub fn kick(&mut self) {
+        self.doorbell.write(u32::from(self.head));
     }
 }
 
@@ -99,14 +105,17 @@ pub struct NvmeCmdQueue {
     pub data: Dma<[UnsafeCell<NvmeCmd>]>,
     pub tail: u16,
     pub head: u16,
+
+    doorbell: &'static mut Mmio<u32>,
 }
 
 impl NvmeCmdQueue {
-    pub fn new() -> Result<Self> {
+    pub fn new(doorbell: &'static mut Mmio<u32>) -> Result<Self> {
         Ok(Self {
             data: unsafe { Dma::zeroed_slice(64)?.assume_init() },
             tail: 0,
             head: 0,
+            doorbell,
         })
     }
 
@@ -121,8 +130,12 @@ impl NvmeCmdQueue {
     /// entries; this can be checked using `is_full`.
     pub fn submit_unchecked(&mut self, entry: NvmeCmd) -> u16 {
         unsafe { ptr::write_volatile(self.data[usize::from(self.tail)].get(), entry) }
-        self.tail = (self.tail + 1) % (self.data.len() as u16);
+        self.tail = (self.tail + 1) & (self.data.len() as u16 - 1);
         self.tail
+    }
+
+    pub fn kick(&mut self) {
+        self.doorbell.write(u32::from(self.tail));
     }
 }
 

@@ -127,11 +127,7 @@ impl Nvme {
                     Arc::new(ReentrantMutex::new(ThreadCtxt {
                         buffer: RefCell::new(unsafe { Dma::zeroed()?.assume_init() }),
                         buffer_prp: RefCell::new(unsafe { Dma::zeroed()?.assume_init() }),
-
-                        queues: RefCell::new(
-                            iter::once((0, (NvmeCmdQueue::new()?, NvmeCompQueue::new()?)))
-                                .collect(),
-                        ),
+                        queues: RefCell::new(HashMap::new()),
                     })),
                 ))
                 .collect(),
@@ -152,11 +148,9 @@ impl Nvme {
             caps: None,
         })
     }
-    /// Write to a doorbell register.
-    ///
     /// # Locking
     /// Locks `regs`.
-    unsafe fn doorbell_write(&self, index: usize, value: u32) {
+    unsafe fn get_doorbell(&self, index: usize) -> &'static mut Mmio<u32> {
         use std::ops::DerefMut;
 
         let mut regs_guard = self.regs.write();
@@ -164,23 +158,14 @@ impl Nvme {
 
         let dstrd = ((self.caps.unwrap() >> 32) & 0b1111) as usize;
         let addr = (regs as *mut NvmeRegs as usize) + 0x1000 + index * (4 << dstrd);
-        (&mut *(addr as *mut Mmio<u32>)).write(value);
+        &mut *(addr as *mut Mmio<u32>)
     }
     fn cur_thread_ctxt(&self) -> Arc<ReentrantMutex<ThreadCtxt>> {
         // TODO: multi-threading
         Arc::clone(self.thread_ctxts.read().get(&0).unwrap())
     }
 
-    pub unsafe fn submission_queue_tail(&self, qid: u16, tail: u16) {
-        self.doorbell_write(2 * (qid as usize), u32::from(tail));
-    }
-
-    pub unsafe fn completion_queue_head(&self, qid: u16, head: u16) {
-        self.doorbell_write(2 * (qid as usize) + 1, u32::from(head));
-    }
-
     pub unsafe fn init(&mut self) -> Result<()> {
-        let thread_ctxts = self.thread_ctxts.get_mut();
         {
             let regs = self.regs.read();
             log::debug!("CAP_LOW: {:X}", regs.cap_low.read());
@@ -193,6 +178,11 @@ impl Nvme {
             let cap_high = regs.cap_high.read() as u64;
             self.caps = Some(cap_low | cap_high << 32);
         }
+
+        let asq_doorbell = self.get_doorbell(2 * 0);
+        let acq_doorbell = self.get_doorbell(2 * 0 + 1);
+
+        let thread_ctxts = self.thread_ctxts.get_mut();
 
         log::debug!("Disabling controller.");
         self.regs.get_mut().cc.writef(1, false);
@@ -219,20 +209,6 @@ impl Nvme {
             self.regs.get_mut().intmc.write(0x0000_0001);
         }
 
-        for (qid, iv) in self.cq_ivs.get_mut().iter_mut() {
-            let ctxt = thread_ctxts.get(&0).unwrap().lock();
-            let queues = ctxt.queues.borrow();
-
-            let &(ref cq, ref sq) = queues.get(qid).unwrap();
-            log::debug!(
-                "iv {iv} [cq {qid}: {:X}, {}] [sq {qid}: {:X}, {}]",
-                cq.data.physical(),
-                cq.data.len(),
-                sq.data.physical(),
-                sq.data.len()
-            );
-        }
-
         {
             let main_ctxt = thread_ctxts.get(&0).unwrap().lock();
 
@@ -243,7 +219,9 @@ impl Nvme {
             let regs = self.regs.get_mut();
 
             let mut queues = main_ctxt.queues.borrow_mut();
-            let (asq, acq) = queues.get_mut(&0).unwrap();
+            let asq = NvmeCmdQueue::new(asq_doorbell)?;
+            let acq = NvmeCompQueue::new(acq_doorbell)?;
+
             regs.aqa
                 .write(((acq.data.len() as u32 - 1) << 16) | (asq.data.len() as u32 - 1));
             regs.asq_low.write(asq.data.physical() as u32);
@@ -258,6 +236,8 @@ impl Nvme {
             cc &= 0xFF00000F;
             cc |= (4 << 20) | (6 << 16);
             regs.cc.write(cc);
+
+            queues.insert(0, (asq, acq));
         }
 
         log::debug!("Enabling controller.");
@@ -355,9 +335,7 @@ impl Nvme {
     }
     pub fn submit(&self, ctxt: &ThreadCtxt, sq_id: SqId) {
         match ctxt.queues.borrow_mut().get_mut(&sq_id).unwrap() {
-            (sq, _cq) => unsafe {
-                self.submission_queue_tail(sq_id, sq.tail);
-            },
+            (sq, _cq) => sq.kick(),
         }
     }
     pub async fn create_io_completion_queue(
@@ -365,7 +343,9 @@ impl Nvme {
         io_cq_id: CqId,
         vector: Option<Iv>,
     ) -> NvmeCompQueue {
-        let queue = NvmeCompQueue::new().expect("nvmed: failed to allocate I/O completion queue");
+        let doorbell = unsafe { self.get_doorbell(2 * (io_cq_id as usize) + 1) };
+        let queue =
+            NvmeCompQueue::new(doorbell).expect("nvmed: failed to allocate I/O completion queue");
 
         let len = u16::try_from(queue.data.len())
             .expect("nvmed: internal error: I/O CQ longer than 2^16 entries");
@@ -395,7 +375,8 @@ impl Nvme {
         queue
     }
     pub async fn create_io_submission_queue(&self, io_sq_id: SqId, io_cq_id: CqId) -> NvmeCmdQueue {
-        let q = NvmeCmdQueue::new().expect("failed to create submission queue");
+        let doorbell = unsafe { self.get_doorbell(2 * (io_sq_id as usize)) };
+        let q = NvmeCmdQueue::new(doorbell).expect("failed to create submission queue");
 
         let len = u16::try_from(q.data.len())
             .expect("nvmed: internal error: I/O SQ longer than 2^16 entries");
