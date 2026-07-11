@@ -87,6 +87,8 @@ pub struct Nvme {
 
     next_sqid: AtomicSqId,
     next_cqid: AtomicCqId,
+
+    caps: Option<u64>,
 }
 
 pub struct ThreadCtxt {
@@ -146,6 +148,8 @@ impl Nvme {
             // TODO
             next_sqid: AtomicSqId::new(2),
             next_cqid: AtomicCqId::new(2),
+
+            caps: None,
         })
     }
     /// Write to a doorbell register.
@@ -158,7 +162,7 @@ impl Nvme {
         let mut regs_guard = self.regs.write();
         let regs: &mut NvmeRegs = regs_guard.deref_mut();
 
-        let dstrd = (regs.cap_high.read() & 0b1111) as usize;
+        let dstrd = ((self.caps.unwrap() >> 32) & 0b1111) as usize;
         let addr = (regs as *mut NvmeRegs as usize) + 0x1000 + index * (4 << dstrd);
         (&mut *(addr as *mut Mmio<u32>)).write(value);
     }
@@ -184,6 +188,10 @@ impl Nvme {
             log::debug!("VS: {:X}", regs.vs.read());
             log::debug!("CC: {:X}", regs.cc.read());
             log::debug!("CSTS: {:X}", regs.csts.read());
+
+            let cap_low = regs.cap_low.read() as u64;
+            let cap_high = regs.cap_high.read() as u64;
+            self.caps = Some(cap_low | cap_high << 32);
         }
 
         log::debug!("Disabling controller.");
