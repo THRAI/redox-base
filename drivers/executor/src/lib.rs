@@ -298,9 +298,12 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
 
         Hw::unmask_vector(&self.global_ctxt, self.vector);
     }
-    pub async fn submit(&self, sq_id: Hw::SqId, cmd: Hw::Sqe) -> Hw::Cqe {
-        CqeFuture::<Hw> {
-            state: State::<Hw>::Submitting { sq_id, cmd },
+    pub async fn submit<I>(&self, sq_id: Hw::SqId, cmd_init: I) -> Hw::Cqe
+    where
+        I: FnMut(Hw::CmdId) -> Hw::Sqe,
+    {
+        CqeFuture::<Hw, I> {
+            state: State::Submitting { sq_id, cmd_init },
             comp: None,
             _not_send: PhantomData,
         }
@@ -308,13 +311,14 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
     }
 }
 
-struct CqeFuture<Hw: Hardware> {
-    pub state: State<Hw>,
+struct CqeFuture<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> {
+    pub state: State<Hw, I>,
     pub comp: Option<Hw::Cqe>,
     pub _not_send: PhantomData<*const ()>,
 }
-enum State<Hw: Hardware> {
-    Submitting { sq_id: Hw::SqId, cmd: Hw::Sqe },
+
+enum State<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> {
+    Submitting { sq_id: Hw::SqId, cmd_init: I },
     Completing { cq_id: Hw::CqId, cmd_id: Hw::CmdId },
 }
 
@@ -333,7 +337,7 @@ fn current_executor_and_idx<Hw: Hardware>(
     (executor, idx)
 }
 
-impl<Hw: Hardware> Future for CqeFuture<Hw> {
+impl<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> Future for CqeFuture<Hw, I> {
     type Output = Hw::Cqe;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
@@ -342,13 +346,17 @@ impl<Hw: Hardware> Future for CqeFuture<Hw> {
         let (executor, idx) = current_executor_and_idx::<Hw>(cx);
 
         match this.state {
-            State::Submitting { sq_id, mut cmd } => {
+            State::Submitting {
+                sq_id,
+                ref mut cmd_init,
+            } => {
                 let mut awaiting = executor.awaiting_submission.borrow_mut();
 
                 if let Some((cq_id, cmd_id)) = Hw::push_sqe(
                     &executor.global_ctxt,
                     sq_id,
                     |cmd_id| {
+                        let mut cmd = cmd_init(cmd_id);
                         Hw::set_sqe_cmdid(&mut cmd, cmd_id);
                         log::trace!("About to submit {cmd:?}");
                         cmd

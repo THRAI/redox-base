@@ -320,14 +320,14 @@ impl Nvme {
     pub async fn submit_and_complete_command(
         &self,
         sq_id: SqId,
-        cmd_init: impl FnOnce(CmdId) -> NvmeCmd,
+        cmd_init: impl FnMut(CmdId) -> NvmeCmd,
     ) -> NvmeComp {
-        NvmeExecutor::current().submit(sq_id, cmd_init(0)).await
+        NvmeExecutor::current().submit(sq_id, cmd_init).await
     }
 
     pub async fn submit_and_complete_admin_command(
         &self,
-        cmd_init: impl FnOnce(CmdId) -> NvmeCmd,
+        cmd_init: impl FnMut(CmdId) -> NvmeCmd,
     ) -> NvmeComp {
         self.submit_and_complete_command(0, cmd_init).await
     }
