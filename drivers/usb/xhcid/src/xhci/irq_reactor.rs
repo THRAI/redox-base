@@ -104,6 +104,12 @@ pub struct IrqReactor<const N: usize> {
 
 pub type NewPendingTrb = State;
 
+enum EventProcessResult {
+    NoEvent,
+    EventRingFull,
+    RegularEvent,
+}
+
 impl<const N: usize> IrqReactor<N> {
     pub fn new(hci: Arc<Xhci<N>>, irq_file: Option<File>) -> Self {
         let device_enumerator_sender = hci.device_enumerator_sender.clone();
@@ -139,45 +145,14 @@ impl<const N: usize> IrqReactor<N> {
 
             let mut event_ring = hci_clone.primary_event_ring.lock().unwrap();
 
-            let event_trb = &mut event_ring.ring.trbs[event_trb_index];
-
-            if event_trb.completion_code() == TrbCompletionCode::Invalid as u8 {
-                continue 'trb_loop;
-            }
-
-            trace!(
-                "Found event TRB at index {} with type {} and cycle bit {}: {:?}",
-                event_trb_index,
-                event_trb.trb_type(),
-                event_trb.cycle() as u8,
-                event_trb
-            );
-
-            if self.check_event_ring_full(event_trb.clone()) {
-                info!("Had to resize event TRB, retrying...");
-                continue 'trb_loop;
-            }
-
-            trace!("Handling requests");
-            self.handle_requests();
-            trace!("Requests handled");
-
-            match event_trb.trb_type() {
-                _ if event_trb.trb_type() == TrbType::PortStatusChange as u8 => {
-                    trace!("Received a port status change!");
-                    self.handle_port_status_change(event_trb.clone())
-                } //TODO Handle the other unprompted events
-                _ => {
-                    self.acknowledge(event_trb.clone());
+            loop {
+                match self.process_one_event(&mut event_ring, &mut event_trb_index) {
+                    EventProcessResult::NoEvent | EventProcessResult::EventRingFull => {
+                        continue 'trb_loop
+                    }
+                    EventProcessResult::RegularEvent => {}
                 }
             }
-
-            event_trb.reserved(false);
-
-            self.update_erdp(&*event_ring);
-            hci_clone.event_handler_finished();
-
-            event_trb_index = event_ring.ring.next_index();
         }
     }
 
@@ -258,59 +233,81 @@ impl<const N: usize> IrqReactor<N> {
 
             loop {
                 trace!("count: {}", count);
-                let event_trb = &mut event_ring.ring.trbs[event_trb_index];
 
-                if event_trb.completion_code() == TrbCompletionCode::Invalid as u8 {
-                    if count == 0 {
-                        warn!("xhci: Received interrupt, but no event was found in the event ring. Ignoring interrupt.")
+                match self.process_one_event(&mut event_ring, &mut event_trb_index) {
+                    EventProcessResult::NoEvent => {
+                        if count == 0 {
+                            warn!("xhci: Received interrupt, but no event was found in the event ring. Ignoring interrupt.")
+                        }
+                        self.unmask_interrupts();
+                        continue 'trb_loop;
                     }
-                    //hci_clone.event_handler_finished();
-                    self.unmask_interrupts();
-                    continue 'trb_loop;
-                } else {
-                    count += 1
-                }
-
-                info!(
-                    "Found event TRB at index {} with type {} and cycle bit {}: {:?}",
-                    event_trb_index,
-                    event_trb.trb_type(),
-                    event_trb.cycle() as u8,
-                    event_trb
-                );
-
-                if self.check_event_ring_full(event_trb.clone()) {
-                    info!("Had to resize event TRB, retrying...");
-                    //hci_clone.event_handler_finished();
-                    if self.hci.interrupt_is_pending(0) {
-                        warn!("After incrementing the dequeue pointer, the interrupt bit is still pending.")
-                    } else {
-                        debug!("The interrupt bit is no longer pending.");
+                    EventProcessResult::EventRingFull => {
+                        if self.hci.interrupt_is_pending(0) {
+                            warn!("After incrementing the dequeue pointer, the interrupt bit is still pending.")
+                        } else {
+                            debug!("The interrupt bit is no longer pending.");
+                        }
+                        self.unmask_interrupts();
+                        continue 'trb_loop;
                     }
-                    self.unmask_interrupts();
-                    continue 'trb_loop;
-                }
-                self.handle_requests();
-
-                match event_trb.trb_type() {
-                    _ if event_trb.trb_type() == TrbType::PortStatusChange as u8 => {
-                        trace!("Received a port status change!");
-                        self.handle_port_status_change(event_trb.clone())
-                    } //TODO Handle the other unprompted events
-                    _ => {
-                        trace!("Received a non-status trb");
-                        self.acknowledge(event_trb.clone());
+                    EventProcessResult::RegularEvent => {
+                        count += 1;
                     }
                 }
-
-                event_trb.reserved(false);
-
-                self.update_erdp(&*event_ring);
-                self.hci.event_handler_finished();
-
-                event_trb_index = event_ring.ring.next_index();
             }
         }
+    }
+
+    fn process_one_event(
+        &mut self,
+        event_ring: &mut EventRing,
+        event_trb_index: &mut usize,
+    ) -> EventProcessResult {
+        let event_trb = &mut event_ring.ring.trbs[*event_trb_index];
+
+        if event_trb.completion_code() == TrbCompletionCode::Invalid as u8 {
+            //hci_clone.event_handler_finished();
+            return EventProcessResult::NoEvent;
+        }
+
+        trace!(
+            "Found event TRB at index {} with type {} and cycle bit {}: {:?}",
+            event_trb_index,
+            event_trb.trb_type(),
+            event_trb.cycle() as u8,
+            event_trb
+        );
+
+        if self.check_event_ring_full(event_trb.clone()) {
+            info!("Had to resize event TRB, retrying...");
+            //hci_clone.event_handler_finished();
+            return EventProcessResult::EventRingFull;
+        }
+
+        trace!("Handling requests");
+        self.handle_requests();
+        trace!("Requests handled");
+
+        match event_trb.trb_type() {
+            _ if event_trb.trb_type() == TrbType::PortStatusChange as u8 => {
+                trace!("Received a port status change!");
+                self.handle_port_status_change(event_trb.clone())
+            } //TODO Handle the other unprompted events
+            _ => {
+                trace!("Received a non-status trb");
+                self.acknowledge(event_trb.clone());
+            }
+        }
+
+        event_trb.reserved(false);
+
+        self.update_erdp(&*event_ring);
+        self.hci.event_handler_finished();
+
+        *event_trb_index = event_ring.ring.next_index();
+
+        EventProcessResult::RegularEvent
     }
 
     /// Handles device attach/detach events as indicated by a PortStatusChange
