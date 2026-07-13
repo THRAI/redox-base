@@ -240,9 +240,20 @@ impl<const N: usize> IrqReactor<N> {
                             warn!("xhci: Received interrupt, but no event was found in the event ring. Ignoring interrupt.")
                         }
                         self.unmask_interrupts();
+
+                        // Process any events received between the NoEvent and unmasking interrupts
+                        loop {
+                            match self.process_one_event(&mut event_ring, &mut event_trb_index) {
+                                EventProcessResult::NoEvent => break,
+                                EventProcessResult::EventRingFull
+                                | EventProcessResult::RegularEvent => {}
+                            }
+                        }
+
                         continue 'trb_loop;
                     }
                     EventProcessResult::EventRingFull => {
+                        // FIXME can this use the RegularEvent path?
                         if self.hci.interrupt_is_pending(0) {
                             warn!("After incrementing the dequeue pointer, the interrupt bit is still pending.")
                         } else {
