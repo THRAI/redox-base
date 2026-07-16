@@ -3,11 +3,6 @@ use std::arch::asm;
 use rand_chacha::ChaCha20Rng;
 use rand_core::RngCore;
 
-pub const MODE_PERM: u16 = 0x0FFF;
-pub const MODE_EXEC: u16 = 0o1;
-pub const MODE_WRITE: u16 = 0o2;
-pub const MODE_READ: u16 = 0o4;
-
 #[cfg(target_arch = "x86_64")]
 use raw_cpuid::CpuId;
 
@@ -27,8 +22,6 @@ use sha2::{Digest, Sha256};
 // We do not implement blocking reads as per linux /dev/random for the reasons outlined
 // here: https://www.2uo.de/myths-about-urandom/
 
-// Default file access mode for PRNG
-const DEFAULT_PRNG_MODE: u16 = 0o644;
 // Rand crate recommends at least 256 bits of entropy to seed the RNG
 const SEED_BYTES: usize = 32;
 
@@ -90,33 +83,9 @@ fn create_rdrand_seed() -> [u8; SEED_BYTES] {
 /// Contains information about an open file
 struct OpenFileInfo {
     o_flags: usize,
-    /// Flags used when opening file.
-    uid: u32,
-    gid: u32,
-    file_stat: Stat,
 }
 
 impl OpenFileInfo {
-    /// Tests if the current user has enough permissions to view the file, op is the operation,
-    /// like read and write, these modes are MODE_EXEC, MODE_READ, and MODE_WRITE
-    /// Copied from redoxfs
-    fn permission(&self, op: u16) -> bool {
-        let mut perm = self.file_stat.st_mode & 0o7;
-        if self.uid == self.file_stat.st_uid {
-            // If self.mode is 101100110, >> 6 would be 000000101
-            // 0o7 is octal for 111, or, when expanded to 9 digits is 000000111
-            perm |= (self.file_stat.st_mode >> 6) & 0o7;
-            // Since we erased the GID and OTHER bits when >>6'ing, |= will keep those bits in place.
-        }
-        if self.gid == self.file_stat.st_gid || self.file_stat.st_gid == 0 {
-            perm |= (self.file_stat.st_mode >> 3) & 0o7;
-        }
-        if self.uid == 0 {
-            //set the `other` bits to 111
-            perm |= 0o7;
-        }
-        perm & op == op
-    }
     fn o_flag_set(&self, f: usize) -> bool {
         return (f & self.o_flags) == f;
     }
@@ -142,7 +111,6 @@ struct RandScheme {
     // ChaCha20 is a Cryptographically Secure PRNG
     // https://docs.rs/rand/0.5.0/rand/prng/chacha/struct.ChaChaRng.html
     // Allows 2^64 streams of random numbers, which we will equate with file numbers
-    prng_stat: Stat,
     handles: HandleMap<Handle>,
 }
 
@@ -151,12 +119,6 @@ impl RandScheme {
     fn new() -> RandScheme {
         RandScheme {
             prng: ChaCha20Rng::from_seed(create_rdrand_seed()),
-            prng_stat: Stat {
-                st_mode: MODE_CHR | DEFAULT_PRNG_MODE,
-                st_gid: 0,
-                st_uid: 0,
-                ..Default::default()
-            },
             handles: HandleMap::new(),
         }
     }
@@ -170,12 +132,11 @@ impl RandScheme {
     /// Checks to see if the op (MODE_READ, MODE_WRITE) can be performed on the open file
     /// descriptor - Will return the open file info if successful, and error if the file
     /// descriptor is invalid, or the permission is denied.
-    fn can_perform_op_on_fd(&self, fd: usize, op: u16) -> Result<&OpenFileInfo> {
-        let file_info = self.get_fd(fd)?;
-        if !file_info.permission(op) {
+    fn can_perform_op_on_fd(&self, fd: usize, f: usize) -> Result<()> {
+        if !self.get_fd(fd)?.o_flag_set(f) {
             return Err(Error::new(EPERM));
         }
-        Ok(file_info)
+        Ok(())
     }
     /// Reseed the CSPRNG with the supplied entropy.
     /// TODO add this to an entropy pool and give a limited estimate to the amount of entropy
@@ -202,20 +163,10 @@ impl RandScheme {
             return Err(Error::new(EEXIST));
         }
 
-        let open_file_info = OpenFileInfo {
-            o_flags: flags,
-            file_stat: self.prng_stat,
-            uid: ctx.uid,
-            gid: ctx.gid,
-        };
+        let open_file_info = OpenFileInfo { o_flags: flags };
 
-        if (open_file_info.o_flag_set(O_RDONLY) || open_file_info.o_flag_set(O_RDWR))
-            && !open_file_info.permission(MODE_READ)
-        {
-            return Err(Error::new(EPERM));
-        }
         if (open_file_info.o_flag_set(O_WRONLY) || open_file_info.o_flag_set(O_RDWR))
-            && !open_file_info.permission(MODE_WRITE)
+            && ctx.uid != 0
         {
             return Err(Error::new(EPERM));
         }
@@ -227,109 +178,6 @@ impl RandScheme {
             flags: NewFdFlags::empty(),
         })
     }
-}
-#[test]
-fn test_scheme_perms() {
-    use libredox::protocol::O_CLOEXEC;
-    use syscall::O_STAT;
-
-    let mut ctx = CallerCtx {
-        pid: 0,
-        uid: 1,
-        gid: 1,
-        id: unsafe { std::mem::zeroed() }, // Id doesn't have a public constructor
-    };
-
-    let mut scheme = RandScheme::new();
-    scheme.prng_stat.st_mode = MODE_CHR | 0o200;
-    scheme.prng_stat.st_uid = 1;
-    scheme.prng_stat.st_gid = 1;
-    assert!(scheme.open_inner("/", O_RDWR, &ctx).is_err());
-    assert!(scheme.open_inner("/", O_RDONLY, &ctx).is_err());
-
-    scheme.prng_stat.st_mode = MODE_CHR | 0o400;
-    let mut fd = match scheme.open("", O_RDONLY, &ctx).unwrap() {
-        OpenResult::ThisScheme { number, .. } => number,
-        _ => panic!(),
-    };
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_err());
-    scheme.on_close(fd);
-
-    assert!(scheme.open_inner("", O_WRONLY, &ctx).is_err());
-    assert!(scheme.open_inner("", O_RDWR, &ctx).is_err());
-
-    scheme.prng_stat.st_mode = MODE_CHR | 0o600;
-    fd = match scheme.open_inner("", O_RDWR, &ctx).unwrap() {
-        OpenResult::ThisScheme { number, .. } => number,
-        _ => panic!(),
-    };
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_ok());
-    scheme.on_close(fd);
-
-    ctx.uid = 2;
-    ctx.gid = 2;
-    fd = match scheme.open_inner("", O_STAT, &ctx).unwrap() {
-        OpenResult::ThisScheme { number, .. } => number,
-        _ => panic!(),
-    };
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_err());
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_err());
-    scheme.on_close(fd);
-    fd = match scheme.open_inner("", O_STAT | O_CLOEXEC, &ctx).unwrap() {
-        OpenResult::ThisScheme { number, .. } => number,
-        _ => panic!(),
-    };
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_err());
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_err());
-    scheme.on_close(fd);
-
-    // Try another user in group (no group perms)
-    ctx.uid = 2;
-    ctx.gid = 1;
-    fd = match scheme.open_inner("", O_STAT | O_CLOEXEC, &ctx).unwrap() {
-        OpenResult::ThisScheme { number, .. } => number,
-        _ => panic!(),
-    };
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_err());
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_err());
-    scheme.on_close(fd);
-    scheme.prng_stat.st_mode = MODE_CHR | 0o660;
-    fd = match scheme.open_inner("", O_STAT | O_CLOEXEC, &ctx).unwrap() {
-        OpenResult::ThisScheme { number, .. } => number,
-        _ => panic!(),
-    };
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_ok());
-    scheme.on_close(fd);
-
-    // Check root can do anything
-    scheme.prng_stat.st_mode = MODE_CHR | 0o000;
-    ctx.uid = 0;
-    ctx.gid = 0;
-    fd = match scheme.open_inner("", O_STAT | O_CLOEXEC, &ctx).unwrap() {
-        OpenResult::ThisScheme { number, .. } => number,
-        _ => panic!(),
-    };
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_ok());
-    scheme.on_close(fd);
-
-    // Check the rand:/urandom URL (Equivalent to rand:/)
-    scheme.prng_stat.st_mode = MODE_CHR | 0o660;
-    ctx.uid = 2;
-    ctx.gid = 1;
-    fd = match scheme
-        .open_inner("/urandom", O_STAT | O_CLOEXEC, &ctx)
-        .unwrap()
-    {
-        OpenResult::ThisScheme { number, .. } => number,
-        _ => panic!(),
-    };
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
-    assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_ok());
-    scheme.on_close(fd);
 }
 
 impl SchemeSync for RandScheme {
@@ -362,7 +210,7 @@ impl SchemeSync for RandScheme {
         _ctx: &CallerCtx,
     ) -> Result<usize> {
         // Check fd and permissions
-        self.can_perform_op_on_fd(id, MODE_READ)?;
+        self.can_perform_op_on_fd(id, O_RDONLY)?;
 
         // Setting the stream will ensure that if two clients are reading concurrently, they won't get the same numbers
         self.prng.set_stream(id as u64); // Should probably find a way to re-instate the counter for this stream, but
@@ -381,7 +229,7 @@ impl SchemeSync for RandScheme {
         _ctx: &CallerCtx,
     ) -> Result<usize> {
         // Check fd and permissions
-        self.can_perform_op_on_fd(id, MODE_WRITE)?;
+        self.can_perform_op_on_fd(id, O_WRONLY)?;
 
         // TODO - when we support other entropy sources, just add this to an entropy pool
         // TODO - consider having trusted and untrusted entropy writing paths
@@ -399,31 +247,6 @@ impl SchemeSync for RandScheme {
         Ok(buf.len())
     }
 
-    fn fchmod(&mut self, id: usize, mode: u16, ctx: &CallerCtx) -> Result<()> {
-        // Check fd and permissions
-        let file_info = self.get_fd(id)?;
-        // only root and owner can chmod
-        if ctx.uid != file_info.file_stat.st_uid && ctx.uid != 0 {
-            return Err(Error::new(EPERM));
-        }
-
-        self.prng_stat.st_mode = MODE_CHR | (mode & MODE_PERM); // Apply mask
-        Ok(())
-    }
-
-    fn fchown(&mut self, id: usize, uid: u32, gid: u32, ctx: &CallerCtx) -> Result<()> {
-        // Check fd and permissions
-        let file_info = self.get_fd(id)?;
-        // only root and owner can fchown
-        if ctx.uid != file_info.file_stat.st_uid && ctx.uid != 0 {
-            return Err(Error::new(EPERM));
-        }
-
-        self.prng_stat.st_uid = uid;
-        self.prng_stat.st_gid = gid;
-        Ok(())
-    }
-
     fn fcntl(&mut self, _id: usize, _cmd: usize, _arg: usize, _ctx: &CallerCtx) -> Result<usize> {
         // Just ignore this.
         Ok(0)
@@ -436,11 +259,10 @@ impl SchemeSync for RandScheme {
         FpathWriter::with(buf, "rand", |_| Ok(()))
     }
 
-    fn fstat(&mut self, file: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
-        // Check fd and permissions
-        self.can_perform_op_on_fd(file, MODE_READ)?;
-
-        *stat = self.prng_stat.clone();
+    fn fstat(&mut self, _file: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
+        stat.st_mode = 0o644 | MODE_CHR;
+        stat.st_uid = 0;
+        stat.st_gid = 0;
 
         Ok(())
     }
