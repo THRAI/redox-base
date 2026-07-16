@@ -163,7 +163,7 @@ impl SchemeSync for FbconScheme {
     }
 
     fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        FpathWriter::with_legacy(buf, "fbcon", |w| {
+        FpathWriter::with(buf, "fbcon", |w| {
             let handle = self.get_vt_handle_mut(id)?;
             write!(w, "{}", handle.vt_i.0).unwrap();
             Ok(())

@@ -92,17 +92,6 @@ impl<'a> FpathWriter<'a> {
         Ok(w.written)
     }
 
-    pub fn with_legacy(
-        buf: &'a mut [u8],
-        scheme_name: &str,
-        f: impl FnOnce(&mut Self) -> Result<()>,
-    ) -> Result<usize> {
-        let mut w = FpathWriter { buf, written: 0 };
-        write!(w, "{scheme_name}:").unwrap();
-        f(&mut w)?;
-        Ok(w.written)
-    }
-
     pub fn push_str(&mut self, s: &str) {
         let count = core::cmp::min(s.len(), self.buf.len() - self.written);
         self.buf[self.written..self.written + count].copy_from_slice(&s.as_bytes()[..count]);
