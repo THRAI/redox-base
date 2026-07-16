@@ -559,7 +559,7 @@ impl<T: Disk> SchemeAsync for DiskSchemeInner<T> {
     }
 
     async fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        FpathWriter::with_legacy(buf, &self.scheme_name, |w| {
+        FpathWriter::with(buf, &self.scheme_name, |w| {
             match *self.handles.get(id)? {
                 Handle::List(_) => (),
                 Handle::Disk(number) => {

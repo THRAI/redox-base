@@ -331,7 +331,7 @@ impl<'sock> SchemeSync for ChanScheme<'sock> {
         }
     }
     fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        FpathWriter::with_legacy(buf, "chan", |w| {
+        FpathWriter::with(buf, "chan", |w| {
             let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
             if let Extra::SchemeRoot = handle.extra {
                 return Ok(());
