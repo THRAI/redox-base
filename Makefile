@@ -119,6 +119,7 @@ install-base: base $(SYSROOT)/bin/redoxfs
 # Device file symlinks
 	@mkdir -pv "$(DESTDIR)/dev"
 	ln -sf /scheme/null $(DESTDIR)/dev/null
+	ln -sf /scheme/pty/ptmx $(DESTDIR)/dev/ptmx
 	ln -sf /scheme/rand $(DESTDIR)/dev/random
 	ln -sf /scheme/rand $(DESTDIR)/dev/urandom
 	ln -sf /scheme/zero $(DESTDIR)/dev/zero
