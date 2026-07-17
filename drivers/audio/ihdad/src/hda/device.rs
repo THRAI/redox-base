@@ -1070,6 +1070,17 @@ impl SchemeSync for IntelHDA {
         if ctx.uid != 0 {
             return Err(Error::new(EACCES));
         }
+        let parent_handle_type = {
+            let handles = self.handles.lock();
+            let handle = handles.get(dirfd)?;
+            if matches!(handle, Handle::SchemeRoot) {
+                Handle::SchemeRoot
+            } else if matches!(handle, Handle::Todo) {
+                Handle::Todo
+            } else {
+                return Err(Error::new(ENOTDIR));
+            }
+        };
         match parent_handle_type {
             Handle::SchemeRoot => {
                 //let path: Vec<&str>;
