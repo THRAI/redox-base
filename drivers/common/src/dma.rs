@@ -183,7 +183,7 @@ impl<T: ?Sized> Dma<T> {
     /// # Returns
     /// [usize] - the address of the Dma memory in the virtual address space.
     pub fn virt_addr(&self) -> usize {
-        unsafe { self.virt as *mut u8 as usize }
+        self.virt as *mut u8 as usize
     }
 
     /// Returns the pointer to the Dma memory in the virtual address space.

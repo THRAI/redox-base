@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::cmp;
 use std::future::{Future, IntoFuture};
 use std::io::{self, Read, Seek, SeekFrom};
@@ -992,7 +991,7 @@ struct RingDiskSchemeInner<T, E> {
     scheme_name: String,
     socket: Socket,
     disks: BTreeMap<u32, RingDiskWrapper<T>>,
-    handles: HandleMap<Handle>,
+    handles: HandleMap<RingHandle>,
     executor: E,
     shm_dir: Fd,
     pipe_root: Fd,

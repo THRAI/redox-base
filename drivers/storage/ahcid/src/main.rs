@@ -3,9 +3,8 @@ use std::os::fd::AsRawFd;
 use std::usize;
 
 use common::io::Io;
-<<<<<<< HEAD
 use common::MemoryType;
-use driver_block::{DiskScheme, ExecutorTrait, FuturesExecutor};
+use driver_block::{DiskScheme, ExecutorTrait};
 use event::{EventFlags, RawEventQueue};
 use pcid_interface::PciFunctionHandle;
 
