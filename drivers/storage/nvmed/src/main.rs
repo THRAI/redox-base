@@ -40,19 +40,14 @@ impl Disk for NvmeDisk {
 }
 
 fn time_arm(time_handle: &mut File, secs: i64) -> io::Result<()> {
-    let mut time_buf = [0_u8; core::mem::size_of::<libredox::data::TimeSpec>()];
+    let mut time_buf = syscall::TimeSpec::default();
     if time_handle.read(&mut time_buf)? < time_buf.len() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "time read too small",
         ));
     }
-
-    match libredox::data::timespec_from_mut_bytes(&mut time_buf) {
-        time => {
-            time.tv_sec += secs;
-        }
-    }
+    time_buf.tv_sec += secs;
     time_handle.write(&time_buf)?;
     Ok(())
 }
