@@ -74,7 +74,7 @@ base:
 		--manifest-path "$(SRC_DIR)/Cargo.toml" \
 		$(INITFS_CARGO_ARGS) $(INITFS_DRIVERS_CARGO_ARGS)
 # Build bootstrap
-	cd "$(SRC_DIR)/bootstrap" && $(CARGO) rustc $(BUILD_FLAGS) \
+	cd "$(SRC_DIR)/bootstrap" && RUSTFLAGS= $(CARGO) rustc $(BUILD_FLAGS) \
 		-- -Ctarget-feature=+crt-static -Clinker="$(LINKER)"
 
 install-base: base $(SYSROOT)/bin/redoxfs

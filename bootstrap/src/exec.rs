@@ -238,8 +238,6 @@ pub fn main() -> ! {
         .openat_into_upper(exe_reference, O_RDONLY | O_CLOEXEC, 0)
         .expect("failed to open init");
 
-    drop(initfs_root_fd);
-
     let FexecResult::Interp {
         path: interp_path,
         interp_override,
@@ -261,24 +259,13 @@ pub fn main() -> ! {
     // null-terminated. Violating this should therefore give the "format error" ENOEXEC.
     let interp_cstr = CStr::from_bytes_with_nul(&interp_path).expect("interpreter not valid C str");
     let interp_path = interp_cstr.to_str().expect("interpreter not UTF-8");
-    let root_fd = FdGuard::new(
-        redox_rt::sys::openat_into_upper(
-            extrainfo.ns_fd.unwrap(), // initns, not initfs!
-            interp_path,
-            O_RDONLY | O_CLOEXEC,
-            0,
-        )
-        .expect("failed to open root fd"),
-    )
-    .to_upper()
-    .unwrap();
     let redox_path = redox_path::RedoxPath::from_absolute(interp_path)
         .expect("interpreter path is not a Scheme-rooted path");
-    let (_, reference) = redox_path
+    let (_, interp_reference) = redox_path
         .as_parts()
         .expect("redox_path is not scheme root path");
-    let interp_file = root_fd
-        .openat_into_upper(reference.as_ref(), O_RDONLY | O_CLOEXEC, 0)
+    let interp_file = initfs_root_fd
+        .openat_into_upper(interp_reference.as_ref(), O_RDONLY | O_CLOEXEC, 0)
         .expect("failed to open dynamic linker");
 
     fexec_impl(
