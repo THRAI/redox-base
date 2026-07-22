@@ -299,7 +299,7 @@ impl SchemeSync for Scheme {
         _ctx: &CallerCtx,
     ) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
-            return Ok(0);
+            return Err(Error::new(EOVERFLOW));
         };
         let inode = self.handles.get(fd)?.as_inode()?;
         let file = self
@@ -364,7 +364,7 @@ impl SchemeSync for Scheme {
         _ctx: &CallerCtx,
     ) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
-            return Ok(0);
+            return Err(Error::new(EOVERFLOW));
         };
         let inode = self.handles.get(fd)?.as_inode()?;
         let file = self
