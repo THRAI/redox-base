@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::iter;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, ReentrantMutex, RwLock};
@@ -72,6 +72,14 @@ pub type AtomicSqId = AtomicU16;
 pub type AtomicCmdId = AtomicU16;
 pub type Iv = u16;
 
+struct Caps(u64);
+
+impl Caps {
+    fn dstrd(&self) -> u8 {
+        ((self.0 >> 32) & 0b1111) as u8
+    }
+}
+
 pub struct Nvme {
     interrupt_vector: Mutex<InterruptVector>,
     pcid_interface: Mutex<PciFunctionHandle>,
@@ -83,12 +91,10 @@ pub struct Nvme {
     // maps interrupt vectors with the completion queues they have
     thread_ctxts: RwLock<HashMap<Iv, Arc<ReentrantMutex<ThreadCtxt>>>>,
 
-    pendings: AtomicU16,
-
     next_sqid: AtomicSqId,
     next_cqid: AtomicCqId,
 
-    caps: Option<u64>,
+    caps: Caps,
 }
 
 pub struct ThreadCtxt {
@@ -98,6 +104,34 @@ pub struct ThreadCtxt {
     // Yes, technically NVME allows multiple submission queues to be mapped to the same completion
     // queue, but we don't use that feature.
     queues: RefCell<HashMap<u16, (NvmeCmdQueue, NvmeCompQueue)>>,
+}
+
+impl ThreadCtxt {
+    pub fn push_sqe(
+        &self,
+        sq_id: SqId,
+        cmd_init: impl FnOnce(CmdId) -> NvmeCmd,
+        fail: impl FnOnce(),
+    ) -> Option<(CqId, CmdId)> {
+        match self.queues.borrow_mut().get_mut(&sq_id).unwrap() {
+            (sq, _cq) => {
+                if sq.is_full() {
+                    fail();
+                    return None;
+                }
+                let cmd_id = sq.tail;
+                let _tail = sq.submit_unchecked(cmd_init(cmd_id));
+
+                Some((sq_id, cmd_id))
+            }
+        }
+    }
+
+    pub fn submit(&self, sq_id: SqId) {
+        match self.queues.borrow_mut().get_mut(&sq_id).unwrap() {
+            (sq, _cq) => sq.kick(),
+        }
+    }
 }
 
 unsafe impl Send for Nvme {}
@@ -119,6 +153,17 @@ impl Nvme {
         interrupt_vector: InterruptVector,
         pcid_interface: PciFunctionHandle,
     ) -> Result<Self> {
+        let regs = unsafe { &mut *(address as *mut NvmeRegs) };
+        log::debug!("CAP_LOW: {:X}", regs.cap_low.read());
+        log::debug!("CAP_HIGH: {:X}", regs.cap_high.read());
+        log::debug!("VS: {:X}", regs.vs.read());
+        log::debug!("CC: {:X}", regs.cc.read());
+        log::debug!("CSTS: {:X}", regs.csts.read());
+
+        let cap_low = regs.cap_low.read() as u64;
+        let cap_high = regs.cap_high.read() as u64;
+        let caps = Caps(cap_low | cap_high << 32);
+
         Ok(Nvme {
             regs: RwLock::new(unsafe { &mut *(address as *mut NvmeRegs) }),
             thread_ctxts: RwLock::new(
@@ -139,13 +184,11 @@ impl Nvme {
             interrupt_vector: Mutex::new(interrupt_vector),
             pcid_interface: Mutex::new(pcid_interface),
 
-            pendings: AtomicU16::new(0),
-
             // TODO
             next_sqid: AtomicSqId::new(2),
             next_cqid: AtomicCqId::new(2),
 
-            caps: None,
+            caps,
         })
     }
     /// # Locking
@@ -156,8 +199,7 @@ impl Nvme {
         let mut regs_guard = self.regs.write();
         let regs: &mut NvmeRegs = regs_guard.deref_mut();
 
-        let dstrd = ((self.caps.unwrap() >> 32) & 0b1111) as usize;
-        let addr = (regs as *mut NvmeRegs as usize) + 0x1000 + index * (4 << dstrd);
+        let addr = (regs as *mut NvmeRegs as usize) + 0x1000 + index * (4 << self.caps.dstrd());
         &mut *(addr as *mut Mmio<u32>)
     }
     fn cur_thread_ctxt(&self) -> Arc<ReentrantMutex<ThreadCtxt>> {
@@ -166,19 +208,6 @@ impl Nvme {
     }
 
     pub unsafe fn init(&mut self) -> Result<()> {
-        {
-            let regs = self.regs.read();
-            log::debug!("CAP_LOW: {:X}", regs.cap_low.read());
-            log::debug!("CAP_HIGH: {:X}", regs.cap_high.read());
-            log::debug!("VS: {:X}", regs.vs.read());
-            log::debug!("CC: {:X}", regs.cc.read());
-            log::debug!("CSTS: {:X}", regs.csts.read());
-
-            let cap_low = regs.cap_low.read() as u64;
-            let cap_high = regs.cap_high.read() as u64;
-            self.caps = Some(cap_low | cap_high << 32);
-        }
-
         let asq_doorbell = self.get_doorbell(2 * 0);
         let acq_doorbell = self.get_doorbell(2 * 0 + 1);
 
@@ -310,33 +339,6 @@ impl Nvme {
         cmd_init: impl FnMut(CmdId) -> NvmeCmd,
     ) -> NvmeComp {
         self.submit_and_complete_command(0, cmd_init).await
-    }
-    pub fn push_sqe(
-        &self,
-        ctxt: &ThreadCtxt,
-        sq_id: SqId,
-        cmd_init: impl FnOnce(CmdId) -> NvmeCmd,
-        fail: impl FnOnce(),
-    ) -> Option<(CqId, CmdId)> {
-        match ctxt.queues.borrow_mut().get_mut(&sq_id).unwrap() {
-            (sq, _cq) => {
-                if sq.is_full() {
-                    fail();
-                    return None;
-                }
-                let cmd_id = sq.tail;
-                let _tail = sq.submit_unchecked(cmd_init(cmd_id));
-
-                self.pendings.fetch_add(1, Ordering::Release);
-
-                Some((sq_id, cmd_id))
-            }
-        }
-    }
-    pub fn submit(&self, ctxt: &ThreadCtxt, sq_id: SqId) {
-        match ctxt.queues.borrow_mut().get_mut(&sq_id).unwrap() {
-            (sq, _cq) => sq.kick(),
-        }
     }
     pub async fn create_io_completion_queue(
         &self,

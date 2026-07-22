@@ -216,6 +216,10 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
                 && self.ready_futures.borrow().is_empty()
                 && self.pending_wakes.borrow().is_empty()
             {
+                if self.poll_cqes() != 0 {
+                    continue;
+                }
+
                 self.react();
             }
         }
@@ -254,10 +258,22 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
             }
         }
 
+        // If the CQ is empty then this IRQ may be for a CQE which we have already dequeued in
+        // `block_on`.
+        if self.poll_cqes() == 0 {
+            return;
+        }
+
         // TODO: The kernel should probably do the masking (when using MSI/MSI-X at least), which
         // should happen before EOI messages to the interrupt controller.
         Hw::mask_vector(&self.global_ctxt, self.vector);
 
+        while self.poll_cqes() != 0 {}
+
+        Hw::unmask_vector(&self.global_ctxt, self.vector);
+    }
+
+    fn poll_cqes(&self) -> usize {
         let mut to_wake = Vec::new();
 
         Hw::poll_cqes(&self.global_ctxt, |cq_id, cqe| {
@@ -283,6 +299,8 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
             }
         });
 
+        let woken = to_wake.len();
+
         if !to_wake.is_empty() {
             if let Ok(mut ready) = self.ready_futures.try_borrow_mut() {
                 for idx in to_wake {
@@ -296,8 +314,9 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
             }
         }
 
-        Hw::unmask_vector(&self.global_ctxt, self.vector);
+        woken
     }
+
     pub async fn submit<I>(&self, sq_id: Hw::SqId, cmd_init: I) -> Hw::Cqe
     where
         I: FnMut(Hw::CmdId) -> Hw::Sqe,

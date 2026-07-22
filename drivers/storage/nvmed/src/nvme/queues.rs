@@ -56,6 +56,7 @@ pub struct NvmeCompQueue {
     pub head: u16,
     pub phase: bool,
     pub doorbell: &'static mut Mmio<u32>,
+    last_doorbell: u16,
 }
 
 impl NvmeCompQueue {
@@ -65,6 +66,7 @@ impl NvmeCompQueue {
             head: 0,
             phase: true,
             doorbell,
+            last_doorbell: 0,
         })
     }
 
@@ -96,7 +98,10 @@ impl NvmeCompQueue {
     }
 
     pub fn kick(&mut self) {
-        self.doorbell.write(u32::from(self.head));
+        if self.last_doorbell != self.head {
+            self.doorbell.write(u32::from(self.head));
+            self.last_doorbell = self.head;
+        }
     }
 }
 

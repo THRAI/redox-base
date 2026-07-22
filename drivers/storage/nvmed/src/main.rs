@@ -3,8 +3,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::usize;
+use std::sync::Arc;
 
 use common::dma::Dma;
 use common::MemoryType;
@@ -21,7 +20,7 @@ mod nvme;
 struct NvmeDisk {
     nvme: Arc<Nvme>,
     ns: NvmeNamespace,
-    pool: Arc<Mutex<Option<Dma<[u8]>>>>,
+    pool: Option<Arc<Dma<[u8]>>>,
 }
 
 impl Disk for NvmeDisk {
@@ -35,8 +34,8 @@ impl Disk for NvmeDisk {
 
     async fn read(&mut self, block: u64, buffer: &mut [u8]) -> syscall::Result<usize> {
         let pool_info = {
-            let guard = self.pool.lock().unwrap();
-            guard
+            self.pool
+                .as_ref()
                 .as_ref()
                 .map(|pool| (pool.virt_addr(), pool.physical()))
         };
@@ -54,8 +53,8 @@ impl Disk for NvmeDisk {
 
     async fn write(&mut self, block: u64, buffer: &[u8]) -> syscall::Result<usize> {
         let pool_info = {
-            let guard = self.pool.lock().unwrap();
-            guard
+            self.pool
+                .as_ref()
                 .as_ref()
                 .map(|pool| (pool.virt_addr(), pool.physical()))
         };
@@ -82,8 +81,7 @@ impl Disk for NvmeDisk {
 
         let shm_ptr = pool.as_ptr() as *mut u8;
 
-        *self.pool.lock().unwrap() = Some(pool);
-
+        self.pool = Some(Arc::new(pool));
         Ok(shm_ptr)
     }
 }
@@ -175,7 +173,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                     NvmeDisk {
                         nvme: nvme.clone(),
                         ns,
-                        pool: Arc::new(Mutex::new(None)),
+                        pool: None,
                     },
                 )
             })
@@ -196,7 +194,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     executor.block_on(async {
         loop {
             log::trace!("new event iteration");
-            if let Err(err) = scheme.borrow_mut().tick() {
+            if let Err(err) = scheme.borrow_mut().tick().await {
                 log::error!("scheme error: {err}");
             }
             let _ = scheme_events.as_mut().next().await;

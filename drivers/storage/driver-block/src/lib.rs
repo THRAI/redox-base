@@ -918,7 +918,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
     /// Process pending and new requests.
     ///
     /// This needs to be called each time there is a new event on the scheme.
-    pub fn tick(&mut self) -> io::Result<()> {
+    pub async fn tick(&mut self) -> io::Result<()> {
         // Handle new scheme requests
         loop {
             let request = match self.inner.socket.next_request(SignalBehavior::Interrupt) {
@@ -939,7 +939,9 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
                     // use of a smarter buffer pool (or direct IO, or a buffer per fd) in order to do
                     // parallel IO. It might also require async-aware locks so that a close() is
                     // correctly ordered wrt IO on the same fd.
-                    call_request.handle_sync(&mut self.inner, &mut self.state)
+                    call_request
+                        .handle_async(&mut self.inner, &mut self.state)
+                        .await
                 }
                 RequestKind::SendFd(request) => Response::err(EOPNOTSUPP, request),
                 RequestKind::RecvFd(request) => {
@@ -1152,14 +1154,14 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> RingDiskSche
     }
 }
 
-impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
+impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeAsync
     for RingDiskSchemeInner<T, E>
 {
     fn scheme_root(&mut self) -> Result<usize> {
         Ok(self.handles.insert(RingHandle::SchemeRoot))
     }
 
-    fn openat(
+    async fn openat(
         &mut self,
         dirfd: usize,
         path_str: &str,
@@ -1278,7 +1280,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
         })
     }
 
-    fn getdents<'buf>(
+    async fn getdents<'buf>(
         &mut self,
         _id: usize,
         _buf: DirentBuf<&'buf mut [u8]>,
@@ -1288,7 +1290,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
         Err(Error::new(EOPNOTSUPP))
     }
 
-    fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
+    async fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
         match *self.handles.get(id)? {
             RingHandle::List(ref data) => {
                 stat.st_mode = MODE_DIR;
@@ -1330,7 +1332,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
         }
     }
 
-    fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
+    async fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
         let handle = self.handles.get(id)?;
 
         let mut i = 0;
@@ -1372,7 +1374,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
         Ok(i)
     }
 
-    fn read(
+    async fn read(
         &mut self,
         id: usize,
         buf: &mut [u8],
@@ -1390,13 +1392,39 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
                 buf[..count].copy_from_slice(&src[..count]);
                 Ok(count)
             }
-            RingHandle::SchemeRoot | RingHandle::Disk { .. } | RingHandle::Ring { .. } => {
-                Err(Error::new(EBADF))
+
+            RingHandle::Disk { num, pt } => {
+                let disk = self.disks.get_mut(&num).ok_or(Error::new(EBADF))?;
+                let block = offset / u64::from(disk.block_size());
+                disk.read(pt, block, buf).await
+            }
+
+            RingHandle::SchemeRoot | RingHandle::Ring { .. } => Err(Error::new(EOPNOTSUPP)),
+        }
+    }
+
+    async fn write(
+        &mut self,
+        id: usize,
+        buf: &[u8],
+        offset: u64,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
+        match *self.handles.get_mut(id)? {
+            RingHandle::Disk { num, pt } => {
+                let disk = self.disks.get_mut(&num).ok_or(Error::new(EBADF))?;
+                let block = offset / u64::from(disk.block_size());
+                disk.write(pt, block, buf).await
+            }
+
+            RingHandle::List(_) | RingHandle::SchemeRoot | RingHandle::Ring { .. } => {
+                Err(Error::new(EOPNOTSUPP))
             }
         }
     }
 
-    fn fsize(&mut self, id: usize, _ctx: &CallerCtx) -> Result<u64> {
+    async fn fsize(&mut self, id: usize, _ctx: &CallerCtx) -> Result<u64> {
         Ok(match *self.handles.get_mut(id)? {
             RingHandle::List(ref handle) => handle.len() as u64,
             RingHandle::Disk { num, pt, .. } | RingHandle::Ring { num, pt, .. } => {
@@ -1419,7 +1447,7 @@ impl<T: Disk + Clone + 'static, E: ExecutorTrait + Clone + 'static> SchemeSync
         })
     }
 
-    fn mmap_prep(
+    async fn mmap_prep(
         &mut self,
         id: usize,
         offset: u64,

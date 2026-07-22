@@ -45,13 +45,13 @@ impl Hardware for NvmeHw {
         let ctxt = nvme.cur_thread_ctxt();
         let ctxt = ctxt.lock();
 
-        nvme.push_sqe(&*ctxt, sq_id, success, fail)
+        ctxt.push_sqe(sq_id, success, fail)
     }
     fn submit(nvme: &Arc<Nvme>, sq_id: Self::SqId) {
         let ctxt = nvme.cur_thread_ctxt();
         let ctxt = ctxt.lock();
 
-        nvme.submit(&*ctxt, sq_id)
+        ctxt.submit(sq_id)
     }
     fn poll_cqes(nvme: &Arc<Nvme>, mut handle: impl FnMut(Self::CqId, Self::Cqe)) {
         let ctxt = nvme.cur_thread_ctxt();
