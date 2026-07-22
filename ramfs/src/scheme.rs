@@ -278,10 +278,8 @@ impl SchemeSync for Scheme {
         })
     }
     fn unlinkat(&mut self, dirfd: usize, path: &str, flags: usize, ctx: &CallerCtx) -> Result<()> {
-        {
-            if !self.handles.get(dirfd)?.as_inode()? != Filesystem::ROOT_INODE {
-                return Err(Error::new(EACCES));
-            }
+        if !self.handles.get(dirfd)?.as_inode()? != Filesystem::ROOT_INODE {
+            return Err(Error::new(EACCES));
         }
         self.remove_dentry(
             path,
@@ -624,11 +622,8 @@ impl SchemeSync for Scheme {
         path: &mut [u8],
         _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let (&Handle::Inode(dir_inode), &Handle::Inode(mut current_inode)) =
-            (self.handles.get(dir_id)?, self.handles.get(id)?)
-        else {
-            return Err(Error::new(EBADF));
-        };
+        let dir_inode = self.handles.get(dir_id)?.as_inode()?;
+        let mut current_inode = self.handles.get(id)?.as_inode()?;
 
         let mut chain = Vec::new();
 
