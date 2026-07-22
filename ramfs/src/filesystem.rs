@@ -5,6 +5,7 @@ use std::{fs, iter, time};
 use std::os::unix::io::AsRawFd;
 
 use indexmap::IndexMap;
+use libredox::Fd;
 use syscall::error::{EACCES, EIO, ENFILE, ENOENT};
 use syscall::{Error, Result, TimeSpec, MODE_DIR};
 
@@ -30,20 +31,30 @@ pub struct File {
 #[derive(Clone, Debug)]
 pub struct Inode(pub usize);
 
-#[derive(Debug)]
 pub enum FileData {
     File(Vec<u8>),
     Directory(IndexMap<String, Inode>),
+    Socket(Fd),
 }
+
 impl FileData {
     pub fn size(&self) -> usize {
         match self {
             &Self::File(ref data) => data.len(),
-            &Self::Directory(_) => 0,
+            &Self::Directory(_) | &Self::Socket(_) => 0,
         }
     }
 }
 
+impl std::fmt::Debug for FileData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File(data) => f.debug_tuple("File").field(data).finish(),
+            Self::Directory(files) => f.debug_tuple("Directory").field(files).finish(),
+            Self::Socket(fd) => f.debug_tuple("Socket").field(&fd.raw()).finish(),
+        }
+    }
+}
 pub struct Filesystem {
     pub files: BTreeMap<usize, File>,
     pub memory_file: fs::File,
@@ -107,7 +118,7 @@ impl Filesystem {
             };
             let dentries = match current_file.data {
                 FileData::Directory(ref dentries) => dentries,
-                FileData::File(_) => return Err(Error::new(ENOENT)),
+                FileData::File(_) | FileData::Socket(_) => return Err(Error::new(ENOENT)),
             };
             let perm = current_perm(&current_file, uid, gid);
             if perm & 0o1 == 0 {
