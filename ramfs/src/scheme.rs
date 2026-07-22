@@ -412,7 +412,8 @@ impl SchemeSync for Scheme {
 
         Ok(())
     }
-    fn fchown(&mut self, inode: usize, uid: u32, gid: u32, _ctx: &CallerCtx) -> Result<()> {
+    fn fchown(&mut self, fd: usize, uid: u32, gid: u32, _ctx: &CallerCtx) -> Result<()> {
+        let inode = self.handles.get(fd)?.as_inode()?;
         let file = self
             .filesystem
             .files
