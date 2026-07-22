@@ -10,6 +10,7 @@ description = "RAM filesystem, which is useful for early logging"
 
 [dependencies]
 daemon = { path = "../daemon" }
+redox-path = "0.4.0"
 redox_syscall.workspace = true
 redox-scheme.workspace = true
 scheme-utils = { path = "../scheme-utils" }

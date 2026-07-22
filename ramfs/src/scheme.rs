@@ -2,24 +2,27 @@ use std::convert::{TryFrom, TryInto};
 use std::os::unix::io::AsRawFd;
 use std::{mem, str};
 
+use libredox::protocol::FsCall;
+use libredox::Fd;
+use redox_path::RedoxPath;
 use scheme_utils::{FpathWriter, HandleMap};
 use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
 use syscall::error::{
-    EACCES, EBADF, EBADFD, EEXIST, EINVAL, EIO, EISDIR, ENOMEM, ENOSYS, ENOTDIR, ENOTEMPTY,
-    EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE,
+    EACCES, EBADF, EBADFD, EEXIST, EINVAL, EIO, EISDIR, ENOENT, ENOMEM, ENOSYS, ENOTDIR, ENOTEMPTY,
+    ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE,
 };
 use syscall::flag::{
     StdFsCallKind, O_ACCMODE, O_CREAT, O_DIRECTORY, O_EXCL, O_RDONLY, O_RDWR, O_STAT, O_TRUNC,
     O_WRONLY,
 };
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error, EventFlags, Result, Stat, StatVfs, StdFsCallMeta, TimeSpec, ENOENT};
+use syscall::{Error, EventFlags, FobtainFdFlags, Result, Stat, StatVfs, StdFsCallMeta, TimeSpec};
 use syscall::{MODE_DIR, MODE_FILE, MODE_PERM, MODE_TYPE};
 
 use indexmap::IndexMap;
 
 use redox_scheme::scheme::SchemeSync;
-use redox_scheme::{CallerCtx, OpenResult};
+use redox_scheme::{CallerCtx, OpenResult, SendFdRequest, Socket};
 
 use crate::filesystem::{self, File, FileData, Filesystem, Inode};
 
@@ -35,16 +38,18 @@ impl Handle {
     }
 }
 
-pub struct Scheme {
+pub struct Scheme<'a> {
+    socket: &'a Socket,
     scheme_name: String,
     filesystem: Filesystem,
     handles: HandleMap<Handle>,
     proc_creds_capability: libredox::Fd,
 }
-impl Scheme {
+impl<'a> Scheme<'a> {
     /// Create the scheme, with the name being used for `fpath`.
-    pub fn new(scheme_name: String) -> Result<Self> {
+    pub fn new(socket: &'a Socket, scheme_name: String) -> Result<Self> {
         Ok(Self {
+            socket,
             scheme_name,
             filesystem: Filesystem::new()?,
             handles: HandleMap::new(),
@@ -160,6 +165,8 @@ impl Scheme {
 
                 // If we opened an existing file with O_CREAT and O_TRUNC
                 FileData::File(ref mut data) => data.clear(),
+
+                FileData::Socket(_) => unreachable!(),
             }
         }
 
@@ -167,9 +174,23 @@ impl Scheme {
 
         Ok(Inode(inode))
     }
+
+    fn handle_connect(&mut self, id: usize, payload: &mut [u8]) -> Result<usize> {
+        let inode = self.handles.get(id)?.as_inode()?;
+        let file = self
+            .filesystem
+            .files
+            .get_mut(&inode)
+            .ok_or(Error::new(EBADFD))?;
+        let FileData::Socket(ref socket) = file.data else {
+            return Err(Error::new(EACCES));
+        };
+        let len = libredox::call::get_socket_token(socket.raw(), payload)?;
+        return Ok(len);
+    }
 }
 
-impl SchemeSync for Scheme {
+impl SchemeSync for Scheme<'_> {
     fn scheme_root(&mut self) -> Result<usize> {
         Ok(self.handles.insert(Handle::Inode(Filesystem::ROOT_INODE)))
     }
@@ -260,7 +281,7 @@ impl SchemeSync for Scheme {
                 .get_mut(&parent_dir_inode)
                 .ok_or(Error::new(EIO))?;
             match parent_file.data {
-                FileData::File(_) => return Err(Error::new(EIO)),
+                FileData::File(_) | FileData::Socket(_) => return Err(Error::new(EIO)),
                 FileData::Directory(ref mut entries) => {
                     entries.insert(new_name.to_owned(), Inode(new_inode_number));
                 }
@@ -278,10 +299,8 @@ impl SchemeSync for Scheme {
         })
     }
     fn unlinkat(&mut self, dirfd: usize, path: &str, flags: usize, ctx: &CallerCtx) -> Result<()> {
-        {
-            if !self.handles.get(dirfd)?.as_inode()? != Filesystem::ROOT_INODE {
-                return Err(Error::new(EACCES));
-            }
+        if !self.handles.get(dirfd)?.as_inode()? != Filesystem::ROOT_INODE {
+            return Err(Error::new(EACCES));
         }
         self.remove_dentry(
             path,
@@ -299,7 +318,7 @@ impl SchemeSync for Scheme {
         _ctx: &CallerCtx,
     ) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
-            return Ok(0);
+            return Err(Error::new(EOVERFLOW));
         };
         let inode = self.handles.get(fd)?.as_inode()?;
         let file = self
@@ -323,6 +342,7 @@ impl SchemeSync for Scheme {
                 Ok(bytes_to_read)
             }
             FileData::Directory(_) => return Err(Error::new(EISDIR)),
+            FileData::Socket(_) => return Err(Error::new(ENXIO)),
         }
     }
     fn getdents<'buf>(
@@ -364,7 +384,7 @@ impl SchemeSync for Scheme {
         _ctx: &CallerCtx,
     ) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
-            return Ok(0);
+            return Err(Error::new(EOVERFLOW));
         };
         let inode = self.handles.get(fd)?.as_inode()?;
         let file = self
@@ -412,7 +432,8 @@ impl SchemeSync for Scheme {
 
         Ok(())
     }
-    fn fchown(&mut self, inode: usize, uid: u32, gid: u32, _ctx: &CallerCtx) -> Result<()> {
+    fn fchown(&mut self, fd: usize, uid: u32, gid: u32, _ctx: &CallerCtx) -> Result<()> {
+        let inode = self.handles.get(fd)?.as_inode()?;
         let file = self
             .filesystem
             .files
@@ -595,7 +616,9 @@ impl SchemeSync for Scheme {
                     bytes.resize(size, 0u8)
                 }
             }
-            &mut FileData::Directory(_) => return Err(Error::new(EBADFD)),
+            &mut FileData::Directory(_) | &mut FileData::Socket(_) => {
+                return Err(Error::new(EBADFD))
+            }
         }
         Ok(())
     }
@@ -623,11 +646,8 @@ impl SchemeSync for Scheme {
         path: &mut [u8],
         _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let (&Handle::Inode(dir_inode), &Handle::Inode(mut current_inode)) =
-            (self.handles.get(dir_id)?, self.handles.get(id)?)
-        else {
-            return Err(Error::new(EBADF));
-        };
+        let dir_inode = self.handles.get(dir_id)?.as_inode()?;
+        let mut current_inode = self.handles.get(id)?.as_inode()?;
 
         let mut chain = Vec::new();
 
@@ -679,6 +699,113 @@ impl SchemeSync for Scheme {
         }
 
         Ok(offset)
+    }
+
+    fn on_sendfd(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
+        let ctx = sendfd_request.caller();
+        let uid = ctx.uid;
+        let gid = ctx.gid;
+
+        let parent_inode = self.handles.get(sendfd_request.id())?.as_inode()?;
+        let parent_file = self
+            .filesystem
+            .files
+            .get_mut(&parent_inode)
+            .ok_or(Error::new(EBADFD))?;
+        let FileData::Directory(_) = parent_file.data else {
+            return Err(Error::new(ENOTDIR));
+        };
+
+        check_permissions(O_WRONLY, current_perm(parent_file, uid, gid))?;
+
+        let mut new_fd = usize::MAX;
+        if let Err(e) = sendfd_request.obtain_fd(
+            &self.socket,
+            FobtainFdFlags::empty(),
+            std::slice::from_mut(&mut new_fd),
+        ) {
+            return Err(e);
+        }
+        let other_scheme_fd = Fd::new(new_fd);
+
+        // TODO: Move the PATH_MAX definition to a more appropriate place.
+        const PATH_MAX: usize = 4096;
+        let mut url_buf = [0u8; PATH_MAX];
+        let url_len = other_scheme_fd.fpath(&mut url_buf)?;
+        let url_str = str::from_utf8(&url_buf[..url_len]).map_err(|_| Error::new(EINVAL))?;
+        let redox_path = RedoxPath::from_absolute(url_str).ok_or(Error::new(EINVAL))?;
+        let (_, path) = redox_path.as_parts().ok_or(Error::new(EINVAL))?;
+
+        let mut last_part = String::new();
+        for part in path.as_ref().split('/') {
+            if !part.is_empty() {
+                last_part = part.to_string();
+            }
+        }
+
+        if last_part.is_empty() {
+            return Err(Error::new(EINVAL));
+        }
+
+        let (parent_dir_inode, new_name) =
+            self.filesystem
+                .resolve_except_last(path.as_ref(), ctx.uid, ctx.gid)?;
+        let new_name = new_name.ok_or(Error::new(EINVAL))?; // cannot mkdir /
+
+        let current_time = filesystem::current_time();
+
+        let new_inode_number = self.filesystem.next_inode_number()?;
+
+        let stat = other_scheme_fd.stat()?;
+        let mode_type = stat.st_mode as u16 & MODE_TYPE;
+
+        let flags = 0o777;
+
+        let new_inode = File {
+            atime: current_time,
+            ctime: current_time,
+            mtime: current_time,
+            gid: ctx.gid,
+            uid: ctx.uid,
+            mode: mode_type | (flags as u16 & MODE_PERM),
+            nlink: 1,
+            data: FileData::Socket(other_scheme_fd),
+            open_handles: 1,
+            parent: Inode(parent_dir_inode),
+        };
+        check_permissions(flags, current_perm(&new_inode, ctx.uid, ctx.gid))?;
+
+        self.filesystem.files.insert(new_inode_number, new_inode);
+
+        let parent_file = self
+            .filesystem
+            .files
+            .get_mut(&parent_dir_inode)
+            .ok_or(Error::new(EIO))?;
+        match parent_file.data {
+            FileData::File(_) | FileData::Socket(_) => return Err(Error::new(EIO)),
+            FileData::Directory(ref mut entries) => {
+                entries.insert(new_name.to_owned(), Inode(new_inode_number));
+            }
+        }
+
+        Ok(self.handles.insert(Handle::Inode(new_inode_number)))
+    }
+
+    fn call(
+        &mut self,
+        id: usize,
+        payload: &mut [u8],
+        metadata: &[u64],
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
+        let Some(verb) = FsCall::try_from_raw(metadata[0] as usize) else {
+            return Err(Error::new(EINVAL));
+        };
+        match verb {
+            FsCall::Connect => self.handle_connect(id, payload),
+            _ => Err(Error::new(EOPNOTSUPP)),
+        }
     }
 
     fn std_fs_call(

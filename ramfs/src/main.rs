@@ -16,7 +16,8 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 
     let socket = redox_scheme::Socket::create().expect("ramfs: failed to create socket");
 
-    let mut scheme = Scheme::new(scheme_name.clone()).expect("ramfs: failed to initialize scheme");
+    let mut scheme =
+        Scheme::new(&socket, scheme_name.clone()).expect("ramfs: failed to initialize scheme");
     let handler = Blocking::new(&socket, 16);
 
     let _ = daemon.ready_sync_scheme(&socket, &mut scheme);

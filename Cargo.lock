@@ -1695,6 +1695,7 @@ dependencies = [
  "daemon",
  "indexmap",
  "libredox",
+ "redox-path",
  "redox-scheme",
  "redox_syscall 0.9.0",
  "scheme-utils",
@@ -1880,6 +1881,12 @@ dependencies = [
  "smallvec 1.15.1",
  "termion",
 ]
+
+[[package]]
+name = "redox-path"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54ec1b67c01c63545205ea6d218b336751399f0d8974c1a635c28604bedb81bc"
 
 [[package]]
 name = "redox-scheme"
