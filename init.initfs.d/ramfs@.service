@@ -1,5 +1,5 @@
 [unit]
-description = "$INSTANCE ramfs"
+description = "/scheme/$INSTANCE ramfs"
 default_dependencies = false
 requires_weak = ["00_randd.service"]
 
