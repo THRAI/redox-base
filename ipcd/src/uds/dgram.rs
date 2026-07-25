@@ -130,7 +130,6 @@ impl Handle {
 pub struct UdsDgramScheme<'sock> {
     handles: HashMap<usize, Handle>,
     next_id: usize,
-    socket_paths: HashMap<String, Rc<RefCell<Socket>>>,
     socket_tokens: HashMap<u64, Rc<RefCell<Socket>>>,
     socket: &'sock SchemeSocket,
     proc_creds_capability: usize,
@@ -142,7 +141,6 @@ impl<'sock> UdsDgramScheme<'sock> {
         Ok(Self {
             handles: HashMap::new(),
             next_id: 0,
-            socket_paths: HashMap::new(),
             socket_tokens: HashMap::new(),
             socket,
             proc_creds_capability: {
@@ -240,15 +238,6 @@ impl<'sock> UdsDgramScheme<'sock> {
     fn handle_bind(&mut self, id: usize, path_buf: &[u8]) -> Result<usize> {
         let path = path_buf_to_str(path_buf)?;
 
-        // Check if path is already bound to a server
-        if self.socket_paths.contains_key(path) {
-            eprintln!(
-                "handle_bind(id: {}): Address '{}' already in use.",
-                id, path
-            );
-            return Err(Error::new(EADDRINUSE));
-        }
-
         let socket_rc = self.get_socket(id)?.clone();
         let path_owned: String;
         let token: u64;
@@ -270,7 +259,6 @@ impl<'sock> UdsDgramScheme<'sock> {
             socket.issued_token = Some(token);
         }
 
-        self.socket_paths.insert(path_owned, socket_rc.clone());
         self.socket_tokens.insert(token, socket_rc);
 
         Ok(0)
@@ -428,20 +416,15 @@ impl<'sock> UdsDgramScheme<'sock> {
     }
 
     fn handle_unbind(&mut self, id: usize) -> Result<usize> {
-        let path_opt = {
-            let socket_rc = self.get_socket(id)?;
-            let mut socket = socket_rc.borrow_mut();
+        let socket_rc = self.get_socket(id)?;
+        let mut socket = socket_rc.borrow_mut();
 
-            if socket.state != State::Bound {
-                return Err(Error::new(EINVAL));
-            }
-
-            socket.state = State::Unbound;
-            socket.path.take()
-        };
-        if let Some(path) = path_opt {
-            self.socket_paths.remove(&path);
+        if socket.state != State::Bound {
+            return Err(Error::new(EINVAL));
         }
+
+        socket.state = State::Unbound;
+        socket.path = None;
 
         Ok(0)
     }
@@ -766,12 +749,8 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
         if socket.primary_id == id {
             socket.state = State::Closed;
             socket.peer = None;
-            let path = socket.path.clone();
             socket.path = None;
 
-            if let Some(path) = path {
-                self.socket_paths.remove(&path);
-            }
             if let Some(token) = socket.issued_token {
                 self.socket_tokens.remove(&token);
             }

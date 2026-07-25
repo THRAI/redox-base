@@ -389,7 +389,6 @@ impl Handle {
 pub struct UdsStreamScheme<'sock> {
     handles: HashMap<usize, Handle>,
     next_id: usize,
-    socket_paths: HashMap<String, Rc<RefCell<Socket>>>,
     socket_tokens: HashMap<u64, Rc<RefCell<Socket>>>,
     socket: &'sock SchemeSocket,
     proc_creds_capability: usize,
@@ -401,7 +400,6 @@ impl<'sock> UdsStreamScheme<'sock> {
         Ok(Self {
             handles: HashMap::new(),
             next_id: 0,
-            socket_paths: HashMap::new(),
             socket_tokens: HashMap::new(),
             socket,
             proc_creds_capability: {
@@ -533,11 +531,6 @@ impl<'sock> UdsStreamScheme<'sock> {
     fn handle_bind(&mut self, id: usize, path_buf: &[u8]) -> Result<usize> {
         let path = path_buf_to_str(path_buf)?;
 
-        if self.socket_paths.contains_key(path) {
-            eprintln!("handle_bind: Path '{}' is already in use.", path);
-            return Err(Error::new(EADDRINUSE));
-        }
-
         let socket_rc = self.get_socket(id)?.clone();
         let path_owned: String;
         let token: u64;
@@ -562,7 +555,6 @@ impl<'sock> UdsStreamScheme<'sock> {
             socket.start_listening()?;
         }
 
-        self.socket_paths.insert(path_owned, socket_rc.clone());
         self.socket_tokens.insert(token, socket_rc);
 
         Ok(0)
@@ -820,21 +812,15 @@ impl<'sock> UdsStreamScheme<'sock> {
     }
 
     fn handle_unbind(&mut self, id: usize) -> Result<usize> {
-        let path_opt = {
-            let socket_rc = self.get_socket(id)?;
-            let mut socket = socket_rc.borrow_mut();
+        let socket_rc = self.get_socket(id)?;
+        let mut socket = socket_rc.borrow_mut();
 
-            if socket.state != State::Bound {
-                return Err(Error::new(EINVAL));
-            }
-
-            socket.state = State::Unbound;
-            socket.path.take()
-        };
-
-        if let Some(path) = path_opt {
-            self.socket_paths.remove(&path);
+        if socket.state != State::Bound {
+            return Err(Error::new(EINVAL));
         }
+
+        socket.state = State::Unbound;
+        socket.path = None;
 
         Ok(0)
     }
@@ -929,21 +915,9 @@ impl<'sock> UdsStreamScheme<'sock> {
 
     // Transition a Bound or Unbound socket to the Listening state.
     fn handle_start_listening(&mut self, socket_rc: &Rc<RefCell<Socket>>) -> Result<()> {
-        let path = {
-            let mut socket = socket_rc.borrow_mut();
-            socket.start_listening()?;
-            socket.path.clone()
-        };
+        let mut socket = socket_rc.borrow_mut();
+        socket.start_listening()?;
 
-        if let Some(path) = path {
-            if let Some(existing_socket_rc) = self.socket_paths.get(&path) {
-                if !Rc::ptr_eq(socket_rc, existing_socket_rc) {
-                    eprintln!("handle_start_listening: Path '{}' is already in use.", path);
-                    return Err(Error::new(EADDRINUSE));
-                }
-            }
-            self.socket_paths.insert(path, socket_rc.clone());
-        }
         Ok(())
     }
 
@@ -1177,9 +1151,6 @@ impl<'sock> UdsStreamScheme<'sock> {
 
     fn handle_listening_closure(&mut self, socket_rc: Rc<RefCell<Socket>>) {
         let socket = socket_rc.borrow();
-        if let Some(path) = &socket.path {
-            self.socket_paths.remove(path);
-        }
 
         if let Some(token) = &socket.issued_token {
             self.socket_tokens.remove(&token);
@@ -1218,10 +1189,7 @@ impl<'sock> UdsStreamScheme<'sock> {
             let _ = self.post_fevent(remote_id, EVENT_READ);
         }
 
-        if let Some(path) = socket.path.take() {
-            // If this is the last reference to the socket, remove the path from the registry
-            self.socket_paths.remove(&path);
-        }
+        socket.path = None;
         if let Some(token) = socket.issued_token {
             self.socket_tokens.remove(&token);
         }
