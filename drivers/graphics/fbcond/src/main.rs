@@ -147,6 +147,18 @@ fn handle_event(
                         }
                     }
                 }
+                RequestKind::SendFd(req) => {
+                    let resp = Response::err(EOPNOTSUPP, req);
+                    let _ = socket
+                        .write_response(resp, SignalBehavior::Restart)
+                        .expect("fbcond: failed to write scheme");
+                }
+                RequestKind::RecvFd(req) => {
+                    let resp = Response::err(EOPNOTSUPP, req);
+                    let _ = socket
+                        .write_response(resp, SignalBehavior::Restart)
+                        .expect("fbcond: failed to write scheme");
+                }
                 RequestKind::OnClose { id } => {
                     scheme.on_close(id);
                 }

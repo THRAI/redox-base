@@ -4,7 +4,7 @@ mod notifier;
 
 use redox_scheme::{
     scheme::{register_scheme_inner, SchemeState, SchemeSync},
-    CallerCtx, OpenResult, RequestKind, SignalBehavior, Socket,
+    CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket,
 };
 use scheme_utils::HandleMap;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
@@ -389,6 +389,26 @@ impl NetCfgScheme {
             match request.kind() {
                 RequestKind::Call(c) => {
                     let resp = c.handle_sync(&mut self.inner, &mut self.state);
+                    let _ = self
+                        .inner
+                        .scheme_file
+                        .write_response(resp, SignalBehavior::Restart)
+                        .map_err(|e| {
+                            Error::from_syscall_error(e.into(), "failed to write response")
+                        })?;
+                }
+                RequestKind::SendFd(req) => {
+                    let resp = Response::err(syscall::EOPNOTSUPP, req);
+                    let _ = self
+                        .inner
+                        .scheme_file
+                        .write_response(resp, SignalBehavior::Restart)
+                        .map_err(|e| {
+                            Error::from_syscall_error(e.into(), "failed to write response")
+                        })?;
+                }
+                RequestKind::RecvFd(req) => {
+                    let resp = Response::err(syscall::EOPNOTSUPP, req);
                     let _ = self
                         .inner
                         .scheme_file

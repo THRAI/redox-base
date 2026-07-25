@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use inputd::{DisplayHandle, VtEventKind};
 use libredox::Fd;
 use redox_scheme::scheme::{SchemeState, SchemeSync, register_scheme_inner};
-use redox_scheme::{CallerCtx, OpenResult, RequestKind, SignalBehavior, Socket};
+use redox_scheme::{CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket};
 use scheme_utils::{FpathWriter, HandleMap};
 use syscall::schemev2::NewFdFlags;
 use syscall::{EACCES, EAGAIN, EINVAL, ENOENT, EOPNOTSUPP, Error, MapFlags, Result};
@@ -232,19 +232,20 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
                 Err(err) => panic!("driver-graphics: failed to read display scheme: {err}"),
             };
 
-            match request.kind() {
-                RequestKind::Call(call) => {
-                    let response = call.handle_sync(&mut self.inner, &mut self.state);
-                    self.inner
-                        .socket
-                        .write_response(response, SignalBehavior::Restart)
-                        .expect("driver-graphics: failed to write response");
-                }
+            let response = match request.kind() {
+                RequestKind::Call(call) => call.handle_sync(&mut self.inner, &mut self.state),
+                RequestKind::SendFd(req) => Response::err(EOPNOTSUPP, req),
+                RequestKind::RecvFd(req) => Response::err(EOPNOTSUPP, req),
                 RequestKind::OnClose { id } => {
                     self.inner.on_close(id);
+                    continue;
                 }
-                _ => (),
-            }
+                _ => continue,
+            };
+            self.inner
+                .socket
+                .write_response(response, SignalBehavior::Restart)
+                .expect("driver-graphics: failed to write response");
         }
 
         Ok(())
