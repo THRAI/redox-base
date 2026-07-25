@@ -10,11 +10,12 @@ use redox_initfs::{InitFs, Inode, InodeDir, InodeKind, InodeStruct};
 
 use redox_rt::proc::FdGuard;
 use redox_scheme::{
-    scheme::{SchemeState, SchemeSync},
     CallerCtx, OpenResult, RequestKind,
+    scheme::{SchemeState, SchemeSync},
 };
 
-use redox_scheme::{SignalBehavior, Socket};
+use redox_scheme::{Response, SignalBehavior, Socket};
+use syscall::PAGE_SIZE;
 use syscall::data::Stat;
 use syscall::dirent::DirEntry;
 use syscall::dirent::DirentBuf;
@@ -22,7 +23,6 @@ use syscall::dirent::DirentKind;
 use syscall::error::*;
 use syscall::flag::*;
 use syscall::schemev2::NewFdFlags;
-use syscall::PAGE_SIZE;
 
 enum Handle {
     Node(Node),
@@ -409,6 +409,26 @@ pub fn run(bytes: &'static [u8], sync_pipe: FdGuard, socket: Socket) -> ! {
         match req.kind() {
             RequestKind::Call(req) => {
                 let resp = req.handle_sync(&mut scheme, &mut state);
+
+                if !socket
+                    .write_response(resp, SignalBehavior::Restart)
+                    .expect("bootstrap: failed to write scheme response to kernel")
+                {
+                    break;
+                }
+            }
+            RequestKind::SendFd(req) => {
+                let resp = Response::err(EOPNOTSUPP, req);
+
+                if !socket
+                    .write_response(resp, SignalBehavior::Restart)
+                    .expect("bootstrap: failed to write scheme response to kernel")
+                {
+                    break;
+                }
+            }
+            RequestKind::RecvFd(req) => {
+                let resp = Response::err(EOPNOTSUPP, req);
 
                 if !socket
                     .write_response(resp, SignalBehavior::Restart)

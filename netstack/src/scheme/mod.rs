@@ -365,6 +365,26 @@ where
 
             let req = match request.kind() {
                 RequestKind::Call(c) => c,
+                RequestKind::SendFd(req) => {
+                    let resp = Response::err(syscall::EOPNOTSUPP, req);
+                    self.scheme
+                        .scheme_file
+                        .write_response(resp, SignalBehavior::Restart)
+                        .map_err(|e| {
+                            Error::from_syscall_error(e.into(), "failed to write response")
+                        })?;
+                    continue;
+                }
+                RequestKind::RecvFd(req) => {
+                    let resp = Response::err(syscall::EOPNOTSUPP, req);
+                    self.scheme
+                        .scheme_file
+                        .write_response(resp, SignalBehavior::Restart)
+                        .map_err(|e| {
+                            Error::from_syscall_error(e.into(), "failed to write response")
+                        })?;
+                    continue;
+                }
                 RequestKind::OnClose { id } => {
                     self.scheme.on_close(id);
                     continue;

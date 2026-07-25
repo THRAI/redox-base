@@ -156,6 +156,16 @@ impl<T: NetworkAdapter> NetworkScheme<T> {
                     }
                     continue;
                 }
+                RequestKind::SendFd(req) => {
+                    let resp = Response::err(syscall::EOPNOTSUPP, req);
+                    self.socket.write_response(resp, SignalBehavior::Restart)?;
+                    continue;
+                }
+                RequestKind::RecvFd(req) => {
+                    let resp = Response::err(syscall::EOPNOTSUPP, req);
+                    self.socket.write_response(resp, SignalBehavior::Restart)?;
+                    continue;
+                }
                 _ => {
                     continue;
                 }
