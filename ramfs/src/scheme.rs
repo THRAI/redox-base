@@ -114,13 +114,15 @@ impl<'a> Scheme<'a> {
             .get_mut(&removed_inode)
             .ok_or(Error::new(EIO))?;
 
-        if let FileData::File(_) = removed_inode_info.data {
+        if let FileData::File(_) | FileData::Socket(_) = removed_inode_info.data {
             if directory {
+                // FIXME restore entry
                 return Err(Error::new(EISDIR));
             }
             removed_inode_info.nlink -= 1; // only the parent entry
         } else {
             if !directory {
+                // FIXME restore entry
                 return Err(Error::new(ENOTDIR));
             }
             removed_inode_info.nlink -= 2; // both the parent entry and '.'
@@ -299,7 +301,7 @@ impl SchemeSync for Scheme<'_> {
         })
     }
     fn unlinkat(&mut self, dirfd: usize, path: &str, flags: usize, ctx: &CallerCtx) -> Result<()> {
-        if !self.handles.get(dirfd)?.as_inode()? != Filesystem::ROOT_INODE {
+        if self.handles.get(dirfd)?.as_inode()? != Filesystem::ROOT_INODE {
             return Err(Error::new(EACCES));
         }
         self.remove_dentry(
