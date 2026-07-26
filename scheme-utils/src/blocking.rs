@@ -75,7 +75,10 @@ impl<S: Deref<Target = Socket>> Blocking<S> {
                     let response = Response::open_dup_like(result, recvfd_request);
                     self.responses_to_write.push_back(response);
                 }
-                _ => {}
+                RequestKind::MsyncMsg | RequestKind::MunmapMsg | RequestKind::MmapMsg => {
+                    unreachable!()
+                }
+                RequestKind::OnDetach { .. } => {}
             }
         }
 

@@ -91,7 +91,10 @@ impl<S: Deref<Target = Socket>> ReadinessBased<S> {
                     self.responses_to_write.push_back(response);
                     continue;
                 }
-                _ => continue,
+                RequestKind::MsyncMsg | RequestKind::MunmapMsg | RequestKind::MmapMsg => {
+                    unreachable!()
+                }
+                RequestKind::OnDetach { .. } => continue,
             };
             let caller = req.caller();
             let mut op = match req.op() {
