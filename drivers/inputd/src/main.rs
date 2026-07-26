@@ -537,9 +537,9 @@ fn daemon(daemon: daemon::SchemeDaemon) -> anyhow::Result<()> {
     // Create the ":input" scheme.
     let socket_file = Socket::create()?;
     let mut scheme = InputScheme::new();
-    let mut handler = Blocking::new(&socket_file, 16);
+    let mut handler = Blocking::new(Box::new(socket_file), 16);
 
-    let _ = daemon.ready_sync_scheme(&socket_file, &mut scheme);
+    let _ = daemon.ready_sync_scheme(handler.socket(), &mut scheme);
 
     loop {
         scheme.has_new_events = false;
@@ -569,7 +569,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> anyhow::Result<()> {
                     }
 
                     // Notify the consumer that we have some events to read. Yum yum.
-                    socket_file.write_response(
+                    handler.socket().write_response(
                         Response::post_fevent(*id, EventFlags::EVENT_READ.bits()),
                         SignalBehavior::Restart,
                     )?;
@@ -587,7 +587,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> anyhow::Result<()> {
                     }
 
                     // Notify the consumer that we have some events to read. Yum yum.
-                    socket_file.write_response(
+                    handler.socket().write_response(
                         Response::post_fevent(*id, EventFlags::EVENT_READ.bits()),
                         SignalBehavior::Restart,
                     )?;
