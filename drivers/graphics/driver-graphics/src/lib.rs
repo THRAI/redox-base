@@ -5,16 +5,17 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
+use std::ops::ControlFlow;
 use std::os::fd::BorrowedFd;
 use std::sync::{Arc, Mutex};
 
 use inputd::{DisplayHandle, VtEventKind};
 use libredox::Fd;
-use redox_scheme::scheme::{SchemeState, SchemeSync, register_scheme_inner};
-use redox_scheme::{CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket};
-use scheme_utils::{FpathWriter, HandleMap};
+use redox_scheme::scheme::{SchemeSync, register_scheme_inner};
+use redox_scheme::{CallerCtx, OpenResult, Socket};
+use scheme_utils::{Blocking, FpathWriter, HandleMap};
 use syscall::schemev2::NewFdFlags;
-use syscall::{EACCES, EAGAIN, EINVAL, ENOENT, EOPNOTSUPP, Error, MapFlags, Result};
+use syscall::{EACCES, EINVAL, ENOENT, EOPNOTSUPP, Error, MapFlags, Result};
 
 use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState};
 use crate::kms::objects::{
@@ -125,8 +126,7 @@ impl Framebuffer for () {}
 pub struct GraphicsScheme<T: GraphicsAdapter> {
     inner: GraphicsSchemeInner<T>,
     inputd_handle: DisplayHandle,
-    state: SchemeState,
-    socket: Socket,
+    handler: Blocking<Box<Socket>>,
 }
 
 impl<T: GraphicsAdapter> GraphicsScheme<T> {
@@ -168,13 +168,12 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
         Self {
             inner,
             inputd_handle: display_handle,
-            state: SchemeState::new(),
-            socket,
+            handler: Blocking::new(Box::new(socket), 16),
         }
     }
 
     pub fn event_handle(&self) -> &Fd {
-        self.socket.inner()
+        self.handler.socket().inner()
     }
 
     pub fn inputd_event_handle(&self) -> BorrowedFd<'_> {
@@ -223,29 +222,14 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
     /// file.
     pub fn tick(&mut self) -> io::Result<()> {
         loop {
-            let request = match self.socket.next_request(SignalBehavior::Restart) {
-                Ok(Some(request)) => request,
-                Ok(None) => {
-                    // Scheme likely got unmounted
-                    std::process::exit(0);
-                }
-                Err(err) if err.errno == EAGAIN => break,
-                Err(err) => panic!("driver-graphics: failed to read display scheme: {err}"),
-            };
-
-            let response = match request.kind() {
-                RequestKind::Call(call) => call.handle_sync(&mut self.inner, &mut self.state),
-                RequestKind::SendFd(req) => Response::err(EOPNOTSUPP, req),
-                RequestKind::RecvFd(req) => Response::err(EOPNOTSUPP, req),
-                RequestKind::OnClose { id } => {
-                    self.inner.on_close(id);
-                    continue;
-                }
-                _ => continue,
-            };
-            self.socket
-                .write_response(response, SignalBehavior::Restart)
-                .expect("driver-graphics: failed to write response");
+            match self
+                .handler
+                .process_requests_nonblocking(&mut self.inner)
+                .expect("driver-graphics: failed to process requests")
+            {
+                ControlFlow::Continue(()) => {}
+                ControlFlow::Break(()) => break,
+            }
         }
 
         Ok(())
