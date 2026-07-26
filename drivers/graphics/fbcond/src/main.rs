@@ -42,37 +42,31 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
         .expect("fbcond: failed to subscribe to scheme events");
 
     let mut scheme = FbconScheme::new(&vt_ids, &mut event_queue);
-    let mut readiness = ReadinessBased::new(&socket, 16);
+    let mut readiness = ReadinessBased::new(Box::new(socket), 16);
 
-    let _ = daemon.ready_sync_scheme(&socket, &mut scheme);
+    let _ = daemon.ready_sync_scheme(readiness.socket(), &mut scheme);
 
     // This is not possible for now as fbcond needs to open new displays at runtime for graphics
     // driver handoff. In the future inputd may directly pass a handle to the display instead.
     // libredox::call::setrens(0, 0).expect("fbcond: failed to enter null namespace");
 
     // Handle all events that could have happened before registering with the event queue.
-    handle_event(
-        &socket,
-        &mut scheme,
-        &mut readiness,
-        VtIndex::SCHEMA_SENTINEL,
-    );
+    handle_event(&mut scheme, &mut readiness, VtIndex::SCHEMA_SENTINEL);
     for vt_i in scheme.vts.keys().copied().collect::<Vec<_>>() {
-        handle_event(&socket, &mut scheme, &mut readiness, vt_i);
+        handle_event(&mut scheme, &mut readiness, vt_i);
     }
 
     for event in event_queue {
         let event = event.expect("fbcond: failed to read event from event queue");
-        handle_event(&socket, &mut scheme, &mut readiness, event.user_data);
+        handle_event(&mut scheme, &mut readiness, event.user_data);
     }
 
     std::process::exit(0);
 }
 
 fn handle_event(
-    socket: &Socket,
     scheme: &mut FbconScheme,
-    readiness: &mut ReadinessBased,
+    readiness: &mut ReadinessBased<Box<Socket>>,
     event: VtIndex,
 ) {
     match event {
@@ -131,7 +125,8 @@ fn handle_event(
             if !handle.notified_read {
                 handle.notified_read = true;
                 let response = Response::post_fevent(*handle_id, EVENT_READ.bits());
-                socket
+                readiness
+                    .socket()
                     .write_response(response, SignalBehavior::Restart)
                     .expect("fbcond: failed to write display event");
             }

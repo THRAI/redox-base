@@ -63,15 +63,15 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
         let mut device = unsafe {
             hda::IntelHDA::new(address, vend_prod).expect("ihdad: failed to allocate device")
         };
-        let mut readiness_based = ReadinessBased::new(&socket, 16);
+        let mut readiness_based = ReadinessBased::new(Box::new(socket), 16);
 
-        register_sync_scheme(&socket, "audiohw", &mut device)
+        register_sync_scheme(readiness_based.socket(), "audiohw", &mut device)
             .expect("ihdad: failed to register audiohw scheme to namespace");
         daemon.ready();
 
         event_queue
             .subscribe(
-                socket.inner().raw(),
+                readiness_based.socket().inner().raw(),
                 Source::Scheme,
                 event::EventFlags::READ,
             )
