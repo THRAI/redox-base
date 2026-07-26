@@ -63,7 +63,7 @@ impl<'a> Scheme<'a> {
         })
     }
     /// Remove a directory entry, where the entry can be both a file or a directory. Used by `unlinkat`.
-    pub fn remove_dentry(&mut self, path: &str, uid: u32, gid: u32, directory: bool) -> Result<()> {
+    fn remove_dentry(&mut self, path: &str, uid: u32, gid: u32, directory: bool) -> Result<()> {
         let removed_inode = {
             let (parent_dir_inode, name_to_delete) =
                 self.filesystem.resolve_except_last(path, uid, gid)?;
