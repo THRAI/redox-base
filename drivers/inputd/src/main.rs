@@ -545,7 +545,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> anyhow::Result<()> {
         scheme.has_new_events = false;
         match handler.process_requests_nonblocking(&mut scheme)? {
             ControlFlow::Continue(()) => {}
-            ControlFlow::Break(()) => unreachable!("scheme should be non-blocking"),
+            ControlFlow::Break(()) => unreachable!("scheme should be blocking"),
         }
 
         if !scheme.has_new_events {
