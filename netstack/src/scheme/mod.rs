@@ -399,7 +399,10 @@ where
                     }
                     continue;
                 }
-                _ => {
+                RequestKind::MsyncMsg | RequestKind::MunmapMsg | RequestKind::MmapMsg => {
+                    unreachable!()
+                }
+                RequestKind::OnDetach { .. } => {
                     continue;
                 }
             };

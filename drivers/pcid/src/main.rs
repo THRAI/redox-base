@@ -251,14 +251,15 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     let mut scheme = scheme::PciScheme::new(pcie);
     let socket = redox_scheme::Socket::create().expect("failed to open pci scheme socket");
-    let handler = Blocking::new(&socket, 16);
+    let handler = Blocking::new(Box::new(socket), 16);
 
     {
         match libredox::Fd::open("/scheme/acpi/register_pci", libredox::flag::O_WRONLY, 0) {
             Ok(register_pci) => {
                 let access_id = scheme.access();
 
-                let access_fd = socket
+                let access_fd = handler
+                    .socket()
                     .create_this_scheme_fd(0, access_id, syscall::O_RDWR, 0)
                     .expect("failed to issue this resource");
                 let access_bytes = access_fd.to_ne_bytes();
@@ -303,7 +304,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     }
     debug!("Enumeration complete, now starting pci scheme");
 
-    register_sync_scheme(&socket, "pci", &mut scheme)
+    register_sync_scheme(handler.socket(), "pci", &mut scheme)
         .expect("failed to register pci scheme to namespace");
 
     let _ = daemon.ready();

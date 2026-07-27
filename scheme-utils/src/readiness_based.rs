@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, Deref};
 
 use libredox::error::Error as LError;
 
@@ -9,7 +9,7 @@ use syscall::error::{self as errno, ECANCELED, EIO, EOPNOTSUPP, Error};
 use redox_scheme::scheme::{Op, SchemeResponse, SchemeState, SchemeSync};
 use redox_scheme::{CallerCtx, Id, Request, RequestKind, Response, SignalBehavior, Socket};
 
-pub struct ReadinessBased<'sock> {
+pub struct ReadinessBased<S> {
     // TODO: VecDeque for both when it implements spare_capacity
     requests_read: Vec<Request>,
     responses_to_write: VecDeque<Response>,
@@ -17,11 +17,13 @@ pub struct ReadinessBased<'sock> {
     states: HashMap<Id, (CallerCtx, Op)>,
     ready_queue: VecDeque<Id>,
 
-    socket: &'sock Socket,
+    // FIXME only allow Socket once netstack no longer needs this to be a borrow
+    socket: S,
     state: SchemeState,
 }
-impl<'sock> ReadinessBased<'sock> {
-    pub fn new(socket: &'sock Socket, queue_size: usize) -> Self {
+
+impl<S: Deref<Target = Socket>> ReadinessBased<S> {
+    pub fn new(socket: S, queue_size: usize) -> Self {
         Self {
             requests_read: Vec::with_capacity(queue_size),
             responses_to_write: VecDeque::with_capacity(queue_size),
@@ -31,6 +33,11 @@ impl<'sock> ReadinessBased<'sock> {
             state: SchemeState::new(),
         }
     }
+
+    pub fn socket(&self) -> &Socket {
+        &self.socket
+    }
+
     pub fn read_and_process_requests(&mut self, scheme: &mut impl SchemeSync) -> Result<()> {
         assert!(self.requests_read.is_empty());
 
@@ -84,7 +91,10 @@ impl<'sock> ReadinessBased<'sock> {
                     self.responses_to_write.push_back(response);
                     continue;
                 }
-                _ => continue,
+                RequestKind::MsyncMsg | RequestKind::MunmapMsg | RequestKind::MmapMsg => {
+                    unreachable!()
+                }
+                RequestKind::OnDetach { .. } => continue,
             };
             let caller = req.caller();
             let mut op = match req.op() {
@@ -116,6 +126,7 @@ impl<'sock> ReadinessBased<'sock> {
 
         Ok(())
     }
+
     // TODO: Doesn't scale. Instead, provide an API for some form of queue.
     // TODO: panic if id isn't present?
     pub fn poll_request(&mut self, id: Id, scheme: &mut impl SchemeSync) -> Result<bool> {

@@ -2,14 +2,11 @@ use std::{cmp, io};
 
 use libredox::flag::O_NONBLOCK;
 use libredox::Fd;
-use redox_scheme::{
-    scheme::{IntoTag, Op, SchemeResponse, SchemeState, SchemeSync},
-    CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket,
-};
-use scheme_utils::{FpathWriter, HandleMap};
+use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult, Response, SignalBehavior, Socket};
+use scheme_utils::{FpathWriter, HandleMap, ReadinessBased};
 use syscall::schemev2::NewFdFlags;
 use syscall::{
-    Error, EventFlags, Result, Stat, EACCES, EAGAIN, EBADF, EINTR, EINVAL, EWOULDBLOCK, MODE_FILE,
+    Error, EventFlags, Result, Stat, EACCES, EAGAIN, EBADF, EINVAL, EWOULDBLOCK, MODE_FILE,
 };
 
 pub trait NetworkAdapter {
@@ -33,9 +30,7 @@ pub trait NetworkAdapter {
 
 pub struct NetworkScheme<T: NetworkAdapter> {
     scheme: NetworkSchemeInner<T>,
-    state: SchemeState,
-    blocked: Vec<(Op, CallerCtx)>,
-    socket: Socket,
+    handler: ReadinessBased<Box<Socket>>,
 }
 
 fn post_fevent(socket: &Socket, id: usize, flags: usize) -> Result<()> {
@@ -62,14 +57,12 @@ impl<T: NetworkAdapter> NetworkScheme<T> {
         daemon.ready();
         Self {
             scheme,
-            state: SchemeState::new(),
-            blocked: Vec::new(),
-            socket,
+            handler: ReadinessBased::new(Box::new(socket), 16),
         }
     }
 
     pub fn event_handle(&self) -> &Fd {
-        self.socket.inner()
+        self.handler.socket().inner()
     }
 
     pub fn adapter(&self) -> &T {
@@ -89,124 +82,25 @@ impl<T: NetworkAdapter> NetworkScheme<T> {
     // to call when an irq is received to indicate that blocked requests can
     // be processed.
     pub fn tick(&mut self) -> io::Result<()> {
-        // Handle any blocked requests
-        let mut i = 0;
-        while i < self.blocked.len() {
-            let (op, caller) = &mut self.blocked[i];
-            let res = op.handle_sync_dont_consume(caller, &mut self.scheme, &mut self.state);
-            match res {
-                SchemeResponse::Opened(Err(Error {
-                    errno: syscall::EWOULDBLOCK,
-                }))
-                | SchemeResponse::Regular(Err(Error {
-                    errno: syscall::EWOULDBLOCK,
-                })) if !op.is_explicitly_nonblock() => {
-                    i += 1;
-                }
-                SchemeResponse::Regular(r) => {
-                    let (op, _) = self.blocked.remove(i);
-                    let _ = self
-                        .socket
-                        .write_response(Response::new(r, op), SignalBehavior::Restart)
-                        .expect("driver-network: failed to write scheme");
-                }
-                SchemeResponse::Opened(o) => {
-                    let (op, _) = self.blocked.remove(i);
-                    let _ = self
-                        .socket
-                        .write_response(Response::open_dup_like(o, op), SignalBehavior::Restart)
-                        .expect("driver-network: failed to write scheme");
-                }
-                SchemeResponse::RegularAndNotifyOnDetach(status) => {
-                    let (op, _) = self.blocked.remove(i);
-                    let _ = self
-                        .socket
-                        .write_response(
-                            Response::new_notify_on_detach(status, op),
-                            SignalBehavior::Restart,
-                        )
-                        .expect("driver-network: failed to write scheme");
-                }
-            }
-        }
-
-        // Handle new scheme requests
-        loop {
-            let request = match self.socket.next_request(SignalBehavior::Restart) {
-                Ok(Some(request)) => request,
-                Ok(None) => {
-                    // Scheme likely got unmounted
-                    std::process::exit(0);
-                }
-                Err(err) if err.errno == EAGAIN => break,
-                Err(err) => return Err(err.into()),
-            };
-
-            let req = match request.kind() {
-                RequestKind::Call(c) => c,
-                RequestKind::OnClose { id } => {
-                    self.scheme.on_close(id);
-                    continue;
-                }
-                RequestKind::Cancellation(req) => {
-                    if let Some(i) = self.blocked.iter().position(|q| q.0.req_id() == req.id) {
-                        let (blocked_req, _) = self.blocked.remove(i);
-                        let resp = Response::new(Err(Error::new(EINTR)), blocked_req);
-                        self.socket.write_response(resp, SignalBehavior::Restart)?;
-                    }
-                    continue;
-                }
-                RequestKind::SendFd(req) => {
-                    let resp = Response::err(syscall::EOPNOTSUPP, req);
-                    self.socket.write_response(resp, SignalBehavior::Restart)?;
-                    continue;
-                }
-                RequestKind::RecvFd(req) => {
-                    let resp = Response::err(syscall::EOPNOTSUPP, req);
-                    self.socket.write_response(resp, SignalBehavior::Restart)?;
-                    continue;
-                }
-                _ => {
-                    continue;
-                }
-            };
-            let caller = req.caller();
-            let mut op = match req.op() {
-                Ok(op) => op,
-                Err(req) => {
-                    self.socket.write_response(
-                        Response::err(syscall::EOPNOTSUPP, req),
-                        SignalBehavior::Restart,
-                    )?;
-                    continue;
-                }
-            };
-
-            let resp = match op.handle_sync_dont_consume(&caller, &mut self.scheme, &mut self.state)
-            {
-                SchemeResponse::Opened(Err(Error {
-                    errno: syscall::EWOULDBLOCK,
-                }))
-                | SchemeResponse::Regular(Err(Error {
-                    errno: syscall::EWOULDBLOCK,
-                })) if !op.is_explicitly_nonblock() => {
-                    self.blocked.push((op, caller));
-                    continue;
-                }
-                SchemeResponse::Regular(r) => Response::new(r, op),
-                SchemeResponse::Opened(o) => Response::open_dup_like(o, op),
-                SchemeResponse::RegularAndNotifyOnDetach(status) => {
-                    Response::new_notify_on_detach(status, op)
-                }
-            };
-            let _ = self.socket.write_response(resp, SignalBehavior::Restart)?;
-        }
+        self.handler
+            .read_and_process_requests(&mut self.scheme)
+            .expect("driver-network: failed to read from socket");
+        self.handler
+            .poll_all_requests(&mut self.scheme)
+            .expect("driver-network: failed to poll requests");
+        self.handler
+            .write_responses()
+            .expect("driver-network: failed to write to socket");
 
         // Notify readers about incoming events
         let available_for_read = self.scheme.adapter.available_for_read();
         if available_for_read > 0 {
             for &handle_id in self.scheme.handles.keys() {
-                post_fevent(&self.socket, handle_id, syscall::flag::EVENT_READ.bits())?;
+                post_fevent(
+                    &self.handler.socket(),
+                    handle_id,
+                    syscall::flag::EVENT_READ.bits(),
+                )?;
             }
             return Ok(());
         }

@@ -149,13 +149,13 @@ fn daemon_with_context_size<const N: usize>(
 
     let scheme_name = format!("usb.{}", name);
     let socket = Socket::create().expect("xhcid: failed to create usb scheme");
-    let handler = Blocking::new(&socket, 16);
+    let handler = Blocking::new(Box::new(socket), 16);
 
     let hci = Arc::new(
         Xhci::<N>::new(scheme_name.clone(), address, interrupt_method, pcid_handle)
             .expect("xhcid: failed to allocate device"),
     );
-    register_sync_scheme(&socket, &scheme_name, &mut &*hci)
+    register_sync_scheme(handler.socket(), &scheme_name, &mut &*hci)
         .expect("xhcid: failed to regsiter scheme to namespace");
 
     daemon.ready();

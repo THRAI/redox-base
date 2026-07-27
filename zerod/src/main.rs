@@ -23,9 +23,9 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 
     let socket = Socket::create().expect("zerod: failed to create zero scheme");
     let mut zero_scheme = ZeroScheme(ty);
-    let zero_handler = Blocking::new(&socket, 16);
+    let zero_handler = Blocking::new(Box::new(socket), 16);
 
-    let _ = daemon.ready_sync_scheme(&socket, &mut zero_scheme);
+    let _ = daemon.ready_sync_scheme(zero_handler.socket(), &mut zero_scheme);
 
     libredox::call::setrens(0, 0).expect("zerod: failed to enter null namespace");
 

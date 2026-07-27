@@ -277,9 +277,9 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
     let socket = Socket::create().expect("randd: failed to create rand scheme");
 
     let mut scheme = RandScheme::new();
-    let handler = Blocking::new(&socket, 16);
+    let handler = Blocking::new(Box::new(socket), 16);
 
-    let _ = daemon.ready_sync_scheme(&socket, &mut scheme);
+    let _ = daemon.ready_sync_scheme(handler.socket(), &mut scheme);
 
     libredox::call::setrens(0, 0).expect("randd: failed to enter null namespace");
 

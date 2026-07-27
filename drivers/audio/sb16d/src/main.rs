@@ -34,7 +34,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     let socket = Socket::nonblock().expect("sb16d: failed to create socket");
     let mut device = unsafe { device::Sb16::new(addr).expect("sb16d: failed to allocate device") };
-    let mut readiness_based = ReadinessBased::new(&socket, 16);
+    let mut readiness_based = ReadinessBased::new(Box::new(socket), 16);
 
     //TODO: error on multiple IRQs?
     let irq_file = match device.irqs.first() {
@@ -55,13 +55,13 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         .unwrap();
     event_queue
         .subscribe(
-            socket.inner().raw(),
+            readiness_based.socket().inner().raw(),
             Source::Scheme,
             event::EventFlags::READ,
         )
         .unwrap();
 
-    register_sync_scheme(&socket, "sb16d", &mut device)
+    register_sync_scheme(readiness_based.socket(), "sb16d", &mut device)
         .expect("sb16d: failed to register audiohw scheme to namespace");
 
     daemon.ready();

@@ -47,7 +47,7 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
     let socket = Socket::nonblock().expect("ac97d: failed to create socket");
     let mut device =
         unsafe { device::Ac97::new(bar0, bar1).expect("ac97d: failed to allocate device") };
-    let mut readiness_based = ReadinessBased::new(&socket, 16);
+    let mut readiness_based = ReadinessBased::new(Box::new(socket), 16);
 
     user_data! {
         enum Source {
@@ -66,13 +66,13 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
         .unwrap();
     event_queue
         .subscribe(
-            socket.inner().raw(),
+            readiness_based.socket().inner().raw(),
             Source::Scheme,
             event::EventFlags::READ,
         )
         .unwrap();
 
-    register_sync_scheme(&socket, "audiohw", &mut device)
+    register_sync_scheme(readiness_based.socket(), "audiohw", &mut device)
         .expect("ac97d: failed to register audiohw scheme to namespace");
     daemon.ready();
 

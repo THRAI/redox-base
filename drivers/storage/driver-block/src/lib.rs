@@ -258,6 +258,7 @@ impl<T: Disk> DiskWrapper<T> {
 pub struct DiskScheme<T> {
     inner: DiskSchemeInner<T>,
     state: SchemeState,
+    socket: Socket,
 }
 
 impl<T: Disk> DiskScheme<T> {
@@ -272,7 +273,6 @@ impl<T: Disk> DiskScheme<T> {
 
         let mut inner = DiskSchemeInner {
             scheme_name: scheme_name,
-            socket,
             disks: disks
                 .into_iter()
                 .map(|(k, disk)| (k, DiskWrapper::new(disk, executor)))
@@ -281,7 +281,7 @@ impl<T: Disk> DiskScheme<T> {
         };
 
         let cap_id = inner.scheme_root().expect("failed to get this scheme root");
-        register_scheme_inner(&inner.socket, &inner.scheme_name, cap_id)
+        register_scheme_inner(&socket, &inner.scheme_name, cap_id)
             .expect("failed to register disk scheme root");
 
         if let Some(daemon) = daemon {
@@ -291,11 +291,12 @@ impl<T: Disk> DiskScheme<T> {
         Self {
             inner,
             state: SchemeState::new(),
+            socket,
         }
     }
 
     pub fn event_handle(&self) -> &Fd {
-        self.inner.socket.inner()
+        self.socket.inner()
     }
 
     /// Process pending and new requests.
@@ -304,7 +305,7 @@ impl<T: Disk> DiskScheme<T> {
     pub async fn tick(&mut self) -> io::Result<()> {
         // Handle new scheme requests
         loop {
-            let request = match self.inner.socket.next_request(SignalBehavior::Interrupt) {
+            let request = match self.socket.next_request(SignalBehavior::Interrupt) {
                 Ok(Some(request)) => request,
                 Ok(None) => {
                     // Scheme likely got unmounted
@@ -341,8 +342,7 @@ impl<T: Disk> DiskScheme<T> {
                 }
                 RequestKind::OnDetach { .. } => continue,
             };
-            self.inner
-                .socket
+            self.socket
                 .write_response(response, SignalBehavior::Restart)?;
         }
 
@@ -359,7 +359,6 @@ enum Handle {
 
 struct DiskSchemeInner<T> {
     scheme_name: String,
-    socket: Socket,
     disks: BTreeMap<u32, DiskWrapper<T>>,
     handles: HandleMap<Handle>,
 }

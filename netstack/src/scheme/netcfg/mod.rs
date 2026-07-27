@@ -3,14 +3,15 @@ mod nodes;
 mod notifier;
 
 use redox_scheme::{
-    scheme::{register_scheme_inner, SchemeState, SchemeSync},
-    CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket,
+    scheme::{register_scheme_inner, SchemeSync},
+    CallerCtx, OpenResult, Socket,
 };
-use scheme_utils::HandleMap;
+use scheme_utils::{Blocking, HandleMap};
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::mem;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::str;
 use std::str::FromStr;
@@ -328,7 +329,7 @@ impl NetCfgFile {
 
 pub struct NetCfgScheme {
     inner: NetCfgSchemeInner,
-    state: SchemeState,
+    handler: Blocking<Box<Socket>>,
 }
 
 impl NetCfgScheme {
@@ -343,7 +344,6 @@ impl NetCfgScheme {
             name_server: Ipv4Address::new(8, 8, 8, 8),
         }));
         let mut inner = NetCfgSchemeInner {
-            scheme_file,
             handles: HandleMap::new(),
             root_node: mk_root_node(
                 iface,
@@ -357,74 +357,33 @@ impl NetCfgScheme {
         let cap_id = inner
             .scheme_root()
             .map_err(|e| Error::from_syscall_error(e, "failed to get scheme root id"))?;
-        register_scheme_inner(&inner.scheme_file, "netcfg", cap_id).map_err(|e| {
+        register_scheme_inner(&scheme_file, "netcfg", cap_id).map_err(|e| {
             Error::from_syscall_error(e, "failed to register netcfg scheme to namespace")
         })?;
         Ok(Self {
             inner,
-            state: SchemeState::new(),
+            handler: Blocking::new(Box::new(scheme_file), 16),
         })
     }
 
-    pub fn on_scheme_event(&mut self) -> Result<Option<()>> {
-        let result = loop {
-            let request = match self.inner.scheme_file.next_request(SignalBehavior::Restart) {
-                Ok(Some(req)) => req,
-                Ok(None) => {
-                    break Some(());
-                }
-                Err(error)
-                    if error.errno == syscall::EWOULDBLOCK || error.errno == syscall::EAGAIN =>
-                {
-                    break None;
-                }
-                Err(other) => {
-                    return Err(Error::from_syscall_error(
-                        other,
-                        "failed to receive new request",
-                    ))
-                }
-            };
-
-            match request.kind() {
-                RequestKind::Call(c) => {
-                    let resp = c.handle_sync(&mut self.inner, &mut self.state);
-                    let _ = self
-                        .inner
-                        .scheme_file
-                        .write_response(resp, SignalBehavior::Restart)
-                        .map_err(|e| {
-                            Error::from_syscall_error(e.into(), "failed to write response")
-                        })?;
-                }
-                RequestKind::SendFd(req) => {
-                    let resp = Response::err(syscall::EOPNOTSUPP, req);
-                    let _ = self
-                        .inner
-                        .scheme_file
-                        .write_response(resp, SignalBehavior::Restart)
-                        .map_err(|e| {
-                            Error::from_syscall_error(e.into(), "failed to write response")
-                        })?;
-                }
-                RequestKind::RecvFd(req) => {
-                    let resp = Response::err(syscall::EOPNOTSUPP, req);
-                    let _ = self
-                        .inner
-                        .scheme_file
-                        .write_response(resp, SignalBehavior::Restart)
-                        .map_err(|e| {
-                            Error::from_syscall_error(e.into(), "failed to write response")
-                        })?;
-                }
-                RequestKind::OnClose { id } => {
-                    self.inner.on_close(id);
-                }
-                _ => {}
+    pub fn on_scheme_event(&mut self) -> Result<()> {
+        loop {
+            match self
+                .handler
+                .process_requests_nonblocking(&mut self.inner)
+                .expect("netstack: failed to process requests")
+            {
+                ControlFlow::Continue(()) => {}
+                ControlFlow::Break(()) => break,
             }
-        };
-        self.inner.notify_scheduled_fds();
-        Ok(result)
+        }
+
+        let fds_to_notify = self.inner.notifier.borrow_mut().get_notified_fds();
+        for fd in fds_to_notify {
+            let _ = post_fevent(self.handler.socket(), fd, syscall::EVENT_READ.bits());
+        }
+
+        Ok(())
     }
 }
 
@@ -434,19 +393,9 @@ enum Handle {
 }
 
 struct NetCfgSchemeInner {
-    scheme_file: Socket,
     handles: HandleMap<Handle>,
     root_node: CfgNodeRef,
     notifier: NotifierRef,
-}
-
-impl NetCfgSchemeInner {
-    fn notify_scheduled_fds(&mut self) {
-        let fds_to_notify = self.notifier.borrow_mut().get_notified_fds();
-        for fd in fds_to_notify {
-            let _ = post_fevent(&self.scheme_file, fd, syscall::EVENT_READ.bits());
-        }
-    }
 }
 
 impl SchemeSync for NetCfgSchemeInner {

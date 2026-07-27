@@ -40,17 +40,21 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         Fd::open(&time_path, flag::O_NONBLOCK, 0).expect("pty: failed to open time:");
 
     let socket = redox_scheme::Socket::nonblock().expect("pty: failed to create pty scheme");
-    let mut handler = ReadinessBased::new(&socket, 16);
+    let mut handler = ReadinessBased::new(Box::new(socket), 16);
 
     let mut scheme = PtyScheme::new();
-    register_sync_scheme(&socket, "pty", &mut scheme)
+    register_sync_scheme(handler.socket(), "pty", &mut scheme)
         .expect("ptyd: failed to register scheme to namespace");
     daemon.ready();
 
     libredox::call::setrens(0, 0).expect("ptyd: failed to enter null namespace");
 
     event_queue
-        .subscribe(socket.inner().raw(), EventSource::Socket, EventFlags::READ)
+        .subscribe(
+            handler.socket().inner().raw(),
+            EventSource::Socket,
+            EventFlags::READ,
+        )
         .expect("pty: failed to watch events on pty:");
     event_queue
         .subscribe(time_file.raw(), EventSource::Time, EventFlags::READ)
@@ -62,7 +66,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     let mut timeout_count = 0u64;
 
     scan_requests(&mut handler, &mut scheme).expect("pty: could not scan requests");
-    issue_events(&socket, &mut scheme);
+    issue_events(handler.socket(), &mut scheme);
 
     for event_res in event_queue {
         let event = event_res.expect("pty: failed to read from event queue");
@@ -90,14 +94,14 @@ fn daemon(daemon: daemon::Daemon) -> ! {
             }
         }
 
-        issue_events(&socket, &mut scheme);
+        issue_events(handler.socket(), &mut scheme);
     }
 
     std::process::exit(0);
 }
 
 fn scan_requests(
-    handler: &mut ReadinessBased<'_>,
+    handler: &mut ReadinessBased<Box<Socket>>,
     scheme: &mut PtyScheme,
 ) -> libredox::error::Result<()> {
     handler

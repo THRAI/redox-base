@@ -36,11 +36,11 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
     let socket = Socket::nonblock().expect("fbbootlogd: failed to create fbbootlog scheme");
 
     let mut scheme = FbbootlogScheme::new();
-    let mut handler = Blocking::new(&socket, 16);
+    let mut handler = Blocking::new(Box::new(socket), 16);
 
     event_queue
         .subscribe(
-            socket.inner().raw(),
+            handler.socket().inner().raw(),
             Source::Scheme,
             event::EventFlags::READ,
         )
@@ -55,7 +55,8 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
         .expect("fbbootlogd: failed to subscribe to scheme events");
 
     {
-        let log_fd = socket
+        let log_fd = handler
+            .socket()
             .create_this_scheme_fd(0, 0, 0, 0)
             .expect("fbbootlogd: failed to create log fd");
         // Add ourself as log sink
@@ -70,7 +71,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
             .expect("fbbootlogd: failed to send log fd to log scheme.");
     }
 
-    let _ = daemon.ready_sync_scheme(&socket, &mut scheme);
+    let _ = daemon.ready_sync_scheme(handler.socket(), &mut scheme);
 
     // This is not possible for now as fbbootlogd needs to open new displays at runtime for graphics
     // driver handoff. In the future inputd may directly pass a handle to the display instead.

@@ -72,7 +72,7 @@ fn daemon(daemon: SchemeDaemon) -> anyhow::Result<()> {
     let inner_thread = scheme.inner.clone();
     let _thread = thread::spawn(move || thread(inner_thread, pid, hw_file));
 
-    let mut readiness = ReadinessBased::new(&socket, 16);
+    let mut readiness = ReadinessBased::new(Box::new(socket), 16);
 
     loop {
         readiness.read_and_process_requests(&mut scheme)?;

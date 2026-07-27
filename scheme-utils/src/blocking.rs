@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, Deref};
 
 use libredox::error::Error as LError;
 
@@ -9,23 +9,28 @@ use syscall::error::{self as errno, Error};
 use redox_scheme::scheme::{SchemeState, SchemeSync};
 use redox_scheme::{Request, RequestKind, Response, SignalBehavior, Socket};
 
-pub struct Blocking<'sock> {
+pub struct Blocking<S> {
     // TODO: VecDeque for both when it implements spare_capacity
     requests_read: Vec<Request>,
     responses_to_write: VecDeque<Response>,
 
-    socket: &'sock Socket,
+    // FIXME only allow Socket once netstack no longer needs this to be a borrow
+    socket: S,
     state: SchemeState,
 }
 
-impl<'sock> Blocking<'sock> {
-    pub fn new(socket: &'sock Socket, queue_size: usize) -> Self {
+impl<S: Deref<Target = Socket>> Blocking<S> {
+    pub fn new(socket: S, queue_size: usize) -> Self {
         Self {
             requests_read: Vec::with_capacity(queue_size),
             responses_to_write: VecDeque::with_capacity(queue_size),
             socket,
             state: SchemeState::new(),
         }
+    }
+
+    pub fn socket(&self) -> &Socket {
+        &self.socket
     }
 
     pub fn process_requests_nonblocking(
@@ -70,7 +75,10 @@ impl<'sock> Blocking<'sock> {
                     let response = Response::open_dup_like(result, recvfd_request);
                     self.responses_to_write.push_back(response);
                 }
-                _ => {}
+                RequestKind::MsyncMsg | RequestKind::MunmapMsg | RequestKind::MmapMsg => {
+                    unreachable!()
+                }
+                RequestKind::OnDetach { .. } => {}
             }
         }
 
