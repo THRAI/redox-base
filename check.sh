@@ -12,6 +12,7 @@ show_help() {
     echo ""
     echo "Options:"
     echo "  --test              Run 'cargo test' instead of 'cargo check'"
+    echo "  --clippy            Run 'cargo clippy' instead of 'cargo check'"
     echo "  --all-target        Run the command on all supported Redox architectures"
     echo "  --target=<target>   Override the target architecture (e.g., i586-unknown-redox)"
     echo "  --arch=<arch>       Override the target architecture using arch (e.g., i586)"
@@ -49,6 +50,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --test)
             CMD_ACTION="test"
+            ;;
+        --clippy)
+            CMD_ACTION="clippy"
             ;;
         --target=*)
             CURRENT_TARGET="${1#*=}"
