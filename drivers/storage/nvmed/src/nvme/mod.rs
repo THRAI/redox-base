@@ -581,50 +581,51 @@ impl Nvme {
     pub async fn namespace_read_zerocopy(
         &self,
         namespace: &NvmeNamespace,
-        mut lba: u64,
-        buf: &mut [u8],
+        start_lba: u64,
         mut phys_addr: u64,
-    ) -> Result<usize> {
-        let block_size = namespace.block_size as usize;
+        num_sectors: u64,
+    ) -> Result<()> {
+        let end_lba = start_lba + num_sectors;
 
-        for chunk in buf.chunks_mut(/* TODO: buf len */ 8192) {
-            let blocks = (chunk.len() + block_size - 1) / block_size;
+        // TODO: PRP
+        let max_blocks = 8192 / namespace.block_size;
 
-            assert!(blocks > 0);
-            assert!(blocks <= 0x1_0000);
+        let mut lba = start_lba;
+        while lba < end_lba {
+            let blocks = (end_lba - lba).min(max_blocks);
 
             self.namespace_rw_zerocopy(namespace, lba, (blocks - 1) as u16, false, phys_addr)
                 .await?;
 
-            lba += blocks as u64;
-            phys_addr += chunk.len() as u64;
+            phys_addr += blocks * namespace.block_size;
+            lba += blocks;
         }
 
-        Ok(buf.len())
+        Ok(())
     }
 
     pub async fn namespace_write_zerocopy(
         &self,
         namespace: &NvmeNamespace,
-        mut lba: u64,
-        buf: &[u8],
+        start_lba: u64,
         mut phys_addr: u64,
-    ) -> Result<usize> {
-        let block_size = namespace.block_size as usize;
+        num_sectors: u64,
+    ) -> Result<()> {
+        let end_lba = start_lba + num_sectors;
+        // TODO: PRP
+        let max_blocks = 8192 / namespace.block_size;
 
-        for chunk in buf.chunks(/* TODO: buf len */ 8192) {
-            let blocks = (chunk.len() + block_size - 1) / block_size;
-
-            assert!(blocks > 0);
-            assert!(blocks <= 0x1_0000);
+        let mut lba = start_lba;
+        while lba < end_lba {
+            let blocks = (end_lba - lba).min(max_blocks);
 
             self.namespace_rw_zerocopy(namespace, lba, (blocks - 1) as u16, true, phys_addr)
                 .await?;
 
-            lba += blocks as u64;
-            phys_addr += chunk.len() as u64;
+            phys_addr += blocks * namespace.block_size;
+            lba += blocks;
         }
 
-        Ok(buf.len())
+        Ok(())
     }
 }

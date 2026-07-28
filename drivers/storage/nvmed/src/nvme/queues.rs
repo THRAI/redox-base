@@ -107,6 +107,7 @@ impl NvmeCompQueue {
 
 /// Submission queue
 pub struct NvmeCmdQueue {
+    // Size must be a power of 2.
     pub data: Dma<[UnsafeCell<NvmeCmd>]>,
     pub tail: u16,
     pub head: u16,

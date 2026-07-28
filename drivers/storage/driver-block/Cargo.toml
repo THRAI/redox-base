@@ -8,12 +8,10 @@ edition = "2021"
 daemon = { path = "../../../daemon" }
 executor = { path = "../../executor" }
 partitionlib = { path = "../partitionlib" }
+common = { path = "../../common" }
 
 libredox.workspace = true
 log.workspace = true
-
-# TODO: migrate virtio to our executor
-futures = { version = "0.3.28", features = ["executor"] }
 
 redox_syscall = { workspace = true, features = ["std"] }
 redox_event.workspace = true

@@ -1,27 +1,63 @@
+mod task;
+
+use task::*;
+
+pub use task::vtable;
+
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::fs::File;
-use std::future::{Future, IntoFuture};
+use std::future::Future;
 use std::hash::Hash;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
-use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::task;
+use std::task::{Context, Poll, RawWakerVTable};
 
 use event::{EventFlags, RawEventQueue};
-use slab::Slab;
+use intrusive_collections::{LinkedList, LinkedListLink, UnsafeRef, intrusive_adapter};
+
+pub async fn yield_now() {
+    struct YieldNow {
+        yielded: bool,
+    }
+
+    impl Future for YieldNow {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            if self.yielded {
+                Poll::Ready(())
+            } else {
+                self.yielded = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
+
+    YieldNow { yielded: false }.await
+}
+
+pub struct JoinHandle<Hw: Hardware, T> {
+    task_ref: TaskRef,
+    _phantom: PhantomData<(Hw, T)>,
+}
+
+impl<Hw: Hardware, T> JoinHandle<Hw, T> {
+    pub fn abort(self) {
+        self.task_ref.cancel();
+    }
+}
 
 type EventUserData = usize;
 
-type FutIdx = usize;
-
-pub trait Hardware: Sized {
+pub trait Hardware: Sized + 'static {
     type CmdId: Clone + Copy + Debug + Hash + Eq + PartialEq;
     type CqId: Clone + Copy + Debug + Hash + Eq + PartialEq;
     type SqId: Clone + Copy + Debug + Hash + Eq + PartialEq;
@@ -42,7 +78,7 @@ pub trait Hardware: Sized {
     fn sq_cq(ctxt: &Self::GlobalCtxt, id: Self::CqId) -> Self::SqId;
 
     fn current() -> Rc<LocalExecutor<Self>>;
-    fn vtable() -> &'static task::RawWakerVTable;
+    fn vtable() -> &'static RawWakerVTable;
 
     fn try_submit(
         _ctxt: &Self::GlobalCtxt,
@@ -67,6 +103,48 @@ pub trait Hardware: Sized {
     fn poll_cqes(ctxt: &Self::GlobalCtxt, handle: impl FnMut(Self::CqId, Self::Cqe));
 }
 
+intrusive_adapter!(WorkQueueAdapter = UnsafeRef<TaskHeader>: TaskHeader { wq_link => LinkedListLink });
+
+pub struct WorkQueue<Hw: Hardware> {
+    runnable_tasks: Box<RefCell<LinkedList<WorkQueueAdapter>>>,
+    _hw_and_not_send: PhantomData<(Hw, *const ())>,
+}
+
+impl<Hw: Hardware> WorkQueue<Hw> {
+    pub fn new() -> Self {
+        Self {
+            runnable_tasks: Box::new(RefCell::new(LinkedList::new(WorkQueueAdapter::new()))),
+            _hw_and_not_send: PhantomData,
+        }
+    }
+
+    pub fn add<T>(&self, handle: JoinHandle<Hw, T>) {
+        handle
+            .task_ref
+            .wq
+            .set(Some(NonNull::from(&*self.runnable_tasks)));
+
+        let task = unsafe { UnsafeRef::from_raw(handle.task_ref.into_raw().as_ptr()) };
+        self.runnable_tasks.borrow_mut().push_back(task);
+    }
+}
+
+impl<Hw: Hardware> Drop for WorkQueue<Hw> {
+    fn drop(&mut self) {
+        let mut n = 0;
+        let mut runnable_tasks = self.runnable_tasks.borrow_mut();
+
+        while let Some(node) = runnable_tasks.pop_front() {
+            let header = unsafe { NonNull::new_unchecked(UnsafeRef::into_raw(node)) };
+            let task = unsafe { TaskRef::from_raw(header) };
+            task.cancel();
+            n += 1;
+        }
+
+        log::warn!("WorkQueue::drop: cancelled {n} tasks");
+    }
+}
+
 /// Async executor, single IV, thread-per-core architecture
 pub struct LocalExecutor<Hw: Hardware> {
     global_ctxt: Hw::GlobalCtxt,
@@ -77,27 +155,28 @@ pub struct LocalExecutor<Hw: Hardware> {
     intx: bool,
 
     // TODO: One IV and SQ/CQ per core (where the admin queue can be managed by the main thread).
-    awaiting_submission: RefCell<HashMap<Hw::SqId, VecDeque<FutIdx>>>,
+    awaiting_submission: RefCell<HashMap<Hw::SqId, VecDeque<TaskRef>>>,
     awaiting_completion:
-        RefCell<HashMap<Hw::CqId, HashMap<Hw::CmdId, (FutIdx, NonNull<Option<Hw::Cqe>>)>>>,
+        RefCell<HashMap<Hw::CqId, HashMap<Hw::CmdId, (TaskRef, NonNull<Option<Hw::Cqe>>)>>>,
 
     pending_submits: RefCell<HashSet<Hw::SqId>>,
 
-    external_event: RefCell<HashMap<EventUserData, (FutIdx, NonNull<EventFlags>)>>,
+    external_event: RefCell<HashMap<EventUserData, (TaskRef, NonNull<EventFlags>)>>,
     next_user_data: Cell<usize>,
 
-    ready_futures: RefCell<VecDeque<FutIdx>>,
-    pending_wakes: RefCell<Vec<FutIdx>>,
-    futures: RefCell<Slab<Pin<Box<dyn Future<Output = ()> + 'static>>>>,
+    ready_queue: RefCell<LinkedList<ReadyAdapter>>,
     is_polling: Cell<bool>,
 }
 
 impl<Hw: Hardware> LocalExecutor<Hw> {
+    /// Subscribe to events produced by `fd`. The event type is specified via `flags`. The function
+    /// returns an [`ExternalEventHandle`] that can be polled for events. When the handle is
+    /// dropped, it unsubscribes from the event.
     pub fn register_external_event(
         &self,
         fd: usize,
         flags: event::EventFlags,
-    ) -> ExternalEventSource<Hw> {
+    ) -> ExternalEventHandle<Hw> {
         let user_data = self.next_user_data.get();
         self.next_user_data.set(user_data.checked_add(1).unwrap());
 
@@ -105,106 +184,89 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
             .subscribe(fd, user_data, flags)
             .expect("failed to subscribe to event");
 
-        ExternalEventSource {
+        ExternalEventHandle {
             flags: event::EventFlags::empty(),
             user_data,
+            fd,
             _not_send_or_unpin: PhantomData,
         }
     }
+
     pub fn current() -> Rc<Self> {
         Hw::current()
     }
+
     pub fn poll(&self) -> usize {
         assert!(!self.is_polling.replace(true));
 
-        let mut finished = 0;
+        let mut polled = 0;
+        let mut ready_queue = self.ready_queue.borrow_mut().take();
 
-        {
-            let mut pending = self.pending_wakes.borrow_mut();
-            if !pending.is_empty() {
-                let mut ready = self.ready_futures.borrow_mut();
-                for idx in pending.drain(..) {
-                    ready.push_back(idx);
-                }
+        while let Some(node) = ready_queue.pop_front() {
+            let header = unsafe { NonNull::new_unchecked(UnsafeRef::into_raw(node)) };
+            let task_ref = unsafe { TaskRef::from_raw(header) };
+
+            if task_ref.is_cancelled() {
+                continue;
             }
+
+            task_ref.poll();
+
+            if let Some(wq) = task_ref.wq.get()
+                && task_ref.is_finished()
+            {
+                let node = {
+                    let mut list = unsafe { wq.as_ref() }.borrow_mut();
+                    unsafe { list.cursor_mut_from_ptr(task_ref.as_ptr()) }
+                        .remove()
+                        .unwrap()
+                };
+                let _ =
+                    unsafe { TaskRef::from_raw(NonNull::new_unchecked(UnsafeRef::into_raw(node))) };
+
+                task_ref.wq.set(None);
+                continue;
+            }
+
+            polled += 1;
         }
 
-        let ready_queue = { std::mem::take(&mut *self.ready_futures.borrow_mut()) };
-
-        for future_idx in ready_queue {
-            let waker = waker::<Hw>(future_idx);
-
-            let dummy_fut: Pin<Box<dyn Future<Output = ()> + 'static>> = Box::pin(async {});
-            let mut task = {
-                let mut futures = self.futures.borrow_mut();
-                if !futures.contains(future_idx) {
-                    continue;
-                }
-                std::mem::replace(&mut futures[future_idx], dummy_fut)
-            };
-            let res = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-                task.as_mut().poll(&mut task::Context::from_waker(&waker))
-            })) {
-                Ok(r) => r,
-                Err(_) => {
-                    log::error!("Task panicked!");
-                    self.futures.borrow_mut().remove(future_idx);
-                    continue;
-                }
-            };
-
-            if res.is_ready() {
-                self.futures.borrow_mut().remove(future_idx);
-                finished += 1;
-            } else {
-                let mut futures = self.futures.borrow_mut();
-                futures[future_idx] = task;
-            }
-        }
         let mut pending_submits = self.pending_submits.borrow_mut();
         for sq_id in pending_submits.drain() {
             Hw::submit(&self.global_ctxt, sq_id);
         }
         self.is_polling.set(false);
 
-        finished
+        polled
     }
 
-    pub fn spawn(&self, fut: impl IntoFuture<Output = ()> + 'static) {
-        let idx = self
-            .futures
-            .borrow_mut()
-            .insert(Box::pin(fut.into_future()));
-        if let Ok(mut ready) = self.ready_futures.try_borrow_mut() {
-            ready.push_back(idx);
-        } else {
-            self.pending_wakes.borrow_mut().push(idx);
+    pub fn spawn<F>(&self, fut: F) -> JoinHandle<Hw, F::Output>
+    where
+        F: Future + 'static,
+        F::Output: 'static,
+    {
+        let task = Task::<Hw, F>::alloc(fut);
+        let task_for_handle = task.clone();
+
+        enqueue::<Hw>(task);
+
+        JoinHandle {
+            task_ref: task_for_handle,
+            _phantom: PhantomData,
         }
     }
 
-    pub fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
+    pub fn block_on<F>(&self, fut: F) -> F::Output
+    where
+        F: Future,
+    {
         let retval = Rc::new(RefCell::new(None));
-
         let retval2 = Rc::clone(&retval);
 
-        let idx = self.futures.borrow_mut().insert({
-            let t1: Pin<Box<dyn Future<Output = ()> + 'a>> = Box::pin(async move {
-                *retval2.borrow_mut() = Some(fut.await);
-            });
-            // SAFETY: Apart from the lifetimes, the types are exactly the same. We also know
-            // block_on simply cannot return without having fully awaited and dropped the future,
-            // even if that future panics (cf. the catch_unwind invocation).
-            let t2: Pin<Box<dyn Future<Output = ()> + 'static>> =
-                unsafe { std::mem::transmute(t1) };
-
-            t2
+        let task = Task::<Hw, _>::alloc(async move {
+            *retval2.borrow_mut() = Some(fut.await);
         });
-
-        if let Ok(mut ready) = self.ready_futures.try_borrow_mut() {
-            ready.push_front(idx);
-        } else {
-            self.pending_wakes.borrow_mut().insert(0, idx);
-        }
+        enqueue::<Hw>(task);
 
         loop {
             let finished = self.poll();
@@ -212,10 +274,7 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
                 break;
             }
 
-            if finished == 0
-                && self.ready_futures.borrow().is_empty()
-                && self.pending_wakes.borrow().is_empty()
-            {
+            if finished == 0 && self.ready_queue.borrow().is_empty() {
                 if self.poll_cqes() != 0 {
                     continue;
                 }
@@ -231,8 +290,7 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
         let event = self.queue.next_event().expect("failed to get next event");
 
         if event.user_data != 0 {
-            let Some((fut_idx, flags_ptr)) =
-                self.external_event.borrow_mut().remove(&event.user_data)
+            let Some((task, flags_ptr)) = self.external_event.borrow_mut().remove(&event.user_data)
             else {
                 // Spurious event
                 return;
@@ -242,11 +300,8 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
                     .as_ptr()
                     .write(event::EventFlags::from_bits_retain(event.flags));
             }
-            if let Ok(mut ready) = self.ready_futures.try_borrow_mut() {
-                ready.push_back(fut_idx);
-            } else {
-                self.pending_wakes.borrow_mut().push(fut_idx);
-            }
+
+            enqueue::<Hw>(task);
             return;
         }
 
@@ -277,7 +332,7 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
         let mut to_wake = Vec::new();
 
         Hw::poll_cqes(&self.global_ctxt, |cq_id, cqe| {
-            if let Some((fut_idx, comp_ptr)) = self
+            if let Some((task, comp_ptr)) = self
                 .awaiting_completion
                 .borrow_mut()
                 .get_mut(&cq_id)
@@ -286,7 +341,7 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
                 unsafe {
                     comp_ptr.as_ptr().write(Some(cqe));
                 }
-                to_wake.push(fut_idx);
+                to_wake.push(task);
 
                 if let Some(submitting) = self
                     .awaiting_submission
@@ -301,17 +356,8 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
 
         let woken = to_wake.len();
 
-        if !to_wake.is_empty() {
-            if let Ok(mut ready) = self.ready_futures.try_borrow_mut() {
-                for idx in to_wake {
-                    ready.push_back(idx);
-                }
-            } else {
-                let mut pending = self.pending_wakes.borrow_mut();
-                for idx in to_wake {
-                    pending.push(idx);
-                }
-            }
+        for task in to_wake {
+            enqueue::<Hw>(task);
         }
 
         woken
@@ -322,7 +368,11 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
         I: FnMut(Hw::CmdId) -> Hw::Sqe,
     {
         CqeFuture::<Hw, I> {
-            state: State::Submitting { sq_id, cmd_init },
+            state: State::Submitting {
+                sq_id,
+                cmd_init,
+                awaiting_submission_task: None,
+            },
             comp: None,
             _not_send: PhantomData,
         }
@@ -330,48 +380,40 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
     }
 }
 
-struct CqeFuture<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> {
-    pub state: State<Hw, I>,
-    pub comp: Option<Hw::Cqe>,
-    pub _not_send: PhantomData<*const ()>,
-}
-
 enum State<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> {
-    Submitting { sq_id: Hw::SqId, cmd_init: I },
-    Completing { cq_id: Hw::CqId, cmd_id: Hw::CmdId },
+    Submitting {
+        sq_id: Hw::SqId,
+        cmd_init: I,
+        awaiting_submission_task: Option<TaskRef>,
+    },
+    Completing {
+        cq_id: Hw::CqId,
+        cmd_id: Hw::CmdId,
+    },
+    Done,
 }
 
-fn current_executor_and_idx<Hw: Hardware>(
-    cx: &mut task::Context<'_>,
-) -> (Rc<LocalExecutor<Hw>>, FutIdx) {
-    let executor = LocalExecutor::current();
-
-    let idx = cx.waker().data() as FutIdx;
-    assert_eq!(
-        cx.waker().vtable() as *const _,
-        Hw::vtable(),
-        "incompatible executor for CqeFuture"
-    );
-
-    (executor, idx)
+struct CqeFuture<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> {
+    state: State<Hw, I>,
+    comp: Option<Hw::Cqe>,
+    _not_send: PhantomData<*const ()>,
 }
 
 impl<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> Future for CqeFuture<Hw, I> {
     type Output = Hw::Cqe;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
 
-        let (executor, idx) = current_executor_and_idx::<Hw>(cx);
+        let (executor, task) = current_executor_and_task::<Hw>(cx);
 
         match this.state {
             State::Submitting {
                 sq_id,
                 ref mut cmd_init,
+                ref mut awaiting_submission_task,
             } => {
-                let mut awaiting = executor.awaiting_submission.borrow_mut();
-
-                if let Some((cq_id, cmd_id)) = Hw::push_sqe(
+                let submitted = Hw::push_sqe(
                     &executor.global_ctxt,
                     sq_id,
                     |cmd_id| {
@@ -380,22 +422,35 @@ impl<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> Future for CqeFuture<Hw, I> {
                         cmd
                     },
                     || {
-                        awaiting.entry(sq_id).or_default().push_back(idx);
+                        executor
+                            .awaiting_submission
+                            .borrow_mut()
+                            .entry(sq_id)
+                            .or_default()
+                            .push_back(task.clone());
                     },
-                ) {
+                );
+
+                if let Some((cq_id, cmd_id)) = submitted {
                     executor.pending_submits.borrow_mut().insert(sq_id);
                     executor
                         .awaiting_completion
                         .borrow_mut()
                         .entry(cq_id)
                         .or_default()
-                        .insert(cmd_id, (idx, (&mut this.comp).into()));
+                        .insert(cmd_id, (task, (&mut this.comp).into()));
                     this.state = State::Completing { cq_id, cmd_id };
+                } else {
+                    *awaiting_submission_task = Some(task);
                 }
-                task::Poll::Pending
+                Poll::Pending
             }
+
             State::Completing { cq_id, cmd_id } => match this.comp.take() {
-                Some(comp) => task::Poll::Ready(comp),
+                Some(comp) => {
+                    this.state = State::Done;
+                    Poll::Ready(comp)
+                }
 
                 // Shouldn't technically be possible
                 None => {
@@ -405,63 +460,82 @@ impl<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> Future for CqeFuture<Hw, I> {
                         .borrow_mut()
                         .entry(cq_id)
                         .or_default()
-                        .insert(cmd_id, (idx, (&mut this.comp).into()));
-                    task::Poll::Pending
+                        .insert(cmd_id, (task, (&mut this.comp).into()));
+                    Poll::Pending
                 }
             },
+
+            State::Done => unreachable!("`CqeFuture` polled after completion"),
         }
     }
 }
 
-unsafe fn vt_clone<Hw: Hardware>(idx: *const ()) -> task::RawWaker {
-    task::RawWaker::new(idx, Hw::vtable())
-}
-unsafe fn vt_drop(_idx: *const ()) {}
-unsafe fn vt_wake<Hw: Hardware>(idx: *const ()) {
-    let exec = Hw::current();
-    if let Ok(mut ready) = exec.ready_futures.try_borrow_mut() {
-        ready.push_back(idx as FutIdx);
-    } else {
-        exec.pending_wakes.borrow_mut().push(idx as FutIdx);
-    };
+impl<Hw: Hardware, I: FnMut(Hw::CmdId) -> Hw::Sqe> Drop for CqeFuture<Hw, I> {
+    fn drop(&mut self) {
+        let executor = LocalExecutor::<Hw>::current();
+
+        match self.state {
+            State::Submitting {
+                sq_id,
+                ref awaiting_submission_task,
+                ..
+            } => {
+                if let Some(awaiting_submission_task) = awaiting_submission_task
+                    && let Some(queue) = executor.awaiting_submission.borrow_mut().get_mut(&sq_id)
+                {
+                    queue.retain(|task| task.as_ptr() != awaiting_submission_task.as_ptr());
+                }
+            }
+
+            State::Completing { cq_id, cmd_id } => {
+                if let Some(cq) = executor.awaiting_completion.borrow_mut().get_mut(&cq_id) {
+                    let _ = cq.remove(&cmd_id);
+                }
+            }
+
+            State::Done => {}
+        }
+    }
 }
 
-fn waker<Hw: Hardware>(idx: FutIdx) -> task::Waker {
-    unsafe { task::Waker::from_raw(task::RawWaker::new(idx as *const (), Hw::vtable())) }
-}
-pub const fn vtable<Hw: Hardware>() -> task::RawWakerVTable {
-    task::RawWakerVTable::new(vt_clone::<Hw>, vt_wake::<Hw>, vt_wake::<Hw>, vt_drop)
-}
-
-pub struct ExternalEventSource<Hw: Hardware> {
-    flags: event::EventFlags,
-    user_data: EventUserData,
-    _not_send_or_unpin: PhantomData<(*const (), fn() -> Hw)>,
-}
 pub struct Event {
     flags: event::EventFlags,
     _not_send: PhantomData<*const ()>,
 }
+
 impl Event {
     pub fn flags(&self) -> event::EventFlags {
         self.flags
     }
 }
-impl<Hw: Hardware> ExternalEventSource<Hw> {
-    fn poll_next(self: Pin<&mut Self>, cx: &mut task::Context) -> task::Poll<Option<Event>> {
+
+pub struct ExternalEventHandle<Hw: Hardware> {
+    flags: event::EventFlags,
+    fd: usize,
+    user_data: EventUserData,
+    _not_send_or_unpin: PhantomData<(*const (), fn() -> Hw)>,
+}
+
+impl<Hw: Hardware> ExternalEventHandle<Hw> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Event>> {
         let this = unsafe { self.get_unchecked_mut() };
 
         let flags = std::mem::take(&mut this.flags);
 
         if flags.is_empty() {
-            let (executor, idx) = current_executor_and_idx::<Hw>(cx);
-            executor
+            let (executor, task) = current_executor_and_task::<Hw>(cx);
+            // NOTE: [`LocalExecutor::register_external_event`] returns a unique
+            // [`ExternalEventHandle`] every time. If an entry in the `external_event` list already
+            // exists, then this was a spurious poll.
+            let _ = executor
                 .external_event
                 .borrow_mut()
-                .insert(this.user_data, (idx, (&mut this.flags).into()));
-            return task::Poll::Pending;
+                .insert(this.user_data, (task, (&mut this.flags).into()));
+
+            return Poll::Pending;
         }
-        task::Poll::Ready(Some(Event {
+
+        Poll::Ready(Some(Event {
             flags,
             _not_send: PhantomData,
         }))
@@ -470,6 +544,18 @@ impl<Hw: Hardware> ExternalEventSource<Hw> {
         core::future::poll_fn(|cx| self.as_mut().poll_next(cx)).await
     }
 }
+
+impl<Hw: Hardware> Drop for ExternalEventHandle<Hw> {
+    fn drop(&mut self) {
+        let executor = LocalExecutor::<Hw>::current();
+        let _pending = executor.external_event.borrow_mut().remove(&self.user_data);
+        let fd = self.fd;
+        if let Err(err) = executor.queue.unsubscribe(fd) {
+            log::error!("failed to unsubscribe from external events produced by fd {fd}: {err}");
+        }
+    }
+}
+
 pub fn init_raw<Hw: Hardware>(
     global_ctxt: Hw::GlobalCtxt,
     vector: Hw::Iv,
@@ -496,10 +582,8 @@ pub fn init_raw<Hw: Hardware>(
         pending_submits: RefCell::new(HashSet::new()),
         external_event: RefCell::new(HashMap::new()),
         next_user_data: Cell::new(1),
-        ready_futures: RefCell::new(VecDeque::new()),
-        pending_wakes: RefCell::new(Vec::new()),
-        futures: RefCell::new(Slab::with_capacity(16)),
         is_polling: Cell::new(false),
+        ready_queue: RefCell::new(LinkedList::new(ReadyAdapter::new())),
     }
 }
 
@@ -526,7 +610,7 @@ impl Hardware for DummyHw {
     fn current() -> Rc<LocalExecutor<Self>> {
         THE_DUMMY_EXECUTOR.with(|exec| Rc::clone(exec.borrow().as_ref().unwrap()))
     }
-    fn vtable() -> &'static task::RawWakerVTable {
+    fn vtable() -> &'static RawWakerVTable {
         &DUMMY_VTABLE
     }
 
@@ -565,10 +649,8 @@ pub fn init_trivial() -> Rc<TrivialExecutor> {
         pending_submits: RefCell::new(HashSet::new()),
         external_event: RefCell::new(HashMap::new()),
         next_user_data: Cell::new(1),
-        ready_futures: RefCell::new(VecDeque::new()),
-        pending_wakes: RefCell::new(Vec::new()),
-        futures: RefCell::new(Slab::with_capacity(16)),
         is_polling: Cell::new(false),
+        ready_queue: RefCell::new(LinkedList::new(ReadyAdapter::new())),
     });
 
     // We mem::forget the irq_handle inside the closure so it doesn't try to close stdout
