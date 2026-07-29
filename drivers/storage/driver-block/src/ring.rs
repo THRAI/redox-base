@@ -942,6 +942,7 @@ async fn ring_worker_task<Hw: Hardware, D: Disk + Clone + 'static>(
         executor.register_external_event(pipe_fd.raw(), EventFlags::READ),
     ));
     let wq = WorkQueue::<Hw>::new();
+    let mut tmp_buf = [0; 1];
 
     loop {
         let mut spun = false;
@@ -1011,6 +1012,14 @@ async fn ring_worker_task<Hw: Hardware, D: Disk + Clone + 'static>(
         }
 
         if let Ok(req) = sq.inner.inner.pop_async(&source, None).await {
+            // TODO: A write to the pipe is only done when the waiting bit is set in the ring
+            // header. So, reading once from the pipe per wakeup should be okay for now. This can't
+            // be avoided as eventually the pipe's buffer will fill up and any writes to the pipe
+            // from the producer will block indefinitely. We probably want to use some other event
+            // mechanism here in the future. `futex` (which is the default notification mechanism if
+            // a waiter is unspecified) is not feasible here as that would block the whole process
+            // and not just the current async task.
+            let _ = pipe_fd.read(&mut tmp_buf);
             queue.push(req);
         }
     }
