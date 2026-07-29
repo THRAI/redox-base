@@ -19,5 +19,7 @@ redox-scheme.workspace = true
 scheme-utils = { path = "../../../scheme-utils" }
 redox-rings.workspace = true
 
+zerocopy = "0.8.55"
+
 [lints]
 workspace = true

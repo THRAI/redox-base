@@ -109,10 +109,6 @@ pub trait Disk {
     ) -> syscall::Result<()> {
         Err(Error::new(EOPNOTSUPP))
     }
-
-    fn allocate_dma_pool(&mut self, _size: usize) -> syscall::Result<*mut u8> {
-        Err(syscall::Error::new(EOPNOTSUPP))
-    }
 }
 
 impl<T: Disk + ?Sized> Disk for Box<T> {
@@ -130,10 +126,6 @@ impl<T: Disk + ?Sized> Disk for Box<T> {
 
     async fn write(&mut self, block: u64, buffer: &[u8]) -> syscall::Result<usize> {
         (**self).write(block, buffer).await
-    }
-
-    fn allocate_dma_pool(&mut self, size: usize) -> syscall::Result<*mut u8> {
-        (**self).allocate_dma_pool(size)
     }
 }
 

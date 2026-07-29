@@ -5,13 +5,17 @@ use std::rc::Rc;
 
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use common::dma::Dma;
 use event::EventFlags;
 use executor::{yield_now, Hardware, JoinHandle, LocalExecutor, WorkQueue};
 use libredox::{flag, Fd};
-use partitionlib::{LogicalBlockSize, PartitionTable};
+use partitionlib::LogicalBlockSize;
+use redox_rings::op::{
+    DiskOpCqe, DiskOpKind, DiskOpSqe, RingCallVerb, RingSetupFlags, RingSetupParams,
+    RING_MAX_CQ_ENTRIES, RING_MAX_SQ_ENTRIES,
+};
 use redox_rings::raw::RingPushError;
 use redox_rings::sync::{BlockingConsumer, BlockingProducer, FutexWaitResult, WaitNotifyAsync};
 use redox_scheme::scheme::{register_scheme_inner, SchemeAsync, SchemeState};
@@ -23,53 +27,13 @@ use syscall::dirent::DirentBuf;
 use syscall::schemev2::NewFdFlags;
 use syscall::{
     Error, FmoveFdFlags, Result, Stat, TimeSpec, EACCES, EAGAIN, EBADF, EINTR, EINVAL, EISDIR,
-    ENOENT, ENOLCK, EOPNOTSUPP, EOVERFLOW, EPROTO, EWOULDBLOCK, MODE_DIR, MODE_FILE, O_DIRECTORY,
-    O_STAT,
+    ENOENT, ENOLCK, EOPNOTSUPP, EOVERFLOW, EWOULDBLOCK, MODE_DIR, MODE_FILE, O_DIRECTORY, O_STAT,
 };
+use zerocopy::TryFromBytes;
 
 use crate::{EventSource, PhysAddr};
 
 use super::Disk;
-
-// FIXME: move into `redox_rings`
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum DiskOpcode {
-    Read = 0,
-    Write = 1,
-}
-
-impl DiskOpcode {
-    pub fn try_from_raw(raw: u8) -> Option<Self> {
-        Some(match raw {
-            0 => Self::Read,
-            1 => Self::Write,
-            _ => return None,
-        })
-    }
-}
-
-// FIXME: move into `redox_rings`
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct DiskOpSqe {
-    pub block: u64,
-    pub id: u64,
-    pub buf_offset: u32,
-    pub buf_len: u32,
-    pub opcode: u8, // 0 = Read, 1 = Write
-    pub pad: [u8; 7],
-}
-
-// FIXME: move into `redox_rings`
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct DiskOpCqe {
-    pub id: u64,
-    pub count: u32,
-    pub status: u16, // 0 = Success
-    pub pad: u16,
-}
 
 struct RingEventSource<Ev: EventSource>(Mutex<Ev>);
 
@@ -101,9 +65,15 @@ impl<Ev: EventSource> WaitNotifyAsync for RingEventSource<Ev> {
 }
 
 #[derive(Clone)]
+struct PartitionTable {
+    partitions: Vec<Rc<partitionlib::Partition>>,
+    kind: partitionlib::PartitionTableKind,
+}
+
+#[derive(Clone)]
 pub struct RingDiskWrapper<T> {
     pub disk: T,
-    pub pt: Option<Rc<PartitionTable>>,
+    pub pt: Option<PartitionTable>,
 }
 
 impl<T: Disk> RingDiskWrapper<T> {
@@ -162,7 +132,7 @@ impl<T: Disk> RingDiskWrapper<T> {
             }
         }
 
-        partitionlib::get_partitions(
+        let table = partitionlib::get_partitions(
             &mut Device {
                 disk,
                 offset: 0,
@@ -171,12 +141,17 @@ impl<T: Disk> RingDiskWrapper<T> {
             bs,
         )
         .ok()
-        .flatten()
+        .flatten()?;
+
+        Some(PartitionTable {
+            partitions: table.partitions.into_iter().map(Rc::new).collect(),
+            kind: table.kind,
+        })
     }
 
     pub fn new<Hw: Hardware>(mut disk: T, executor: &Rc<LocalExecutor<Hw>>) -> Self {
         Self {
-            pt: Self::pt(&mut disk, executor).map(Rc::new),
+            pt: Self::pt(&mut disk, executor),
             disk,
         }
     }
@@ -189,10 +164,6 @@ impl<T: Disk> RingDiskWrapper<T> {
         &mut self.disk
     }
 
-    pub fn allocate_dma_pool(&mut self, size: usize) -> syscall::Result<*mut u8> {
-        self.disk.allocate_dma_pool(size)
-    }
-
     pub fn block_size(&self) -> u32 {
         self.disk.block_size()
     }
@@ -203,18 +174,12 @@ impl<T: Disk> RingDiskWrapper<T> {
 
     pub async fn read_dma(
         &mut self,
-        part_num: Option<usize>,
+        partition: Option<&partitionlib::Partition>,
         start_lba: u64,
         phys_addr: PhysAddr,
         num_sectors: u32,
     ) -> syscall::Result<()> {
-        if let Some(pt) = part_num {
-            let partition_table = self.pt.as_ref().ok_or(Error::new(EBADF))?;
-            let partition = partition_table
-                .partitions
-                .get(pt)
-                .ok_or(Error::new(EBADF))?;
-
+        if let Some(partition) = partition {
             let end_lba = start_lba + num_sectors as u64;
             if end_lba > partition.size {
                 return Err(Error::new(EOVERFLOW));
@@ -229,18 +194,12 @@ impl<T: Disk> RingDiskWrapper<T> {
 
     pub async fn write_dma(
         &mut self,
-        part_num: Option<usize>,
+        partition: Option<&partitionlib::Partition>,
         start_lba: u64,
         phys_addr: PhysAddr,
         num_sectors: u32,
     ) -> syscall::Result<()> {
-        if let Some(pt) = part_num {
-            let partition_table = self.pt.as_ref().ok_or(Error::new(EBADF))?;
-            let partition = partition_table
-                .partitions
-                .get(pt)
-                .ok_or(Error::new(EBADF))?;
-
+        if let Some(partition) = partition {
             let end_lba = start_lba + num_sectors as u64;
             if end_lba > partition.size {
                 return Err(Error::new(EOVERFLOW));
@@ -318,23 +277,29 @@ impl<T: Disk> RingDiskWrapper<T> {
     }
 }
 
-enum RingHandle<Hw: Hardware> {
-    List(Vec<u8>), // entries
-    Disk {
-        num: u32,
-        pt: Option<usize>,
-    },
-    Ring {
-        num: u32,
-        pt: Option<usize>,
-        ring_fds: [usize; 3],
+struct RingResource<D: Disk> {
+    disk: RingDiskWrapper<D>,
+    partition: Option<Rc<partitionlib::Partition>>,
+}
+
+enum RingState<Hw: Hardware, D: Disk> {
+    Inactive,
+    Active {
+        ring_fds: [usize; 3], // (sq_fd, cq_fd, pipe_fd)
+        fixed_ftbl: Rc<RwLock<Vec<RingResource<D>>>>,
         shm: Dma<[u8]>,
         join_handle: JoinHandle<Hw, ()>,
     },
+}
+
+enum Handle<Hw: Hardware, D: Disk> {
+    List(Vec<u8>), // entries
+    Disk { num: u32, pt: Option<usize> },
+    Ring(RingState<Hw, D>),
     SchemeRoot,
 }
 
-pub struct RingDiskScheme<T, Hw: Hardware> {
+pub struct RingDiskScheme<T: Disk, Hw: Hardware> {
     inner: RingDiskSchemeInner<T, Hw>,
     state: SchemeState,
 }
@@ -348,7 +313,7 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> RingDiskScheme<T, Hw> {
     ) -> Self {
         assert!(scheme_name.starts_with("disk"));
         let socket = Socket::nonblock().expect("failed to create disk scheme");
-        let shm_dir_name = format!("/scheme/shm/{}", scheme_name);
+        let shm_dir_name = format!("/scheme/shm/{scheme_name}");
 
         let mut inner = RingDiskSchemeInner {
             scheme_name,
@@ -438,11 +403,11 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> RingDiskScheme<T, Hw> {
     }
 }
 
-struct RingDiskSchemeInner<T, Hw: Hardware> {
+struct RingDiskSchemeInner<T: Disk, Hw: Hardware> {
     scheme_name: String,
     socket: Socket,
     disks: BTreeMap<u32, RingDiskWrapper<T>>,
-    handles: HandleMap<RingHandle<Hw>>,
+    handles: HandleMap<Handle<Hw, T>>,
     executor: Rc<LocalExecutor<Hw>>,
     shm_dir: Fd,
     pipe_root: Fd,
@@ -452,29 +417,26 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> RingDiskSchemeInner<T, Hw> {
     // Checks if any conflicting handles already exist
     fn check_locks(&self, disk_i: u32, part_i_opt: Option<usize>) -> Result<()> {
         for (_, handle) in self.handles.iter() {
-            match handle {
-                RingHandle::Disk { num, pt, .. } | RingHandle::Ring { num, pt, .. } => {
-                    let i = *num;
-                    if let Some(p) = *pt {
-                        if disk_i == i {
-                            match part_i_opt {
-                                Some(part_i) => {
-                                    if part_i == p {
-                                        return Err(Error::new(ENOLCK));
-                                    }
-                                }
-                                None => {
-                                    return Err(Error::new(ENOLCK));
-                                }
+            let Handle::Disk { num, pt } = handle else {
+                continue;
+            };
+
+            let i = *num;
+            if let Some(p) = pt {
+                if disk_i == i {
+                    match part_i_opt {
+                        Some(part_i) => {
+                            if part_i == *p {
+                                return Err(Error::new(ENOLCK));
                             }
                         }
-                    } else {
-                        if disk_i == i {
+                        None => {
                             return Err(Error::new(ENOLCK));
                         }
                     }
                 }
-                _ => (),
+            } else if disk_i == i {
+                return Err(Error::new(ENOLCK));
             }
         }
         Ok(())
@@ -487,7 +449,7 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> RingDiskSchemeInner<T, Hw> {
 
         println!("removing handle: id: {id}");
         match handle {
-            RingHandle::Ring { join_handle, .. } => {
+            Handle::Ring(RingState::Active { join_handle, .. }) => {
                 join_handle.abort();
             }
 
@@ -495,137 +457,26 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> RingDiskSchemeInner<T, Hw> {
         }
     }
 
-    fn setup_uring_worker(
-        &mut self,
-        num: u32,
-        pt: Option<usize>,
-        disk: RingDiskWrapper<T>,
-    ) -> Result<RingHandle<Hw>> {
-        let number_str = if let Some(part_num) = pt {
-            format!("{}p{}", num, part_num)
-        } else {
-            format!("{}", num)
-        };
-        let sq_path = format!("{}.sq", number_str);
-        let cq_path = format!("{}.cq", number_str);
-
-        let shm = unsafe { Dma::<[u8]>::zeroed_slice(POOL_SIZE)?.assume_init() };
-        let shm_base = PhysAddr(shm.physical());
-
-        let pipe = self.pipe_root.openat("", flag::O_CLOEXEC, 0)?;
-
-        let sq_fd =
-            self.shm_dir
-                .openat(&sq_path, flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC, 0)?;
-
-        let cq_fd =
-            self.shm_dir
-                .openat(&cq_path, flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC, 0)?;
-
-        let ring_fds = [sq_fd.raw(), cq_fd.raw(), pipe.raw()];
-
-        let mut sq = BlockingConsumer::<DiskOpSqe>::from_fd(sq_fd, true, Some(RING_SIZE))?;
-        let cq = BlockingProducer::<DiskOpCqe>::from_fd(cq_fd, true, Some(RING_SIZE))?;
-
-        const BATCH_LIMIT: usize = 128;
-
-        let exec_for_task = self.executor.clone();
-        let join_handle = self.executor.spawn(async move {
-            let mut queue: Vec<DiskOpSqe> = Vec::with_capacity(BATCH_LIMIT);
-            let cq = Rc::new(Mutex::new(cq));
-            let source = RingEventSource(Mutex::new(
-                exec_for_task.register_external_event(pipe.raw(), EventFlags::READ),
-            ));
-            let wq = WorkQueue::<Hw>::new();
-
-            loop {
-                let mut spun = false;
-
-                for _ in 0..100 {
-                    match sq.try_pop() {
-                        Ok(req) => {
-                            queue.push(req);
-                            while queue.len() < BATCH_LIMIT {
-                                match sq.try_pop() {
-                                    Ok(req) => queue.push(req),
-                                    Err(_) => break,
-                                }
-                            }
-                            spun = true;
-                            break;
-                        }
-                        Err(redox_rings::raw::RingPopError::Empty) => {
-                            std::hint::spin_loop();
-                        }
-                        Err(e) => {
-                            log::error!("Failed to pop Sqe with error: {:?}", e);
-                            spun = true;
-                            break;
-                        }
-                    }
-                }
-
-                for req in queue.drain(..) {
-                    let disk = disk.clone();
-                    let cq = Rc::clone(&cq);
-                    let mut worker = DiskWorker {
-                        cq,
-                        disk,
-                        pt,
-                        shm_base,
-                    };
-
-                    let handle = exec_for_task.spawn(async move {
-                        worker.handle_request(req).await.unwrap();
-                    });
-
-                    wq.add(handle);
-                }
-
-                if spun {
-                    continue;
-                }
-
-                if let Ok(req) = sq.inner.inner.pop_async(&source, None).await {
-                    queue.push(req);
-                }
-            }
-        });
-
-        Ok(RingHandle::Ring {
-            num,
-            pt,
-            ring_fds,
-            shm,
-            join_handle,
-        })
-    }
-
     fn on_recvfd(&mut self, recvfd_request: &RecvFdRequest) -> Result<OpenResult> {
         let id = recvfd_request.id();
         let handle = self.handles.get(id)?;
-        match handle {
-            RingHandle::Ring { ring_fds, .. } => {
-                if let Err(e) = recvfd_request.move_fd(&self.socket, FmoveFdFlags::CLONE, ring_fds)
-                {
-                    log::error!("recvfd_inner: move_fd failed with error: {:?}", e);
-                    return Err(Error::new(EPROTO));
-                }
 
-                Ok(OpenResult::OtherSchemeMultiple {
-                    num_fds: recvfd_request.num_fds(),
-                })
-            }
-            RingHandle::SchemeRoot | RingHandle::List(_) | RingHandle::Disk { .. } => {
-                Err(Error::new(EBADF))
-            }
-        }
+        let Handle::Ring(RingState::Active { ring_fds, .. }) = handle else {
+            return Err(Error::new(EINVAL));
+        };
+
+        recvfd_request.move_fd(&self.socket, FmoveFdFlags::CLONE, ring_fds.as_slice())?;
+
+        Ok(OpenResult::OtherSchemeMultiple {
+            // TODO: This field seems to be unused in the kernel. Can it be removed?
+            num_fds: recvfd_request.num_fds(),
+        })
     }
 }
 
 impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInner<T, Hw> {
     fn scheme_root(&mut self) -> Result<usize> {
-        Ok(self.handles.insert(RingHandle::SchemeRoot))
+        Ok(self.handles.insert(Handle::SchemeRoot))
     }
 
     async fn openat(
@@ -636,100 +487,248 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
         _fcntl_flags: u32,
         ctx: &CallerCtx,
     ) -> Result<OpenResult> {
-        let handle = match self.handles.get(dirfd)? {
-            RingHandle::SchemeRoot => {
-                if ctx.uid != 0 {
-                    return Err(Error::new(EACCES));
+        if !matches!(self.handles.get(dirfd)?, Handle::SchemeRoot) {
+            return Err(Error::new(EACCES));
+        }
+
+        if ctx.uid != 0 {
+            return Err(Error::new(EACCES));
+        }
+
+        let path_str = path_str.trim_matches('/');
+
+        let handle = if path_str.is_empty() {
+            if flags & O_DIRECTORY == 0 && flags & O_STAT == 0 {
+                return Err(Error::new(EISDIR));
+            }
+
+            let mut list = String::new();
+
+            for (nsid, disk) in self.disks.iter() {
+                writeln!(list, "{nsid}").unwrap();
+
+                if disk.pt.is_none() {
+                    continue;
                 }
-                let path_str = path_str.trim_matches('/');
-
-                if path_str.is_empty() {
-                    if flags & O_DIRECTORY == O_DIRECTORY || flags & O_STAT == O_STAT {
-                        let mut list = String::new();
-
-                        for (nsid, disk) in self.disks.iter() {
-                            write!(list, "{}\n", nsid).unwrap();
-
-                            if disk.pt.is_none() {
-                                continue;
-                            }
-                            for part_num in 0..disk.pt.as_ref().unwrap().partitions.len() {
-                                write!(list, "{}p{}\n", nsid, part_num).unwrap();
-                            }
-                        }
-
-                        RingHandle::List(list.into_bytes())
-                    } else {
-                        return Err(Error::new(EISDIR));
-                    }
-                } else {
-                    let is_ring_req = path_str.ends_with("/ring");
-                    let target_path = if is_ring_req {
-                        path_str.trim_end_matches("/ring")
-                    } else {
-                        path_str
-                    };
-                    let (nsid, part_num_opt) = if let Some(p_pos) =
-                        target_path.chars().position(|c| c == 'p')
-                    {
-                        let nsid_str = &target_path[..p_pos];
-
-                        if p_pos + 1 >= target_path.len() {
-                            return Err(Error::new(ENOENT));
-                        }
-                        let part_num_str = &target_path[p_pos + 1..];
-
-                        let nsid = nsid_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
-                        let part_num = part_num_str.parse::<usize>().or(Err(Error::new(ENOENT)))?;
-
-                        let disk = self.disks.get(&nsid).ok_or(Error::new(ENOENT))?;
-
-                        if disk
-                            .pt
-                            .as_ref()
-                            .ok_or(Error::new(ENOENT))?
-                            .partitions
-                            .get(part_num)
-                            .is_some()
-                        {
-                            self.check_locks(nsid, Some(part_num))?;
-                        }
-                        (nsid, Some(part_num))
-                    } else {
-                        let nsid = target_path.parse::<u32>().or(Err(Error::new(ENOENT)))?;
-                        self.check_locks(nsid, None)?;
-
-                        if !self.disks.contains_key(&nsid) {
-                            return Err(Error::new(ENOENT));
-                        }
-
-                        (nsid, None)
-                    };
-
-                    if is_ring_req {
-                        let disk_wrapper = self.disks.get(&nsid).unwrap().clone();
-                        self.setup_uring_worker(nsid, part_num_opt, disk_wrapper)?
-                    } else {
-                        RingHandle::Disk {
-                            num: nsid,
-                            pt: part_num_opt,
-                        }
-                    }
+                for part_num in 0..disk.pt.as_ref().unwrap().partitions.len() {
+                    writeln!(list, "{nsid}p{part_num}").unwrap();
                 }
             }
-            &RingHandle::Disk { num, pt } => {
-                let disk_wrapper = self.disks.get(&num).unwrap().clone();
-                self.setup_uring_worker(num, pt, disk_wrapper)?
-            }
-            _ => return Err(Error::new(EACCES)),
+
+            Handle::List(list.into_bytes())
+        } else {
+            let (nsid, pt) = if let Some(p_pos) = path_str.chars().position(|c| c == 'p') {
+                let nsid_str = &path_str[..p_pos];
+
+                if p_pos + 1 >= path_str.len() {
+                    return Err(Error::new(ENOENT));
+                }
+                let part_num_str = &path_str[p_pos + 1..];
+
+                let nsid = nsid_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
+                let part_num = part_num_str.parse::<usize>().or(Err(Error::new(ENOENT)))?;
+
+                let disk = self.disks.get(&nsid).ok_or(Error::new(ENOENT))?;
+                let partition_table = disk.pt.as_ref().ok_or(Error::new(ENOENT))?;
+                let _partition = partition_table
+                    .partitions
+                    .get(part_num as usize)
+                    .ok_or(Error::new(ENOENT))?;
+
+                (nsid, Some(part_num))
+            } else {
+                let nsid = path_str.parse::<u32>().or(Err(Error::new(ENOENT)))?;
+                if !self.disks.contains_key(&nsid) {
+                    return Err(Error::new(ENOENT));
+                }
+
+                self.check_locks(nsid, None)?;
+                (nsid, None)
+            };
+
+            Handle::Disk { num: nsid, pt }
         };
 
         let id = self.handles.insert(handle);
-        println!("path: {}, id: {}", path_str, id);
         Ok(OpenResult::ThisScheme {
             number: id,
             flags: NewFdFlags::POSITIONED,
         })
+    }
+
+    async fn dup(&mut self, _old_id: usize, buf: &[u8], _ctx: &CallerCtx) -> Result<OpenResult> {
+        if buf == b"uring" {
+            // TODO: should we only support this on the root handle?
+            //
+            // let handle = self.handles.get(old_id)?;
+            //
+            // if !matches!(handle, Handle::SchemeRoot) {
+            //     return Err(Error::new(EOPNOTSUPP));
+            // }
+
+            let new_id = self.handles.insert(Handle::Ring(RingState::Inactive));
+            Ok(OpenResult::ThisScheme {
+                number: new_id,
+                flags: NewFdFlags::empty(),
+            })
+        } else {
+            Err(Error::new(EOPNOTSUPP))
+        }
+    }
+
+    async fn call(
+        &mut self,
+        id: usize,
+        payload: &mut [u8],
+        metadata: &[u64],
+        _ctx: &CallerCtx, // Only pid and id are correct here, uid/gid are not used
+    ) -> Result<usize> {
+        let Handle::Ring(ref mut state) = self.handles.get_mut(id)? else {
+            return Err(Error::new(EOPNOTSUPP));
+        };
+
+        let verb = RingCallVerb::try_from_raw(metadata[0] as u8).ok_or(Error::new(EINVAL))?;
+
+        match verb {
+            RingCallVerb::Setup => {
+                if !matches!(state, RingState::Inactive) {
+                    return Err(Error::new(EOPNOTSUPP));
+                }
+
+                let params =
+                    RingSetupParams::try_mut_from_bytes(payload).map_err(|_| Error::new(EINVAL))?;
+
+                let flags = params.flags().ok_or(Error::new(EINVAL))?;
+
+                if params.pool_size == 0 {
+                    return Err(Error::new(EINVAL));
+                }
+
+                if params.nr_sq_entries == 0 || params.nr_sq_entries > RING_MAX_SQ_ENTRIES {
+                    return Err(Error::new(EINVAL));
+                }
+
+                let nr_sq_entries = params.nr_sq_entries.next_power_of_two();
+                let nr_cq_entries = if flags.contains(RingSetupFlags::CQSIZE) {
+                    if params.nr_cq_entries == 0 || params.nr_cq_entries > RING_MAX_CQ_ENTRIES {
+                        return Err(Error::new(EINVAL));
+                    }
+
+                    let nr_cq_entries = nr_sq_entries.next_power_of_two();
+                    if nr_cq_entries < nr_sq_entries {
+                        return Err(Error::new(EINVAL));
+                    }
+
+                    nr_cq_entries
+                } else {
+                    nr_sq_entries * 2
+                };
+
+                params.nr_sq_entries = nr_sq_entries;
+                params.nr_cq_entries = nr_cq_entries;
+
+                let sq_name = format!("{id}.sq");
+                let cq_name = format!("{id}.cq");
+
+                let queue_flags = flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC;
+
+                let sq_fd = self.shm_dir.openat(&sq_name, queue_flags, 0)?;
+                let cq_fd = self.shm_dir.openat(&cq_name, queue_flags, 0)?;
+                let pipe_fd = self.pipe_root.openat("", flag::O_CLOEXEC, 0)?;
+                let ring_fds = [sq_fd.raw(), cq_fd.raw(), pipe_fd.raw()];
+
+                let sq = BlockingConsumer::<DiskOpSqe>::from_fd(sq_fd, true, Some(nr_sq_entries))?;
+                let cq = BlockingProducer::<DiskOpCqe>::from_fd(cq_fd, true, Some(nr_cq_entries))?;
+
+                let pool_size = params.pool_size as usize;
+                let shm = unsafe { Dma::<[u8]>::zeroed_slice(pool_size)?.assume_init() };
+                let shm_base = PhysAddr(shm.physical());
+
+                let fixed_ftbl = Rc::new(RwLock::new(Vec::new()));
+                let fixed_ftbl_for_task = fixed_ftbl.clone();
+
+                let exec_for_task = self.executor.clone();
+                let join_handle = self.executor.spawn(ring_worker_task(
+                    exec_for_task,
+                    sq,
+                    cq,
+                    pipe_fd,
+                    fixed_ftbl_for_task,
+                    shm_base,
+                    pool_size,
+                ));
+
+                *state = RingState::Active {
+                    fixed_ftbl,
+                    ring_fds,
+                    shm,
+                    join_handle,
+                };
+
+                Ok(0)
+            }
+
+            RingCallVerb::SetFileTable => Err(Error::new(EINVAL)),
+        }
+    }
+
+    async fn call_multiple_ids(
+        &mut self,
+        ids: &[usize],
+        _payload: &mut [u8],
+        metadata: &[u64],
+        _ctx: &CallerCtx, // Only pid and id are correct here, uid/gid are not used
+    ) -> Result<usize> {
+        let (&ring_fd, ids) = ids.split_first().ok_or(Error::new(EINVAL))?;
+
+        let verb = RingCallVerb::try_from_raw(metadata[0] as u8).ok_or(Error::new(EINVAL))?;
+
+        match verb {
+            RingCallVerb::SetFileTable => {
+                if ids.is_empty() {
+                    log::error!("RingCallVerb::SetFileTable: got an empty file table");
+                    return Err(Error::new(EINVAL));
+                }
+
+                let files = ids
+                    .iter()
+                    .map(|&id| {
+                        self.handles.get(id).and_then(|handle| match handle {
+                            Handle::Disk { num, pt } => {
+                                let disk = self.disks.get(&num).ok_or(Error::new(EBADF))?.clone();
+                                let partition = if let Some(part_num) = pt {
+                                    Some(
+                                        disk.pt
+                                            .as_ref()
+                                            .ok_or(Error::new(EBADF))?
+                                            .partitions
+                                            .get(*part_num)
+                                            .ok_or(Error::new(EBADF))?
+                                            .clone(),
+                                    )
+                                } else {
+                                    None
+                                };
+
+                                Ok(RingResource { disk, partition })
+                            }
+                            _ => Err(Error::new(EINVAL)),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+
+                let Handle::Ring(RingState::Active { fixed_ftbl, .. }) =
+                    self.handles.get_mut(ring_fd)?
+                else {
+                    return Err(Error::new(EINVAL));
+                };
+
+                *fixed_ftbl.write().unwrap() = files?;
+                Ok(ids.len())
+            }
+
+            RingCallVerb::Setup => Err(Error::new(EINVAL)),
+        }
     }
 
     async fn getdents<'buf>(
@@ -744,12 +743,12 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
 
     async fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
         match *self.handles.get(id)? {
-            RingHandle::List(ref data) => {
+            Handle::List(ref data) => {
                 stat.st_mode = MODE_DIR;
                 stat.st_size = data.len() as u64;
                 Ok(())
             }
-            RingHandle::Disk { num, pt, .. } => {
+            Handle::Disk { num, pt, .. } => {
                 let disk = self.disks.get(&num).ok_or(Error::new(EBADF))?;
                 if let Some(part_num) = pt {
                     let block_size = disk.block_size();
@@ -770,17 +769,18 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
                     let block_size = disk.block_size();
                     stat.st_mode = MODE_FILE;
                     stat.st_blocks = size / u64::from(block_size);
-                    stat.st_blksize = block_size as u32;
+                    stat.st_blksize = block_size;
                     stat.st_size = size;
                     Ok(())
                 }
             }
-            RingHandle::Ring { ref shm, .. } => {
+            Handle::Ring(RingState::Active { ref shm, .. }) => {
                 stat.st_mode = MODE_FILE;
                 stat.st_size = shm.len() as u64;
                 Ok(())
             }
-            RingHandle::SchemeRoot => Err(Error::new(EBADF)),
+            Handle::Ring(RingState::Inactive) => Err(Error::new(EOPNOTSUPP)),
+            Handle::SchemeRoot => Err(Error::new(EBADF)),
         }
     }
 
@@ -804,12 +804,12 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
         }
 
         match handle {
-            RingHandle::List(_) => (),
-            RingHandle::Disk { num, pt, .. } | RingHandle::Ring { num, pt, .. } => {
+            Handle::List(_) => (),
+            Handle::Disk { num, pt, .. } => {
                 let number_str = if let Some(part_num) = pt {
-                    format!("{}p{}", num, part_num)
+                    format!("{num}p{part_num}")
                 } else {
-                    format!("{}", num)
+                    format!("{num}")
                 };
 
                 let number_bytes = number_str.as_bytes();
@@ -820,7 +820,9 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
                     j += 1;
                 }
             }
-            RingHandle::SchemeRoot => return Err(Error::new(EBADF)),
+
+            Handle::Ring(_) => return Err(Error::new(EOPNOTSUPP)),
+            Handle::SchemeRoot => return Err(Error::new(EBADF)),
         }
 
         Ok(i)
@@ -835,7 +837,7 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
         _ctx: &CallerCtx,
     ) -> Result<usize> {
         match *self.handles.get_mut(id)? {
-            RingHandle::List(ref handle) => {
+            Handle::List(ref handle) => {
                 let src = usize::try_from(offset)
                     .ok()
                     .and_then(|o| handle.get(o..))
@@ -845,13 +847,13 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
                 Ok(count)
             }
 
-            RingHandle::Disk { num, pt } => {
+            Handle::Disk { num, pt } => {
                 let disk = self.disks.get_mut(&num).ok_or(Error::new(EBADF))?;
                 let block = offset / u64::from(disk.block_size());
                 disk.read(pt, block, buf).await
             }
 
-            RingHandle::SchemeRoot | RingHandle::Ring { .. } => Err(Error::new(EOPNOTSUPP)),
+            Handle::SchemeRoot | Handle::Ring { .. } => Err(Error::new(EOPNOTSUPP)),
         }
     }
 
@@ -864,22 +866,22 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
         _ctx: &CallerCtx,
     ) -> Result<usize> {
         match *self.handles.get_mut(id)? {
-            RingHandle::Disk { num, pt } => {
+            Handle::Disk { num, pt } => {
                 let disk = self.disks.get_mut(&num).ok_or(Error::new(EBADF))?;
                 let block = offset / u64::from(disk.block_size());
                 disk.write(pt, block, buf).await
             }
 
-            RingHandle::List(_) | RingHandle::SchemeRoot | RingHandle::Ring { .. } => {
+            Handle::List(_) | Handle::SchemeRoot | Handle::Ring { .. } => {
                 Err(Error::new(EOPNOTSUPP))
             }
         }
     }
 
     async fn fsize(&mut self, id: usize, _ctx: &CallerCtx) -> Result<u64> {
-        Ok(match *self.handles.get_mut(id)? {
-            RingHandle::List(ref handle) => handle.len() as u64,
-            RingHandle::Disk { num, pt, .. } | RingHandle::Ring { num, pt, .. } => {
+        match *self.handles.get_mut(id)? {
+            Handle::List(ref handle) => Ok(handle.len() as u64),
+            Handle::Disk { num, pt, .. } => {
                 let disk = self.disks.get_mut(&num).ok_or(Error::new(EBADF))?;
                 if let Some(part_num) = pt {
                     let part = disk
@@ -890,13 +892,15 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
                         .get(part_num as usize)
                         .ok_or(Error::new(EBADF))?;
 
-                    part.size * u64::from(disk.block_size())
+                    Ok(part.size * u64::from(disk.block_size()))
                 } else {
-                    disk.size()
+                    Ok(disk.size())
                 }
             }
-            RingHandle::SchemeRoot => return Err(Error::new(EBADF)),
-        })
+
+            Handle::Ring(_) => Err(Error::new(EOPNOTSUPP)),
+            Handle::SchemeRoot => return Err(Error::new(EBADF)),
+        }
     }
 
     async fn mmap_prep(
@@ -909,7 +913,7 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
     ) -> Result<usize> {
         let handle = self.handles.get(id)?;
         match handle {
-            RingHandle::Ring { ref shm, .. } => {
+            Handle::Ring(RingState::Active { ref shm, .. }) => {
                 let offset = offset as usize;
                 if offset + size > shm.len() {
                     return Err(Error::new(EINVAL));
@@ -921,27 +925,118 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> SchemeAsync for RingDiskSchemeInne
     }
 }
 
-const POOL_SIZE: usize = 4 * 1024 * 1024; // 4 MB pool
-const RING_SIZE: usize = 65536; // 64 KB rings
+const BATCH_LIMIT: usize = 128;
 
-pub struct DiskWorker<T> {
-    cq: Rc<Mutex<BlockingProducer<DiskOpCqe>>>,
-    disk: RingDiskWrapper<T>,
-    pt: Option<usize>,
+async fn ring_worker_task<Hw: Hardware, D: Disk + Clone + 'static>(
+    executor: Rc<LocalExecutor<Hw>>,
+    mut sq: BlockingConsumer<DiskOpSqe>,
+    cq: BlockingProducer<DiskOpCqe>,
+    pipe_fd: Fd,
+    fixed_ftbl: Rc<RwLock<Vec<RingResource<D>>>>,
     shm_base: PhysAddr,
+    pool_size: usize,
+) {
+    let mut queue = Vec::<DiskOpSqe>::with_capacity(BATCH_LIMIT);
+    let cq = Rc::new(Mutex::new(cq));
+    let source = RingEventSource(Mutex::new(
+        executor.register_external_event(pipe_fd.raw(), EventFlags::READ),
+    ));
+    let wq = WorkQueue::<Hw>::new();
+
+    loop {
+        let mut spun = false;
+
+        for _ in 0..100 {
+            match sq.try_pop() {
+                Ok(req) => {
+                    queue.push(req);
+                    while queue.len() < BATCH_LIMIT {
+                        match sq.try_pop() {
+                            Ok(req) => queue.push(req),
+                            Err(_) => break,
+                        }
+                    }
+                    spun = true;
+                    break;
+                }
+                Err(redox_rings::raw::RingPopError::Empty) => {
+                    std::hint::spin_loop();
+                }
+                Err(e) => {
+                    log::error!("Failed to pop Sqe with error: {:?}", e);
+                    spun = true;
+                    break;
+                }
+            }
+        }
+
+        let fixed_ftbl = fixed_ftbl.read().unwrap();
+        for req in queue.drain(..) {
+            let Some(resource) = fixed_ftbl.get(req.file_idx as usize) else {
+                log::error!("invalid fixed file descriptor: {}", req.file_idx);
+                cq.lock()
+                    .unwrap()
+                    .push(
+                        DiskOpCqe {
+                            user_data: req.user_data,
+                            count: 0,
+                            status: EBADF as u16,
+                            pad: 0,
+                        },
+                        None,
+                    )
+                    .unwrap();
+                continue;
+            };
+
+            let cq = Rc::clone(&cq);
+            let mut worker = DiskWorker {
+                cq,
+                partition: resource.partition.clone(),
+                disk: resource.disk.clone(),
+                shm_base,
+                pool_size,
+            };
+
+            let join_handle = executor.spawn(async move {
+                worker.handle_request(req).await.unwrap();
+            });
+
+            wq.add(join_handle);
+        }
+        drop(fixed_ftbl);
+
+        if spun {
+            continue;
+        }
+
+        if let Ok(req) = sq.inner.inner.pop_async(&source, None).await {
+            queue.push(req);
+        }
+    }
 }
 
-impl<T: Disk> DiskWorker<T> {
+pub struct DiskWorker<D: Disk> {
+    cq: Rc<Mutex<BlockingProducer<DiskOpCqe>>>,
+    disk: RingDiskWrapper<D>,
+    partition: Option<Rc<partitionlib::Partition>>,
+    shm_base: PhysAddr,
+    pool_size: usize,
+}
+
+impl<D: Disk> DiskWorker<D> {
     pub async fn handle_request(&mut self, req: DiskOpSqe) -> std::result::Result<(), String> {
-        if req.buf_offset as usize + req.buf_len as usize > POOL_SIZE {
+        if req.buf_offset as usize + req.buf_len as usize > self.pool_size {
             log::error!(
                 "Bounds Check Failed: Offset {} + Len {} > Pool {}",
                 req.buf_offset,
                 req.buf_len,
-                POOL_SIZE
+                self.pool_size
             );
             return Err("Request buffer out of bounds".into());
         }
+
+        let partition = self.partition.as_ref().map(|partition| partition.as_ref());
 
         let block_size = self.disk.block_size();
         if !req.buf_len.is_multiple_of(block_size) {
@@ -953,35 +1048,34 @@ impl<T: Disk> DiskWorker<T> {
         let phys_addr = PhysAddr(self.shm_base.as_usize() + req.buf_offset as usize);
         let num_sectors = req.buf_len / block_size;
 
-        let result = match DiskOpcode::try_from_raw(req.opcode) {
-            Some(opcode) => match opcode {
-                DiskOpcode::Read => {
+        let result = if let Some(opcode) = DiskOpKind::try_from_raw(req.opcode) {
+            match opcode {
+                DiskOpKind::Read => {
                     self.disk
-                        .read_dma(self.pt, req.block, phys_addr, num_sectors)
+                        .read_dma(partition, req.block, phys_addr, num_sectors)
                         .await
                 }
-                DiskOpcode::Write => {
+                DiskOpKind::Write => {
                     self.disk
-                        .write_dma(self.pt, req.block, phys_addr, num_sectors)
+                        .write_dma(partition, req.block, phys_addr, num_sectors)
                         .await
                 }
-            },
-            None => {
-                log::warn!("Unsupported opcode: {}", req.opcode);
-                Err(syscall::Error::new(syscall::EOPNOTSUPP))
             }
+        } else {
+            log::warn!("Unsupported opcode: {}", req.opcode);
+            Err(syscall::Error::new(syscall::EOPNOTSUPP))
         };
 
         let (status, count) = match result {
             Ok(()) => (0, req.buf_len),
             Err(e) => {
-                log::error!("Disk read Error: ID={} Errno={}", req.id, e.errno);
+                log::error!("Disk read Error: ID={} Errno={}", req.user_data, e.errno);
                 (e.errno as u16, 0)
             }
         };
 
-        let cqe = DiskOpCqe {
-            id: req.id,
+        let mut cqe = DiskOpCqe {
+            user_data: req.user_data,
             status,
             count,
             pad: 0,
@@ -990,12 +1084,12 @@ impl<T: Disk> DiskWorker<T> {
         loop {
             match self.cq.lock().unwrap().try_push(cqe) {
                 Ok(_) => break,
-                Err(RingPushError::Full(_)) => {
+                Err(RingPushError::Full(entry)) => {
                     yield_now().await;
+                    cqe = entry;
                 }
-                Err(e) => {
-                    log::error!("Failed to push Cqe {:?} with error: {:?}", cqe, e);
-                    return Err(format!("Failed to push response: {:?}", e));
+                Err(RingPushError::Broken(entry)) => {
+                    return Err(format!("Failed to push response: broken"));
                 }
             }
         }
