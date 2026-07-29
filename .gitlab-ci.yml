@@ -1,4 +1,3 @@
-image: "redoxos/redoxer:latest"
 workflow:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_PROJECT_NAMESPACE == "redox-os"'
@@ -18,8 +17,15 @@ fmt:
 x86_64:
     stage: build
     script:
-        - rustup component add rustfmt
         - ./check.sh
+
+x86_64:clippy:
+    stage: build
+    needs: [x86_64]
+    # TODO: remove
+    allow_failure: true
+    script:
+        - ./check.sh --clippy
 
 i586:
     stage: cross-build
@@ -28,6 +34,7 @@ i586:
 
 aarch64:
     stage: cross-build
+    image: registry.redox-os.org/redox-os/redoxer:aarch64
     script:
         - ./check.sh --arch=aarch64
 
@@ -38,5 +45,6 @@ riscv64gc:
 
 boot:
     stage: test
+    needs: [x86_64]
     script:
         - timeout -s KILL 9m ./check.sh --test

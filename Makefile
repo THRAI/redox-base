@@ -53,6 +53,9 @@ test-gui: all
 	$(MAKE) install
 	REDOXER_SYSROOT=$(DESTDIR) redoxer exec --gui ion
 
+clippy:
+	redoxer clippy
+
 # -----------------------------------------------------------------------------
 # base
 # -----------------------------------------------------------------------------
