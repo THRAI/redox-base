@@ -74,13 +74,12 @@ impl SchemeSync for PtyScheme {
 
         let path = path.trim_matches('/');
 
-        let id = self.next_id;
-        self.next_id += 1;
-
         // This happens if we are passed "/scheme/pty" and not "/scheme/pty/ptmx".
         if path.is_empty() {
             return Err(Error::new(ENOENT));
         }
+
+        let id = self.next_id;
 
         if path == "ptmx" {
             let pty = Rc::new(RefCell::new(Pty::new(id)));
@@ -107,6 +106,8 @@ impl SchemeSync for PtyScheme {
                 Handle::Resource(Box::new(PtySubTerm::new(pty, flags | fcntl_flags as usize))),
             );
         }
+
+        self.next_id += 1;
 
         Ok(OpenResult::ThisScheme {
             number: id,

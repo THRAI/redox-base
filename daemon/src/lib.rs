@@ -51,6 +51,7 @@ pub struct Daemon {
 
 impl Daemon {
     /// Create a new daemon.
+    #[expect(clippy::new_ret_no_self, reason = "Daemon is not intented to return")]
     pub fn new(f: impl FnOnce(Self) -> !) -> ! {
         let write_pipe = unsafe { io::PipeWriter::from_raw_fd(get_fd("INIT_NOTIFY")) };
 

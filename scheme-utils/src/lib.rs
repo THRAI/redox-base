@@ -18,6 +18,7 @@ pub struct HandleMap<T> {
 }
 
 impl<T> HandleMap<T> {
+    #[expect(clippy::new_without_default, reason = "Default not expected")]
     pub const fn new() -> Self {
         HandleMap {
             handles: BTreeMap::new(),

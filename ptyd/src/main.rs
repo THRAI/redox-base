@@ -90,7 +90,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
                 handler
                     .poll_all_requests(&mut scheme)
-                    .expect("ihdad: failed to poll requests");
+                    .expect("pty: failed to poll requests");
             }
         }
 
