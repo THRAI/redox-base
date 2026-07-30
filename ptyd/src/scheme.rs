@@ -83,7 +83,6 @@ impl SchemeSync for PtyScheme {
 
         if path == "ptmx" {
             let pty = Rc::new(RefCell::new(Pty::new(id)));
-            self.next_id += 1;
             self.handles.insert(
                 id,
                 Handle::Resource(Box::new(PtyControlTerm::new(pty, flags))),
@@ -102,12 +101,13 @@ impl SchemeSync for PtyScheme {
                 }
             };
 
-            self.next_id += 1;
             self.handles.insert(
                 id,
                 Handle::Resource(Box::new(PtySubTerm::new(pty, flags | fcntl_flags as usize))),
             );
         }
+
+        self.next_id += 1;
 
         Ok(OpenResult::ThisScheme {
             number: id,
