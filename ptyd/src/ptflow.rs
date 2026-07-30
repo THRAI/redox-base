@@ -1,10 +1,9 @@
-//! "flow" resource for the `pty' scheme.
+//! "flow" resource for the `pty` scheme.
 //! Allows PTY flow control -- stop or restart PTY output.
-use core::ops::DerefMut;
 use std::cell::RefCell;
 use std::rc::Weak;
 
-use libc::{c_int, TCIOFF, TCION, TCOOFF, TCOON};
+use libc::{TCIOFF, TCION, TCOOFF, TCOON};
 use syscall::error::{Error, Result, EBADF, EINVAL, EPIPE};
 use syscall::flag::{EventFlags, F_GETFL, F_SETFL, O_ACCMODE};
 
@@ -28,13 +27,13 @@ impl PtFlow {
                 .and_then(|b| <[u8; 4]>::try_from(b).ok())
                 .ok_or(Error::new(EINVAL))?,
         );
-        let action = action as c_int;
+        let action = action.cast_signed();
 
         match action {
             TCOON | TCOOFF => {
                 let pty_lock = self.pty.upgrade().ok_or(Error::new(EPIPE))?;
                 let mut pty = pty_lock.borrow_mut();
-                let pty = pty.deref_mut();
+                let pty = &mut *pty;
 
                 if action == TCOON {
                     pty.stopped = false;

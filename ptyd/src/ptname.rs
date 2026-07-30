@@ -1,4 +1,4 @@
-//! "ptsname" resource for the `pty' scheme.
+//! "ptsname" resource for the `pty` scheme.
 //! Returns the id of the pseudoterminal subsidiary (PTS) as a u32.
 use std::cell::RefCell;
 use std::rc::Weak;

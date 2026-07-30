@@ -1,9 +1,9 @@
-//! "flush" resource for the `pty' scheme.
+//! "flush" resource for the `pty` scheme.
 //! Clear the pending output for the input, output, or both.
 use std::cell::RefCell;
 use std::rc::Weak;
 
-use libc::{c_int, TCIFLUSH, TCIOFLUSH, TCOFLUSH};
+use libc::{TCIFLUSH, TCIOFLUSH, TCOFLUSH};
 use syscall::error::{Error, Result, EBADF, EINVAL, EPIPE};
 use syscall::flag::{EventFlags, F_GETFL, F_SETFL, O_ACCMODE};
 
@@ -45,7 +45,7 @@ impl PtFlush {
                 .ok_or(Error::new(EINVAL))?,
         );
 
-        match action as c_int {
+        match action.cast_signed() {
             TCIFLUSH => {
                 self.flush_read()?;
             }

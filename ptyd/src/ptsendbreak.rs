@@ -1,4 +1,4 @@
-//! "sendbreak" resource for the `pty' scheme.
+//! "sendbreak" resource for the `pty` scheme.
 //! For a PTY, this simply means to sleep for a short amount of time.
 use std::cell::RefCell;
 use std::rc::Weak;
@@ -29,9 +29,9 @@ impl PtSendbreak {
             // FreeBSD uses 0.4, and that seems reasonable.
             let tm = timespec {
                 tv_sec: 0,
-                tv_nsec: 400000000,
+                tv_nsec: 400_000_000,
             };
-            nanosleep(&tm, core::ptr::null_mut())
+            nanosleep(&raw const tm, core::ptr::null_mut())
         };
         Ok(4)
     }
