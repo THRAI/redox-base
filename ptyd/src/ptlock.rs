@@ -1,4 +1,4 @@
-//! "ptlock" resource for the `pty' scheme.
+//! "ptlock" resource for the `pty` scheme.
 //! Lock and unlock the PTY.
 //! All the lock does currently is prevent terminals from being opened without first being
 //! unlocked.

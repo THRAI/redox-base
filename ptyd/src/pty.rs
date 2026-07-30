@@ -66,7 +66,7 @@ impl Pty {
         let iexten = lfl & IEXTEN == IEXTEN;
         let ixon = lfl & IXON == IXON;
 
-        for &byte in buf.iter() {
+        for &byte in buf {
             let mut b = byte;
 
             // Input translation
@@ -236,7 +236,7 @@ impl Pty {
         let mut vec = Vec::with_capacity(buf.len() + 1);
         vec.push(0);
 
-        for &b in buf.iter() {
+        for &b in buf {
             if opost && onlcr && b == b'\n' {
                 vec.push(b'\r');
             }

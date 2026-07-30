@@ -65,18 +65,14 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     let mut timeout_count = 0u64;
 
-    scan_requests(&mut handler, &mut scheme).expect("pty: could not scan requests");
+    scan_requests(&mut handler, &mut scheme);
     issue_events(handler.socket(), &mut scheme);
 
     for event_res in event_queue {
         let event = event_res.expect("pty: failed to read from event queue");
 
         match event.user_data {
-            EventSource::Socket => {
-                if scan_requests(&mut handler, &mut scheme).is_err() {
-                    break;
-                }
-            }
+            EventSource::Socket => scan_requests(&mut handler, &mut scheme),
             EventSource::Time => {
                 timeout(&mut time_file).expect("pty: failed to set timeout");
 
@@ -100,10 +96,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     std::process::exit(0);
 }
 
-fn scan_requests(
-    handler: &mut ReadinessBased<Box<Socket>>,
-    scheme: &mut PtyScheme,
-) -> libredox::error::Result<()> {
+fn scan_requests(handler: &mut ReadinessBased<Box<Socket>>, scheme: &mut PtyScheme) {
     handler
         .read_and_process_requests(scheme)
         .expect("pty: failed to read from socket");
@@ -113,11 +106,10 @@ fn scan_requests(
     handler
         .write_responses()
         .expect("pty: failed to write to socket");
-    Ok(())
 }
 
 fn issue_events(socket: &Socket, scheme: &mut PtyScheme) {
-    for (id, handle) in scheme.handles.iter_mut() {
+    for (id, handle) in &mut scheme.handles {
         if let Handle::Resource(ref mut res) = handle {
             let events = res.events();
             if events != syscall::EventFlags::empty() {

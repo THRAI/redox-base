@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::ops::{Deref, DerefMut};
 use std::rc::Weak;
 
 use syscall::error::{Error, Result, EBADF, EINVAL, EPIPE};
@@ -40,7 +39,7 @@ impl Resource for PtyTermios {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let pty = pty_lock.borrow();
-            let termios: &[u8] = pty.termios.deref();
+            let termios: &[u8] = &pty.termios;
 
             let mut i = 0;
             while i < buf.len() && i < termios.len() {
@@ -56,7 +55,7 @@ impl Resource for PtyTermios {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let mut pty = pty_lock.borrow_mut();
-            let termios: &mut [u8] = pty.termios.deref_mut();
+            let termios: &mut [u8] = &mut pty.termios;
 
             let mut i = 0;
             while i < buf.len() && i < termios.len() {

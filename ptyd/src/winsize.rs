@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::ops::{Deref, DerefMut};
 use std::rc::Weak;
 
 use syscall::error::{Error, Result, EBADF, EINVAL, EPIPE};
@@ -40,7 +39,7 @@ impl Resource for PtyWinsize {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let pty = pty_lock.borrow();
-            let winsize: &[u8] = pty.winsize.deref();
+            let winsize: &[u8] = &pty.winsize;
 
             let mut i = 0;
             while i < buf.len() && i < winsize.len() {
@@ -56,7 +55,7 @@ impl Resource for PtyWinsize {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let mut pty = pty_lock.borrow_mut();
-            let winsize: &mut [u8] = pty.winsize.deref_mut();
+            let winsize: &mut [u8] = &mut pty.winsize;
 
             let mut i = 0;
             while i < buf.len() && i < winsize.len() {

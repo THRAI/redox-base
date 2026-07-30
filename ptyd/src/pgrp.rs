@@ -1,4 +1,4 @@
-//! "pgrp" resource for the `pty' scheme.
+//! "pgrp" resource for the `pty` scheme.
 //! Allows the process group (pgrp) to be changed.
 use std::cell::RefCell;
 use std::rc::Weak;
