@@ -16,7 +16,6 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::mem::transmute;
 use std::ops::ControlFlow;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use inputd::{ControlEvent, VtEvent, VtEventKind};
 
@@ -61,7 +60,7 @@ enum Handle {
 struct InputScheme {
     handles: HandleMap<Handle>,
 
-    next_vt_id: AtomicUsize,
+    next_vt_id: usize,
 
     display: Option<String>,
     vts: BTreeSet<usize>,
@@ -79,7 +78,7 @@ impl InputScheme {
         Self {
             handles: HandleMap::new(),
 
-            next_vt_id: AtomicUsize::new(2), // VT 1 is reserved for the bootlog
+            next_vt_id: 2, // VT 1 is reserved for the bootlog
 
             display: None,
             vts: BTreeSet::new(),
@@ -172,7 +171,8 @@ impl SchemeSync for InputScheme {
         let handle_ty = match command {
             "producer" => Handle::Producer,
             "consumer" => {
-                let vt = self.next_vt_id.fetch_add(1, Ordering::Relaxed);
+                let vt = self.next_vt_id;
+                self.next_vt_id += 1;
                 self.vts.insert(vt);
 
                 if self.active_vt.is_none() {
