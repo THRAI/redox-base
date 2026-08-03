@@ -17,7 +17,7 @@ fn read_to_slice<T: Copy>(
     unsafe {
         libredox::call::read(
             file.as_raw_fd() as usize,
-            slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len() * size_of::<T>()),
+            slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, size_of_val(buf)),
         )
         .map(|count| count / size_of::<T>())
     }
@@ -38,16 +38,16 @@ impl ConsumerHandle {
     pub fn new_vt() -> io::Result<Self> {
         let file = OpenOptions::new()
             .read(true)
-            .custom_flags(O_NONBLOCK as i32)
-            .open(format!("/scheme/input/consumer"))?;
+            .custom_flags(O_NONBLOCK)
+            .open("/scheme/input/consumer")?;
         Ok(Self(file))
     }
 
     pub fn bootlog_vt() -> io::Result<Self> {
         let file = OpenOptions::new()
             .read(true)
-            .custom_flags(O_NONBLOCK as i32)
-            .open(format!("/scheme/input/consumer_bootlog"))?;
+            .custom_flags(O_NONBLOCK)
+            .open("/scheme/input/consumer_bootlog")?;
         Ok(Self(file))
     }
 
@@ -59,7 +59,7 @@ impl ConsumerHandle {
         let display_file = libredox::call::openat(
             self.0.as_raw_fd() as usize,
             "display",
-            (O_CLOEXEC | O_NONBLOCK | O_RDWR) as _,
+            O_CLOEXEC | O_NONBLOCK | O_RDWR,
             0,
         )
         .map(|socket| unsafe { File::from_raw_fd(socket as RawFd) })
@@ -140,8 +140,7 @@ pub struct ControlHandle(File);
 
 impl ControlHandle {
     pub fn new() -> io::Result<Self> {
-        let path = format!("/scheme/input/control");
-        Ok(Self(File::open(path)?))
+        Ok(Self(File::open("/scheme/input/control")?))
     }
 
     /// Sent to Handle::Display

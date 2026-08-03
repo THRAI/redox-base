@@ -339,17 +339,17 @@ impl SchemeSync for InputScheme<'_> {
 
             Handle::Display { .. } => {
                 log::error!("display tried to read");
-                return Err(SysError::new(EINVAL));
+                Err(SysError::new(EINVAL))
             }
             Handle::Producer => {
                 log::error!("producer tried to read");
-                return Err(SysError::new(EINVAL));
+                Err(SysError::new(EINVAL))
             }
             Handle::Control => {
                 log::error!("control tried to read");
-                return Err(SysError::new(EINVAL));
+                Err(SysError::new(EINVAL))
             }
-            Handle::SchemeRoot => return Err(SysError::new(EBADF)),
+            Handle::SchemeRoot => Err(SysError::new(EBADF)),
         }
     }
 
@@ -590,18 +590,15 @@ impl SchemeSync for InputScheme<'_> {
     }
 
     fn on_close(&mut self, id: usize) {
-        match self.handles.remove(id).unwrap() {
-            Handle::Consumer { vt, .. } => {
-                self.vts.remove(&vt);
-                if self.active_vt == Some(vt) {
-                    if let Some(&new_vt) = self.vts.last() {
-                        self.switch_vt(new_vt);
-                    } else {
-                        self.active_vt = None;
-                    }
+        if let Handle::Consumer { vt, .. } = self.handles.remove(id).unwrap() {
+            self.vts.remove(&vt);
+            if self.active_vt == Some(vt) {
+                if let Some(&new_vt) = self.vts.last() {
+                    self.switch_vt(new_vt);
+                } else {
+                    self.active_vt = None;
                 }
             }
-            _ => {}
         }
     }
 }
