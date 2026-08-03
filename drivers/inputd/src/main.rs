@@ -168,8 +168,8 @@ impl SchemeSync for InputScheme {
 
         let command = path_parts.next().ok_or(SysError::new(EINVAL))?;
 
-        let handle_ty = match command {
-            "producer" => Handle::Producer,
+        let fd = match command {
+            "producer" => self.handles.insert(Handle::Producer),
             "consumer" => {
                 let vt = self.next_vt_id;
                 self.next_vt_id += 1;
@@ -178,13 +178,13 @@ impl SchemeSync for InputScheme {
                 if self.active_vt.is_none() {
                     self.switch_vt(vt);
                 }
-                Handle::Consumer {
+                self.handles.insert(Handle::Consumer {
                     events: EventFlags::empty(),
                     pending: Vec::new(),
                     needs_handoff: false,
                     notified: false,
                     vt,
-                }
+                })
             }
             "consumer_bootlog" => {
                 if !self.vts.insert(1) {
@@ -192,13 +192,13 @@ impl SchemeSync for InputScheme {
                 }
 
                 self.switch_vt(1);
-                Handle::Consumer {
+                self.handles.insert(Handle::Consumer {
                     events: EventFlags::empty(),
                     pending: Vec::new(),
                     needs_handoff: false,
                     notified: false,
                     vt: 1,
-                }
+                })
             }
             "handle" | "handle_early" => {
                 let display = path_parts.next().ok_or(SysError::new(EINVAL))?;
@@ -236,7 +236,7 @@ impl SchemeSync for InputScheme {
                     }
                 }
 
-                Handle::Display {
+                self.handles.insert(Handle::Display {
                     events: EventFlags::empty(),
                     pending: if let Some(active_vt) = self.active_vt {
                         vec![VtEvent {
@@ -249,9 +249,9 @@ impl SchemeSync for InputScheme {
                     notified: false,
                     device: display.to_owned(),
                     is_earlyfb: command == "handle_early",
-                }
+                })
             }
-            "control" => Handle::Control,
+            "control" => self.handles.insert(Handle::Control),
 
             _ => {
                 log::error!("invalid path '{path}'");
@@ -261,7 +261,6 @@ impl SchemeSync for InputScheme {
 
         log::debug!("{path} channel has been opened");
 
-        let fd = self.handles.insert(handle_ty);
         Ok(OpenResult::ThisScheme {
             number: fd,
             flags: NewFdFlags::empty(),
