@@ -49,12 +49,22 @@ enum Handle {
         events: EventFlags,
         pending: Vec<VtEvent>,
         notified: bool,
-        device: String,
-        /// Control of all VT's gets handed over from earlyfb devices to the first non-earlyfb device.
-        is_earlyfb: bool,
     },
     Control,
     SchemeRoot,
+}
+
+enum ActiveDisplay {
+    Unknown,
+    /// Control of all VT's gets handed over from earlyfb devices to the first non-earlyfb device.
+    Early {
+        name: String,
+        id: usize,
+    },
+    Regular {
+        name: String,
+        id: usize,
+    },
 }
 
 struct InputScheme {
@@ -62,7 +72,7 @@ struct InputScheme {
 
     next_vt_id: usize,
 
-    display: Option<String>,
+    active_display: ActiveDisplay,
     vts: BTreeSet<usize>,
     super_key: bool,
     active_vt: Option<usize>,
@@ -80,7 +90,7 @@ impl InputScheme {
 
             next_vt_id: 2, // VT 1 is reserved for the bootlog
 
-            display: None,
+            active_display: ActiveDisplay::Unknown,
             vts: BTreeSet::new(),
             super_key: false,
             active_vt: None,
@@ -109,23 +119,21 @@ impl InputScheme {
             self.active_vt.unwrap_or(0)
         );
 
-        for handle in self.handles.values_mut() {
-            match handle {
-                Handle::Display {
-                    pending,
-                    notified,
-                    device,
-                    ..
-                } => {
-                    if self.display.as_deref() == Some(&*device) {
+        match self.active_display {
+            ActiveDisplay::Unknown => {}
+            ActiveDisplay::Early { id, .. } | ActiveDisplay::Regular { id, .. } => {
+                match self.handles.get_mut(id).unwrap() {
+                    Handle::Display {
+                        pending, notified, ..
+                    } => {
                         pending.push(VtEvent {
                             kind: VtEventKind::Activate,
                             vt: new_active,
                         });
                         *notified = false;
                     }
+                    _ => unreachable!(),
                 }
-                _ => continue,
             }
         }
 
@@ -201,25 +209,44 @@ impl SchemeSync for InputScheme {
                 })
             }
             "handle" | "handle_early" => {
-                let display = path_parts.next().ok_or(SysError::new(EINVAL))?;
+                self.has_new_events = true;
+
+                let fd = self.handles.insert(Handle::Display {
+                    events: EventFlags::empty(),
+                    pending: if let Some(active_vt) = self.active_vt {
+                        vec![VtEvent {
+                            kind: VtEventKind::Activate,
+                            vt: active_vt,
+                        }]
+                    } else {
+                        vec![]
+                    },
+                    notified: false,
+                });
 
                 let needs_handoff = match command {
-                    "handle_early" => self.display.is_none(),
-                    "handle" => self.handles.values().all(|handle| {
-                        !matches!(
-                            handle,
-                            Handle::Display {
-                                is_earlyfb: false,
-                                ..
-                            }
-                        )
-                    }),
+                    "handle_early" => matches!(self.active_display, ActiveDisplay::Unknown),
+                    "handle" => matches!(
+                        self.active_display,
+                        ActiveDisplay::Unknown | ActiveDisplay::Early { .. }
+                    ),
                     _ => unreachable!(),
                 };
 
                 if needs_handoff {
-                    self.has_new_events = true;
-                    self.display = Some(display.to_owned());
+                    let display = path_parts.next().ok_or(SysError::new(EINVAL))?;
+
+                    self.active_display = if command == "handle_early" {
+                        ActiveDisplay::Early {
+                            name: display.to_owned(),
+                            id: fd,
+                        }
+                    } else {
+                        ActiveDisplay::Regular {
+                            name: display.to_owned(),
+                            id: fd,
+                        }
+                    };
 
                     for handle in self.handles.values_mut() {
                         match handle {
@@ -236,20 +263,7 @@ impl SchemeSync for InputScheme {
                     }
                 }
 
-                self.handles.insert(Handle::Display {
-                    events: EventFlags::empty(),
-                    pending: if let Some(active_vt) = self.active_vt {
-                        vec![VtEvent {
-                            kind: VtEventKind::Activate,
-                            vt: active_vt,
-                        }]
-                    } else {
-                        vec![]
-                    },
-                    notified: false,
-                    device: display.to_owned(),
-                    is_earlyfb: command == "handle_early",
-                })
+                fd
             }
             "control" => self.handles.insert(Handle::Control),
 
@@ -268,7 +282,10 @@ impl SchemeSync for InputScheme {
     }
 
     fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> syscall::Result<usize> {
-        let display = self.display.as_ref().ok_or(SysError::new(EINVAL))?;
+        let display = match &self.active_display {
+            ActiveDisplay::Unknown => return Err(SysError::new(EINVAL)),
+            ActiveDisplay::Early { name, .. } | ActiveDisplay::Regular { name, .. } => name,
+        };
         FpathWriter::with(buf, display, |w| {
             let handle = self.handles.get(id)?;
 

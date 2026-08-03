@@ -67,10 +67,6 @@ impl<T> HandleMap<T> {
         self.handles.keys()
     }
 
-    pub fn values(&self) -> btree_map::Values<'_, usize, T> {
-        self.handles.values()
-    }
-
     pub fn values_mut(&mut self) -> btree_map::ValuesMut<'_, usize, T> {
         self.handles.values_mut()
     }
