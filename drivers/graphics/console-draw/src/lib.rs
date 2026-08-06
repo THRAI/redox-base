@@ -57,18 +57,25 @@ pub struct V2DisplayMap {
 
 impl V2DisplayMap {
     pub fn new(display_handle: V2GraphicsHandle) -> io::Result<Self> {
-        let connector_info = display_handle.first_display().unwrap();
+        let connector_info = display_handle.first_display()?;
 
-        let mode = connector_info.modes()[0];
+        let Some(&mode) = connector_info.modes().get(0) else {
+            return Err(io::Error::other("Unable to get first display connector"));
+        };
         let (width, height) = mode.size();
+        let Some(&encoder) = connector_info.encoders().get(0) else {
+            return Err(io::Error::other("Unable to get first display encoder"));
+        };
 
         // FIXME do something smarter that avoids conflicts
-        let crtc = display_handle.resource_handles().unwrap().filter_crtcs(
-            display_handle
-                .get_encoder(connector_info.encoders()[0])
-                .unwrap()
-                .possible_crtcs(),
-        )[0];
+        let Some(&crtc) = display_handle
+            .resource_handles()
+            .unwrap()
+            .filter_crtcs(display_handle.get_encoder(encoder)?.possible_crtcs())
+            .get(0)
+        else {
+            return Err(io::Error::other("Unable to get first display ctrc"));
+        };
 
         let buffer = CpuBackedBuffer::new(
             &display_handle,

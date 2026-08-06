@@ -1,5 +1,5 @@
-use std::cmp;
 use std::collections::VecDeque;
+use std::{cmp, io};
 
 use console_draw::{Damage, TextScreen, V2DisplayMap};
 use drm::buffer::Buffer;
@@ -147,8 +147,12 @@ impl FbbootlogScheme {
         let mode = match map
             .display_handle
             .get_connector(map.connector, false)
-            .map(|info| info.modes()[0])
-        {
+            .and_then(|info| {
+                info.modes()
+                    .get(0)
+                    .map(|m| *m)
+                    .ok_or(io::Error::other("Unable to get first display connector"))
+            }) {
             Ok(mode) => mode,
             Err(err) => {
                 eprintln!("fbbootlogd: failed to get display size: {}", err);
