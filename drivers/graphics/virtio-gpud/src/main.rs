@@ -545,19 +545,11 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
 
     user_data! {
         enum Source {
-            Input,
             Scheme,
             Interrupt,
         }
     }
 
-    event_queue
-        .subscribe(
-            scheme.inputd_event_handle().as_raw_fd() as usize,
-            Source::Input,
-            event::EventFlags::READ,
-        )
-        .unwrap();
     event_queue
         .subscribe(
             scheme.event_handle().raw(),
@@ -573,13 +565,12 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
         )
         .unwrap();
 
-    let all = [Source::Input, Source::Scheme, Source::Interrupt];
+    let all = [Source::Scheme, Source::Interrupt];
     for event in all
         .into_iter()
         .chain(event_queue.map(|e| e.expect("virtio-gpud: failed to get next event").user_data))
     {
         match event {
-            Source::Input => scheme.handle_vt_events(),
             Source::Scheme => {
                 scheme
                     .tick()

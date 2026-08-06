@@ -359,7 +359,7 @@ impl From<usize> for KeymapKind {
             KeymapKind::US
         } else {
             // SAFETY: Checked above
-            unsafe { std::mem::transmute(value) }
+            unsafe { std::mem::transmute::<usize, KeymapKind>(value) }
         }
     }
 }

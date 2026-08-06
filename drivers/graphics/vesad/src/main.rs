@@ -5,7 +5,6 @@ use driver_graphics::GraphicsScheme;
 use event::{user_data, EventQueue};
 use std::collections::HashMap;
 use std::env;
-use std::os::fd::AsRawFd;
 
 use crate::scheme::{FbAdapter, FrameBuffer};
 
@@ -88,20 +87,12 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     user_data! {
         enum Source {
-            Input,
             Scheme,
         }
     }
 
     let event_queue: EventQueue<Source> =
         EventQueue::new().expect("vesad: failed to create event queue");
-    event_queue
-        .subscribe(
-            scheme.inputd_event_handle().as_raw_fd() as usize,
-            Source::Input,
-            event::EventFlags::READ,
-        )
-        .unwrap();
     event_queue
         .subscribe(
             scheme.event_handle().raw(),
@@ -114,13 +105,12 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     daemon.ready();
 
-    let all = [Source::Input, Source::Scheme];
+    let all = [Source::Scheme];
     for event in all
         .into_iter()
         .chain(event_queue.map(|e| e.expect("vesad: failed to get next event").user_data))
     {
         match event {
-            Source::Input => scheme.handle_vt_events(),
             Source::Scheme => {
                 scheme
                     .tick()
