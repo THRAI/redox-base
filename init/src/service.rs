@@ -22,6 +22,8 @@ pub struct Service {
     pub inherit_envs: BTreeSet<String>,
     #[serde(rename = "type")]
     pub type_: ServiceType,
+    #[serde(default)]
+    pub priority: Option<i32>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -48,6 +50,18 @@ impl Service {
 
         let (mut read_pipe, write_pipe) = io::pipe().unwrap();
         unsafe { pass_fd(&mut command, "INIT_NOTIFY", write_pipe.as_raw_fd()) };
+
+        if let Some(priority) = self.priority {
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::setpriority(libc::PRIO_PROCESS, 0, priority) == -1 {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+        }
 
         let mut child = match command.spawn() {
             Ok(child) => child,
