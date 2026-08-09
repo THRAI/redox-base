@@ -37,6 +37,17 @@ pub struct Socket {
 }
 
 impl Socket {
+    fn events(&self) -> EventFlags {
+        let mut ready = EventFlags::empty();
+        if !self.messages.is_empty() {
+            ready |= EVENT_READ;
+        }
+        if self.peer.is_some() {
+            ready |= EVENT_WRITE;
+        }
+        ready
+    }
+
     fn drop_fds(&mut self, num_fd: usize) -> Result<()> {
         for i in 0..num_fd {
             if self.fds.pop_front().is_none() {
@@ -207,32 +218,6 @@ impl<'sock> UdsDgramScheme<'sock> {
         self.insert_socket(new_id, Rc::new(RefCell::new(new)));
         self.next_id += 1;
         new_id
-    }
-
-    fn call_inner(
-        &mut self,
-        id: usize,
-        payload: &mut [u8],
-        metadata: &[u64],
-        ctx: &CallerCtx,
-    ) -> Result<usize> {
-        // metadata to Vec<u8>
-        let Some(verb) = SocketCall::try_from_raw(metadata[0] as usize) else {
-            eprintln!("call_inner: Invalid verb in metadata: {:?}", metadata);
-            return Err(Error::new(EINVAL));
-        };
-        match verb {
-            SocketCall::Bind => self.handle_bind(id, &payload),
-            SocketCall::Connect => self.handle_connect(id, &payload),
-            SocketCall::SetSockOpt => self.handle_setsockopt(id, metadata[1] as i32, &payload),
-            SocketCall::GetSockOpt => self.handle_getsockopt(id, metadata[1] as i32, payload),
-            SocketCall::SendMsg => self.handle_sendmsg(id, payload, ctx),
-            SocketCall::RecvMsg => self.handle_recvmsg(id, payload),
-            SocketCall::Unbind => self.handle_unbind(id),
-            SocketCall::GetToken => self.handle_get_token(id, payload),
-            SocketCall::GetPeerName => self.handle_get_peer_name(id, payload),
-            _ => Err(Error::new(EOPNOTSUPP)),
-        }
     }
 
     fn handle_bind(&mut self, id: usize, path_buf: &[u8]) -> Result<usize> {
@@ -573,6 +558,19 @@ impl<'sock> UdsDgramScheme<'sock> {
         }
     }
 
+    fn handle_closure(&mut self, id: usize, socket_rc: Rc<RefCell<Socket>>) {
+        let mut socket = socket_rc.borrow_mut();
+        if socket.primary_id == id {
+            socket.state = State::Closed;
+            socket.peer = None;
+            socket.path = None;
+
+            if let Some(token) = socket.issued_token {
+                self.socket_tokens.remove(&token);
+            }
+        }
+    }
+
     fn sendfd_inner(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
         if sendfd_request.num_fds() == 0 {
             return Ok(0);
@@ -655,6 +653,7 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
                 return Err(Error::new(EACCES));
             }
         }
+
         flags |= fcntl_flags as usize;
 
         let new_id = if path.is_empty() {
@@ -689,7 +688,23 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
         metadata: &[u64],
         ctx: &CallerCtx,
     ) -> Result<usize> {
-        self.call_inner(id, payload, metadata, ctx)
+        // metadata to Vec<u8>
+        let Some(verb) = SocketCall::try_from_raw(metadata[0] as usize) else {
+            eprintln!("call_inner: Invalid verb in metadata: {:?}", metadata);
+            return Err(Error::new(EINVAL));
+        };
+        match verb {
+            SocketCall::Bind => self.handle_bind(id, &payload),
+            SocketCall::Connect => self.handle_connect(id, &payload),
+            SocketCall::SetSockOpt => self.handle_setsockopt(id, metadata[1] as i32, &payload),
+            SocketCall::GetSockOpt => self.handle_getsockopt(id, metadata[1] as i32, payload),
+            SocketCall::SendMsg => self.handle_sendmsg(id, payload, ctx),
+            SocketCall::RecvMsg => self.handle_recvmsg(id, payload),
+            SocketCall::Unbind => self.handle_unbind(id),
+            SocketCall::GetToken => self.handle_get_token(id, payload),
+            SocketCall::GetPeerName => self.handle_get_peer_name(id, payload),
+            _ => Err(Error::new(EOPNOTSUPP)),
+        }
     }
 
     fn dup(&mut self, id: usize, buf: &[u8], _ctx: &CallerCtx) -> Result<OpenResult> {
@@ -745,16 +760,7 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
         let Some(Handle::Socket(socket_rc)) = self.handles.remove(&id) else {
             return;
         };
-        let mut socket = socket_rc.borrow_mut();
-        if socket.primary_id == id {
-            socket.state = State::Closed;
-            socket.peer = None;
-            socket.path = None;
-
-            if let Some(token) = socket.issued_token {
-                self.socket_tokens.remove(&token);
-            }
-        }
+        self.handle_closure(id, socket_rc);
     }
 
     fn on_sendfd(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
@@ -766,11 +772,12 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
     }
 
     fn fcntl(&mut self, id: usize, cmd: usize, arg: usize, _ctx: &CallerCtx) -> Result<usize> {
-        let socket = self.get_socket(id)?;
+        let socket_rc = self.get_socket(id)?;
+        let mut socket = socket_rc.borrow_mut();
         match cmd {
-            F_GETFL => Ok(socket.borrow().flags),
+            F_GETFL => Ok(socket.flags),
             F_SETFL => {
-                socket.borrow_mut().flags = arg;
+                socket.flags = arg;
                 Ok(0)
             }
             _ => {
@@ -782,17 +789,8 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
 
     fn fevent(&mut self, id: usize, flags: EventFlags, _ctx: &CallerCtx) -> Result<EventFlags> {
         let socket_rc = self.get_socket(id)?;
-        let socket = socket_rc.borrow_mut();
-
-        let mut ready = EventFlags::empty();
-        if flags.contains(EVENT_READ) && !socket.messages.is_empty() {
-            ready |= EVENT_READ;
-        }
-        if flags.contains(EVENT_WRITE) && socket.peer.is_some() {
-            ready |= EVENT_WRITE;
-        }
-
-        Ok(ready)
+        let socket = socket_rc.borrow();
+        Ok(socket.events() & flags)
     }
 
     fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {

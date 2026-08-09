@@ -478,56 +478,6 @@ impl<'sock> UdsStreamScheme<'sock> {
         new_id
     }
 
-    fn call_inner(
-        &mut self,
-        id: usize,
-        payload: &mut [u8],
-        metadata: &[u64],
-        ctx: &CallerCtx,
-    ) -> Result<usize> {
-        let Some(verb) =
-            SocketCall::try_from_raw(*metadata.get(0).ok_or(Error::new(EINVAL))? as usize)
-        else {
-            eprintln!("call_inner: Invalid verb in metadata: {:?}", metadata);
-            return Err(Error::new(EINVAL));
-        };
-        match verb {
-            SocketCall::Bind => self.handle_bind(id, &payload),
-            SocketCall::Connect => self.handle_connect(id, &payload),
-            SocketCall::SetSockOpt => self.handle_setsockopt(
-                id,
-                *metadata.get(1).ok_or(Error::new(EINVAL))? as i32,
-                &payload,
-            ),
-            SocketCall::GetSockOpt => self.handle_getsockopt(
-                id,
-                *metadata.get(1).ok_or(Error::new(EINVAL))? as i32,
-                payload,
-            ),
-            SocketCall::SendMsg => self.handle_sendmsg(
-                id,
-                metadata
-                    .get(1)
-                    .map(|x| MsgFlags(*x as _))
-                    .unwrap_or_default(),
-                payload,
-                ctx,
-            ),
-            SocketCall::RecvMsg => self.handle_recvmsg(
-                id,
-                metadata
-                    .get(1)
-                    .map(|x| MsgFlags(*x as _))
-                    .unwrap_or_default(),
-                payload,
-            ),
-            SocketCall::Unbind => self.handle_unbind(id),
-            SocketCall::GetToken => self.handle_get_token(id, payload),
-            SocketCall::GetPeerName => self.handle_get_peer_name(id, payload),
-            _ => Err(Error::new(EOPNOTSUPP)),
-        }
-    }
-
     fn handle_bind(&mut self, id: usize, path_buf: &[u8]) -> Result<usize> {
         let path = path_buf_to_str(path_buf)?;
 
@@ -999,15 +949,9 @@ impl<'sock> UdsStreamScheme<'sock> {
         }
     }
 
-    fn write_inner(
-        &mut self,
-        sender_id: usize,
-        receiver_id: usize,
-        buf: &[u8],
-        ctx: &CallerCtx,
-    ) -> Result<usize> {
+    fn write_inner(&mut self, sender_id: usize, buf: &[u8], ctx: &CallerCtx) -> Result<usize> {
+        let (receiver_id, receiver_rc) = self.get_connected_peer(sender_id)?;
         {
-            let receiver_rc = self.get_socket(receiver_id)?;
             let mut receiver = receiver_rc.borrow_mut();
             let name = receiver.path.clone();
 
@@ -1036,11 +980,10 @@ impl<'sock> UdsStreamScheme<'sock> {
         Ok(buf.len())
     }
 
-    fn sendfd_inner(
-        &mut self,
-        receiver_id: usize,
-        sendfd_request: &SendFdRequest,
-    ) -> Result<usize> {
+    fn sendfd_inner(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
+        let id = sendfd_request.id();
+        let (receiver_id, receiver_rc) = self.get_connected_peer(id)?;
+
         let mut new_fds = Vec::new();
         new_fds.resize(sendfd_request.num_fds(), usize::MAX);
         if let Err(e) =
@@ -1050,7 +993,6 @@ impl<'sock> UdsStreamScheme<'sock> {
             return Err(e);
         }
         {
-            let receiver_rc = self.get_socket(receiver_id)?;
             let mut receiver = receiver_rc.borrow_mut();
 
             let connection = receiver.require_connected_connection(MsgFlags::default())?;
@@ -1103,7 +1045,18 @@ impl<'sock> UdsStreamScheme<'sock> {
         }
     }
 
-    fn read_inner(connection: &mut Connection, buf: &mut [u8], flags: u32) -> Result<usize> {
+    fn read_inner(&mut self, id: usize, buf: &mut [u8], flags: u32) -> Result<usize> {
+        let socket_rc = self.get_socket(id)?;
+        let mut socket = socket_rc.borrow_mut();
+        let connection = match socket.state {
+            State::Established | State::Accepted | State::Connecting => {
+                socket.require_connected_connection(MsgFlags::default())?
+            }
+            State::Closed => return Ok(0),
+            State::Listening => return Err(Error::new(EOPNOTSUPP)),
+            _ => return Err(Error::new(ENOTCONN)),
+        };
+
         let mut total_copied_len = 0;
         let mut user_buf_offset = 0;
 
@@ -1146,6 +1099,18 @@ impl<'sock> UdsStreamScheme<'sock> {
             Err(Error::new(EAGAIN))
         } else {
             Err(Error::new(EWOULDBLOCK))
+        }
+    }
+
+    fn handle_closure(&mut self, socket_rc: Rc<RefCell<Socket>>) {
+        let state = socket_rc.borrow().state;
+        match state {
+            State::Listening => {
+                self.handle_listening_closure(socket_rc);
+            }
+            _ => {
+                self.handle_other_closure(socket_rc);
+            }
         }
     }
 
@@ -1266,13 +1231,55 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
         metadata: &[u64],
         ctx: &CallerCtx,
     ) -> Result<usize> {
-        self.call_inner(id, payload, metadata, ctx)
+        let Some(verb) =
+            SocketCall::try_from_raw(*metadata.get(0).ok_or(Error::new(EINVAL))? as usize)
+        else {
+            eprintln!("call_inner: Invalid verb in metadata: {:?}", metadata);
+            return Err(Error::new(EINVAL));
+        };
+        match verb {
+            SocketCall::Bind => self.handle_bind(id, &payload),
+            SocketCall::Connect => self.handle_connect(id, &payload),
+            SocketCall::SetSockOpt => self.handle_setsockopt(
+                id,
+                *metadata.get(1).ok_or(Error::new(EINVAL))? as i32,
+                &payload,
+            ),
+            SocketCall::GetSockOpt => self.handle_getsockopt(
+                id,
+                *metadata.get(1).ok_or(Error::new(EINVAL))? as i32,
+                payload,
+            ),
+            SocketCall::SendMsg => self.handle_sendmsg(
+                id,
+                metadata
+                    .get(1)
+                    .map(|x| MsgFlags(*x as _))
+                    .unwrap_or_default(),
+                payload,
+                ctx,
+            ),
+            SocketCall::RecvMsg => self.handle_recvmsg(
+                id,
+                metadata
+                    .get(1)
+                    .map(|x| MsgFlags(*x as _))
+                    .unwrap_or_default(),
+                payload,
+            ),
+            SocketCall::Unbind => self.handle_unbind(id),
+            SocketCall::GetToken => self.handle_get_token(id, payload),
+            SocketCall::GetPeerName => self.handle_get_peer_name(id, payload),
+            _ => Err(Error::new(EOPNOTSUPP)),
+        }
     }
 
     fn dup(&mut self, id: usize, buf: &[u8], ctx: &CallerCtx) -> Result<OpenResult> {
         match buf {
+            // Connect for socket pair
             b"listen" => self.handle_listen(id, ctx),
             b"connect" => self.handle_connect_socketpair(id, ctx),
+            // listen will generate a id for same socket
             b"recvfd" => self.handle_recvfd(id),
             _ => Err(Error::new(EINVAL)),
         }
@@ -1286,8 +1293,7 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
         _flags: u32,
         ctx: &CallerCtx,
     ) -> Result<usize> {
-        let (receiver_id, _) = self.get_connected_peer(id)?;
-        self.write_inner(id, receiver_id, buf, ctx)
+        self.write_inner(id, buf, ctx)
     }
 
     fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
@@ -1314,28 +1320,7 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
         flags: u32,
         _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let socket_rc = self.get_socket(id)?;
-        let mut socket = socket_rc.borrow_mut();
-        match socket.state {
-            State::Established | State::Accepted | State::Connecting => {
-                let connection = socket.require_connected_connection(MsgFlags::default())?;
-                Self::read_inner(connection, buf, flags)
-            }
-            State::Closed => Ok(0),
-            State::Listening => Err(Error::new(EOPNOTSUPP)),
-            _ => Err(Error::new(ENOTCONN)),
-        }
-    }
-
-    fn on_sendfd(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
-        let id = sendfd_request.id();
-        let (receiver_id, _) = self.get_connected_peer(id)?;
-
-        self.sendfd_inner(receiver_id, sendfd_request)
-    }
-
-    fn on_recvfd(&mut self, recvfd_request: &RecvFdRequest) -> Result<OpenResult> {
-        self.recvfd_inner(recvfd_request)
+        self.read_inner(id, buf, flags)
     }
 
     fn on_close(&mut self, id: usize) {
@@ -1343,15 +1328,15 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
             return;
         };
 
-        let state = socket_rc.borrow().state;
-        match state {
-            State::Listening => {
-                self.handle_listening_closure(socket_rc);
-            }
-            _ => {
-                self.handle_other_closure(socket_rc);
-            }
-        }
+        self.handle_closure(socket_rc);
+    }
+
+    fn on_sendfd(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
+        self.sendfd_inner(sendfd_request)
+    }
+
+    fn on_recvfd(&mut self, recvfd_request: &RecvFdRequest) -> Result<OpenResult> {
+        self.recvfd_inner(recvfd_request)
     }
 
     fn fcntl(&mut self, id: usize, cmd: usize, arg: usize, _ctx: &CallerCtx) -> Result<usize> {
@@ -1363,7 +1348,10 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
                 socket.flags = arg;
                 Ok(0)
             }
-            _ => Err(Error::new(EINVAL)),
+            _ => {
+                eprintln!("fcntl(id: {}): Unsupported cmd: {}", id, cmd);
+                Err(Error::new(EINVAL))
+            }
         }
     }
 
