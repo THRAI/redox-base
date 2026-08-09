@@ -52,14 +52,14 @@ fn inner(daemon: daemon::Daemon) -> anyhow::Result<()> {
     // Prepare uds stream scheme
     let uds_stream_socket = Socket::nonblock()
         .map_err(|e| anyhow::anyhow!("failed to create uds stream scheme: {e}"))?;
-    let mut uds_stream = UdsStreamScheme::new(&uds_stream_socket)
+    let mut uds_stream = UdsStreamScheme::new(&uds_stream_socket, "uds_stream".to_owned())
         .map_err(|e| anyhow::anyhow!("failed to create uds stream scheme: {e}"))?;
     let mut uds_stream_handler = ReadinessBased::new(&uds_stream_socket, 16);
 
     // Prepare uds dgram scheme
     let uds_dgram_socket = Socket::nonblock()
         .map_err(|e| anyhow::anyhow!("failed to create uds dgram scheme: {e}"))?;
-    let mut uds_dgram = UdsDgramScheme::new(&uds_dgram_socket)
+    let mut uds_dgram = UdsDgramScheme::new(&uds_dgram_socket, "uds_dgram".to_owned())
         .map_err(|e| anyhow::anyhow!("failed to create uds dgram scheme: {e}"))?;
     let mut uds_dgram_handler = ReadinessBased::new(&uds_dgram_socket, 16);
 

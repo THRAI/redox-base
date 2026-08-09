@@ -6,6 +6,7 @@ use std::{cmp, convert::TryInto, mem};
 use syscall::{error::*, Error};
 
 pub mod dgram;
+mod scheme;
 pub mod stream;
 
 // TODO: Remove this when Rust libc crate is updated to include SCM_CREDENTIALS
@@ -244,7 +245,7 @@ impl<'a> MsgWriter<'a> {
         &mut self,
         name: Option<String>,
         name_buf_size: usize,
-        name_write_fn: fn(&String, &mut [u8]) -> Result<usize>,
+        name_write_fn: impl FnOnce(&String, &mut [u8]) -> Result<usize>,
     ) -> Result<()> {
         if self.buffer.len() < self.written_len + mem::size_of::<usize>() {
             eprintln!("MsgWriter::write_name: Buffer too small to write name length. written_len: {}, buffer_len: {}", self.written_len, self.buffer.len());
