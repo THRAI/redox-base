@@ -126,7 +126,7 @@ install-base: base $(SYSROOT)/bin/redoxfs
 	ln -sf /scheme/rand $(DESTDIR)/dev/random
 	ln -sf /scheme/rand $(DESTDIR)/dev/urandom
 	ln -sf /scheme/zero $(DESTDIR)/dev/zero
-	ln -sf libc:tty $(DESTDIR)/dev/tty
-	ln -sf libc:stdin $(DESTDIR)/dev/stdin
-	ln -sf libc:stdout $(DESTDIR)/dev/stdout
-	ln -sf libc:stderr $(DESTDIR)/dev/stderr
+	ln -sf /scheme/libc/tty $(DESTDIR)/dev/tty
+	ln -sf /scheme/libc/stdin $(DESTDIR)/dev/stdin
+	ln -sf /scheme/libc/stdout $(DESTDIR)/dev/stdout
+	ln -sf /scheme/libc/stderr $(DESTDIR)/dev/stderr
