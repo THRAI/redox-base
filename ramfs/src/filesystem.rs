@@ -6,8 +6,8 @@ use std::os::unix::io::AsRawFd;
 
 use indexmap::IndexMap;
 use libredox::Fd;
-use syscall::error::{EACCES, EIO, ENFILE, ENOENT};
-use syscall::{Error, Result, TimeSpec, MODE_DIR};
+use syscall::error::{EACCES, EBADFD, EIO, EISDIR, ENFILE, ENOENT, ENOMEM, ENXIO, EOVERFLOW};
+use syscall::{Error, Result, TimeSpec, MODE_DIR, MODE_TYPE};
 
 use super::scheme::current_perm;
 
@@ -28,7 +28,51 @@ pub struct File {
     pub data: FileData,
 }
 
-#[derive(Clone, Debug)]
+impl File {
+    pub fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
+        match self.data {
+            FileData::File(ref bytes) => {
+                if self.mode & MODE_TYPE == MODE_DIR {
+                    return Err(Error::new(EBADFD));
+                }
+
+                let src_bytes = bytes.get(offset..).unwrap_or(&[]);
+                let bytes_to_read = src_bytes.len().min(buf.len());
+                buf[..bytes_to_read].copy_from_slice(&src_bytes[..bytes_to_read]);
+                Ok(bytes_to_read)
+            }
+
+            FileData::Directory(_) => Err(Error::new(EISDIR)),
+            FileData::Socket(_) => Err(Error::new(ENXIO)),
+        }
+    }
+
+    pub fn write(&mut self, offset: usize, buf: &[u8]) -> Result<usize> {
+        match self.data {
+            FileData::File(ref mut bytes) => {
+                if self.mode & MODE_TYPE == MODE_DIR {
+                    return Err(Error::new(EBADFD));
+                }
+
+                // if there's a seek hole, fill it with 0 and continue writing.
+                let end_off = offset.checked_add(buf.len()).ok_or(Error::new(EOVERFLOW))?;
+                if end_off > bytes.len() {
+                    let additional = end_off - bytes.len();
+                    bytes.try_reserve(additional).or(Err(Error::new(ENOMEM)))?;
+                    bytes.resize(end_off, 0u8);
+                }
+                bytes[offset..][..buf.len()].copy_from_slice(buf);
+
+                Ok(buf.len())
+            }
+
+            FileData::Directory(_) => Err(Error::new(EISDIR)),
+            FileData::Socket(_) => Err(Error::new(ENXIO)),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 pub struct Inode(pub usize);
 
 pub enum FileData {

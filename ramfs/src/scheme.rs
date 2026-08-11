@@ -2,66 +2,190 @@ use std::convert::{TryFrom, TryInto};
 use std::os::unix::io::AsRawFd;
 use std::{mem, str};
 
+use event::{EventFlags, RawEventQueue};
+use libredox::flag;
 use libredox::protocol::FsCall;
 use libredox::Fd;
 use redox_path::RedoxPath;
+use redox_rings::sync::{BlockingConsumer, BlockingProducer};
 use scheme_utils::{FpathWriter, HandleMap};
 use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
 use syscall::error::{
     EACCES, EBADF, EBADFD, EEXIST, EINVAL, EIO, EISDIR, ENOENT, ENOMEM, ENOSYS, ENOTDIR, ENOTEMPTY,
-    ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE,
+    EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE,
 };
 use syscall::flag::{
     StdFsCallKind, O_ACCMODE, O_CREAT, O_DIRECTORY, O_EXCL, O_RDONLY, O_RDWR, O_STAT, O_TRUNC,
     O_WRONLY,
 };
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error, EventFlags, FobtainFdFlags, Result, Stat, StatVfs, StdFsCallMeta, TimeSpec};
+use syscall::{
+    Error, FmoveFdFlags, FobtainFdFlags, Result, Stat, StatVfs, StdFsCallMeta, TimeSpec,
+};
 use syscall::{MODE_DIR, MODE_FILE, MODE_PERM, MODE_TYPE};
 
 use indexmap::IndexMap;
 
 use redox_scheme::scheme::SchemeSync;
 use redox_scheme::{CallerCtx, OpenResult, SendFdRequest, Socket};
+use zerocopy::TryFromBytes;
 
 use crate::filesystem::{self, File, FileData, Filesystem, Inode};
 
-enum Handle {
-    Inode(usize),
+use redox_rings::op::{
+    FsOpCqe, FsOpKind, FsOpSqe, RingCallVerb, RingSetupFlags, RingSetupParams, RING_MAX_CQ_ENTRIES,
+    RING_MAX_SQ_ENTRIES,
+};
+
+pub struct Shm {
+    ptr: *mut u8,
+    size: usize,
 }
 
-impl Handle {
-    fn as_inode(&self) -> Result<usize> {
-        match self {
-            &Self::Inode(inode) => Ok(inode),
+impl Shm {
+    fn new(size: u32) -> Self {
+        use libredox::call::{mmap, MmapArgs};
+        use libredox::flag::{MAP_SHARED, PROT_READ, PROT_WRITE};
+
+        let size = size as usize;
+
+        assert_ne!(size, 0);
+        let ptr = unsafe {
+            mmap(MmapArgs {
+                addr: core::ptr::null_mut(),
+                length: size.next_multiple_of(syscall::PAGE_SIZE),
+                prot: PROT_READ | PROT_WRITE,
+                flags: MAP_SHARED,
+                fd: !0,
+                offset: 0,
+            })
+            .unwrap()
+        }
+        .cast::<u8>();
+
+        Self { ptr, size }
+    }
+
+    unsafe fn get(&mut self, offset: usize, size: usize) -> Option<&mut [u8]> {
+        if offset + size > self.size {
+            return None;
+        }
+
+        unsafe { Some(core::slice::from_raw_parts_mut(self.ptr.add(offset), size)) }
+    }
+}
+
+impl Drop for Shm {
+    fn drop(&mut self) {
+        use libredox::call::munmap;
+        unsafe {
+            munmap(
+                self.ptr.cast::<()>(),
+                self.size.next_multiple_of(syscall::PAGE_SIZE),
+            )
+            .unwrap();
         }
     }
 }
 
-pub struct Scheme<'a> {
-    socket: &'a Socket,
-    scheme_name: String,
-    filesystem: Filesystem,
-    handles: HandleMap<Handle>,
-    proc_creds_capability: libredox::Fd,
+pub enum RingState {
+    Inactive,
+    Active {
+        sq: BlockingConsumer<FsOpSqe>,
+        cq: BlockingProducer<FsOpCqe>,
+        fixed_ftbl: Vec<Inode>,
+        pipe_fd: Fd,
+        shm: Shm,
+    },
 }
+
+pub enum Handle {
+    Inode(usize),
+    Ring(RingState),
+}
+
+impl Handle {
+    fn try_as_inode(&self) -> Result<Inode> {
+        match self {
+            &Self::Inode(inode) => Ok(Inode(inode)),
+            _ => Err(Error::new(EBADFD)),
+        }
+    }
+
+    fn as_inode(&self) -> Result<usize> {
+        match self {
+            &Self::Inode(inode) => Ok(inode),
+            _ => Err(Error::new(EBADFD)),
+        }
+    }
+}
+
+pub fn handle_ring_req(
+    shm: &mut Shm,
+    fixed_fdtbl: &mut [Inode],
+    fs: &mut Filesystem,
+    sqe: FsOpSqe,
+) -> Result<usize> {
+    let kind = FsOpKind::try_from_raw(sqe.opcode).ok_or(Error::new(EINVAL))?;
+
+    if sqe.buf_offset as usize + sqe.buf_len as usize > shm.size {
+        return Err(Error::new(EACCES));
+    }
+
+    let buf = unsafe { shm.get(sqe.buf_offset as usize, sqe.buf_len as usize) }
+        .ok_or(Error::new(EINVAL))?;
+
+    let inode = fixed_fdtbl
+        .get(sqe.file_idx as usize)
+        .ok_or(Error::new(EBADFD))?;
+
+    let file = fs
+        .files
+        .get_mut(&inode.0)
+        .ok_or(Error::new(EBADFD))
+        .unwrap();
+
+    match kind {
+        FsOpKind::Read => file.read(sqe.off as usize, buf),
+        FsOpKind::Write => file.write(sqe.off as usize, buf),
+    }
+}
+
+pub struct Scheme<'a> {
+    scheme_name: String,
+    socket: &'a Socket,
+    pub filesystem: Filesystem,
+    pub handles: HandleMap<Handle>,
+    proc_creds_capability: Fd,
+
+    queue: &'a RawEventQueue,
+    shm_dir: Fd,
+    pipe_root: Fd,
+}
+
 impl<'a> Scheme<'a> {
     /// Create the scheme, with the name being used for `fpath`.
-    pub fn new(socket: &'a Socket, scheme_name: String) -> Result<Self> {
+    pub fn new(socket: &'a Socket, scheme_name: String, queue: &'a RawEventQueue) -> Result<Self> {
+        let shm_dir_name = format!("/scheme/shm/{scheme_name}");
         Ok(Self {
-            socket,
             scheme_name,
+            socket,
             filesystem: Filesystem::new()?,
             handles: HandleMap::new(),
             proc_creds_capability: {
-                libredox::Fd::open(
+                Fd::open(
                     "/scheme/proc/proc-creds-capability",
                     libredox::flag::O_RDONLY,
                     0,
                 )?
             },
+
+            queue,
+            shm_dir: Fd::open(&shm_dir_name, flag::O_DIRECTORY | flag::O_CLOEXEC, 0)?,
+            pipe_root: Fd::open("/scheme/pipe/scheme-root", flag::O_CLOEXEC, 0)?,
         })
     }
+
     /// Remove a directory entry, where the entry can be both a file or a directory. Used by `unlinkat`.
     fn remove_dentry(&mut self, path: &str, uid: u32, gid: u32, directory: bool) -> Result<()> {
         let removed_inode = {
@@ -196,6 +320,7 @@ impl SchemeSync for Scheme<'_> {
     fn scheme_root(&mut self) -> Result<usize> {
         Ok(self.handles.insert(Handle::Inode(Filesystem::ROOT_INODE)))
     }
+
     fn openat(
         &mut self,
         dirfd: usize,
@@ -300,6 +425,205 @@ impl SchemeSync for Scheme<'_> {
             flags: NewFdFlags::POSITIONED,
         })
     }
+
+    fn call_multiple_ids(
+        &mut self,
+        ids: &[usize],
+        _payload: &mut [u8],
+        metadata: &[u64],
+        _ctx: &CallerCtx, // Only pid and id are correct here, uid/gid are not used
+    ) -> Result<usize> {
+        let verb = RingCallVerb::try_from_raw(metadata[0] as u8).ok_or(Error::new(EINVAL))?;
+
+        match verb {
+            RingCallVerb::SetFileTable => {
+                let (&ring_fd, ids) = ids.split_first().ok_or(Error::new(EINVAL))?;
+                if ids.is_empty() {
+                    log::error!("RingCallVerb::SetFileTable: got an empty file table");
+                    return Err(Error::new(EINVAL));
+                }
+
+                let files = ids
+                    .iter()
+                    .map(|&id| {
+                        self.handles
+                            .get(id)
+                            .and_then(|handle| handle.try_as_inode())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let Handle::Ring(RingState::Active { fixed_ftbl, .. }) =
+                    self.handles.get_mut(ring_fd)?
+                else {
+                    return Err(Error::new(EINVAL));
+                };
+
+                *fixed_ftbl = files;
+                Ok(ids.len())
+            }
+
+            RingCallVerb::Setup => Err(Error::new(EINVAL)),
+        }
+    }
+
+    fn call(
+        &mut self,
+        id: usize,
+        payload: &mut [u8],
+        metadata: &[u64],
+        _ctx: &CallerCtx, // Only pid and id are correct here, uid/gid are not used
+    ) -> Result<usize> {
+        match self.handles.get_mut(id)? {
+            Handle::Inode(_) => {
+                let Some(verb) = FsCall::try_from_raw(metadata[0] as usize) else {
+                    return Err(Error::new(EINVAL));
+                };
+
+                match verb {
+                    FsCall::Connect => self.handle_connect(id, payload),
+                    _ => Err(Error::new(EOPNOTSUPP)),
+                }
+            }
+
+            Handle::Ring(ref mut state) => {
+                let verb =
+                    RingCallVerb::try_from_raw(metadata[0] as u8).ok_or(Error::new(EINVAL))?;
+
+                match verb {
+                    RingCallVerb::Setup => {
+                        if !matches!(state, RingState::Inactive) {
+                            return Err(Error::new(EIO));
+                        }
+
+                        let params = RingSetupParams::try_mut_from_bytes(payload)
+                            .map_err(|_| Error::new(EINVAL))?;
+
+                        let flags = params.flags().ok_or(Error::new(EINVAL))?;
+
+                        if params.pool_size == 0 {
+                            return Err(Error::new(EINVAL));
+                        }
+
+                        if params.nr_sq_entries == 0 || params.nr_sq_entries > RING_MAX_SQ_ENTRIES {
+                            return Err(Error::new(EINVAL));
+                        }
+
+                        let nr_sq_entries = params.nr_sq_entries.next_power_of_two();
+                        let nr_cq_entries = if flags.contains(RingSetupFlags::CQSIZE) {
+                            if params.nr_cq_entries == 0
+                                || params.nr_cq_entries > RING_MAX_CQ_ENTRIES
+                            {
+                                return Err(Error::new(EINVAL));
+                            }
+
+                            let nr_cq_entries = nr_sq_entries.next_power_of_two();
+                            if nr_cq_entries < nr_sq_entries {
+                                return Err(Error::new(EINVAL));
+                            }
+
+                            nr_cq_entries
+                        } else {
+                            nr_sq_entries * 2
+                        };
+
+                        params.nr_sq_entries = nr_sq_entries;
+                        params.nr_cq_entries = nr_cq_entries;
+
+                        let sq_name = format!("{id}.sq");
+                        let cq_name = format!("{id}.cq");
+
+                        let queue_flags = flag::O_CREAT | flag::O_RDWR | flag::O_CLOEXEC;
+
+                        let sq_fd = self.shm_dir.openat(&sq_name, queue_flags, 0)?;
+                        let cq_fd = self.shm_dir.openat(&cq_name, queue_flags, 0)?;
+                        let pipe_fd = self.pipe_root.openat("", flag::O_CLOEXEC, 0)?;
+
+                        let sq =
+                            BlockingConsumer::<FsOpSqe>::from_fd(sq_fd, true, Some(nr_sq_entries))?;
+                        let cq =
+                            BlockingProducer::<FsOpCqe>::from_fd(cq_fd, true, Some(nr_cq_entries))?;
+
+                        // TODO: When can [`RawEventQueue::subscribe`] return an error?
+                        self.queue.subscribe(pipe_fd.raw(), id, EventFlags::READ)?;
+
+                        *state = RingState::Active {
+                            sq,
+                            cq,
+                            fixed_ftbl: Vec::new(),
+                            pipe_fd,
+                            shm: Shm::new(params.pool_size),
+                        };
+
+                        Ok(0)
+                    }
+
+                    RingCallVerb::SetFileTable => Err(Error::new(EINVAL)),
+                }
+            }
+        }
+    }
+
+    fn dup(&mut self, old_id: usize, buf: &[u8], _ctx: &CallerCtx) -> Result<OpenResult> {
+        let handle = self.handles.get(old_id)?;
+
+        if buf == b"uring" {
+            if handle.as_inode()? != Filesystem::ROOT_INODE {
+                return Err(Error::new(EOPNOTSUPP));
+            }
+
+            let new_id = self.handles.insert(Handle::Ring(RingState::Inactive));
+
+            Ok(OpenResult::ThisScheme {
+                number: new_id,
+                flags: NewFdFlags::empty(),
+            })
+        } else {
+            Err(Error::new(EOPNOTSUPP))
+        }
+    }
+
+    fn on_recvfd(&mut self, recvfd_request: &redox_scheme::RecvFdRequest) -> Result<OpenResult> {
+        let id = recvfd_request.id();
+        let handle = self.handles.get(id)?;
+
+        match handle {
+            Handle::Ring(RingState::Active {
+                sq, cq, pipe_fd, ..
+            }) => {
+                let ring_fds = [sq.fd().raw(), cq.fd().raw(), pipe_fd.raw()];
+                recvfd_request.move_fd(self.socket, FmoveFdFlags::CLONE, ring_fds.as_slice())?;
+
+                Ok(OpenResult::OtherSchemeMultiple {
+                    // TODO: This field seems to be unused in the kernel. Can it be removed?
+                    num_fds: recvfd_request.num_fds(),
+                })
+            }
+
+            _ => Err(Error::new(EINVAL)),
+        }
+    }
+
+    fn mmap_prep(
+        &mut self,
+        id: usize,
+        offset: u64,
+        size: usize,
+        _flags: syscall::MapFlags,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
+        match self.handles.get(id)? {
+            Handle::Ring(RingState::Active { shm, .. }) => {
+                let offset = offset as usize;
+                if offset + size > shm.size {
+                    return Err(Error::new(EINVAL));
+                }
+                Ok((shm.ptr as usize) + offset)
+            }
+            // TODO
+            Handle::Inode(_) | Handle::Ring(_) => Err(Error::new(ENOSYS)),
+        }
+    }
+
     fn unlinkat(&mut self, dirfd: usize, path: &str, flags: usize, ctx: &CallerCtx) -> Result<()> {
         if self.handles.get(dirfd)?.as_inode()? != Filesystem::ROOT_INODE {
             return Err(Error::new(EACCES));
@@ -311,6 +635,7 @@ impl SchemeSync for Scheme<'_> {
             flags & syscall::AT_REMOVEDIR == syscall::AT_REMOVEDIR,
         )
     }
+
     fn read(
         &mut self,
         fd: usize,
@@ -333,20 +658,30 @@ impl SchemeSync for Scheme<'_> {
             return Err(Error::new(EBADF));
         }
 
-        match file.data {
-            FileData::File(ref bytes) => {
-                if file.mode & MODE_TYPE == MODE_DIR {
-                    return Err(Error::new(EBADFD));
-                }
-                let src_bytes = bytes.get(offset..).unwrap_or(&[]);
-                let bytes_to_read = src_bytes.len().min(buf.len());
-                buf[..bytes_to_read].copy_from_slice(&src_bytes[..bytes_to_read]);
-                Ok(bytes_to_read)
-            }
-            FileData::Directory(_) => return Err(Error::new(EISDIR)),
-            FileData::Socket(_) => return Err(Error::new(ENXIO)),
-        }
+        file.read(offset, buf)
     }
+
+    fn write(
+        &mut self,
+        fd: usize,
+        buf: &[u8],
+        offset: u64,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
+        let Ok(offset) = usize::try_from(offset) else {
+            return Err(Error::new(EOVERFLOW));
+        };
+        let inode = self.handles.get(fd)?.as_inode()?;
+        let file = self
+            .filesystem
+            .files
+            .get_mut(&inode)
+            .ok_or(Error::new(EBADFD))?;
+
+        file.write(offset, buf)
+    }
+
     fn getdents<'buf>(
         &mut self,
         fd: usize,
@@ -376,43 +711,6 @@ impl SchemeSync for Scheme<'_> {
             })?;
         }
         Ok(buf)
-    }
-    fn write(
-        &mut self,
-        fd: usize,
-        buf: &[u8],
-        offset: u64,
-        _fcntl_flags: u32,
-        _ctx: &CallerCtx,
-    ) -> Result<usize> {
-        let Ok(offset) = usize::try_from(offset) else {
-            return Err(Error::new(EOVERFLOW));
-        };
-        let inode = self.handles.get(fd)?.as_inode()?;
-        let file = self
-            .filesystem
-            .files
-            .get_mut(&inode)
-            .ok_or(Error::new(EBADFD))?;
-
-        if let &mut FileData::File(ref mut bytes) = &mut file.data {
-            if file.mode & MODE_TYPE == MODE_DIR {
-                return Err(Error::new(EBADFD));
-            }
-
-            // if there's a seek hole, fill it with 0 and continue writing.
-            let end_off = offset.checked_add(buf.len()).ok_or(Error::new(EOVERFLOW))?;
-            if end_off > bytes.len() {
-                let additional = end_off - bytes.len();
-                bytes.try_reserve(additional).or(Err(Error::new(ENOMEM)))?;
-                bytes.resize(end_off, 0u8);
-            }
-            bytes[offset..][..buf.len()].copy_from_slice(buf);
-
-            Ok(buf.len())
-        } else {
-            Err(Error::new(EISDIR))
-        }
     }
     fn fchmod(&mut self, fd: usize, mode: u16, _ctx: &CallerCtx) -> Result<()> {
         let inode = self.handles.get(fd)?.as_inode()?;
@@ -459,21 +757,10 @@ impl SchemeSync for Scheme<'_> {
     fn fevent(
         &mut self,
         _inode: usize,
-        _flags: EventFlags,
+        _flags: syscall::EventFlags,
         _ctx: &CallerCtx,
-    ) -> Result<EventFlags> {
+    ) -> Result<syscall::EventFlags> {
         // TODO?
-        Err(Error::new(ENOSYS))
-    }
-    fn mmap_prep(
-        &mut self,
-        _inode: usize,
-        _offset: u64,
-        _size: usize,
-        _flags: syscall::MapFlags,
-        _ctx: &CallerCtx,
-    ) -> Result<usize> {
-        // TODO
         Err(Error::new(ENOSYS))
     }
     fn fpath(&mut self, fd: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
@@ -794,27 +1081,11 @@ impl SchemeSync for Scheme<'_> {
         Ok(self.handles.insert(Handle::Inode(new_inode_number)))
     }
 
-    fn call(
-        &mut self,
-        id: usize,
-        payload: &mut [u8],
-        metadata: &[u64],
-        _ctx: &CallerCtx,
-    ) -> Result<usize> {
-        let Some(verb) = FsCall::try_from_raw(metadata[0] as usize) else {
-            return Err(Error::new(EINVAL));
-        };
-        match verb {
-            FsCall::Connect => self.handle_connect(id, payload),
-            _ => Err(Error::new(EOPNOTSUPP)),
-        }
-    }
-
     fn std_fs_call(
         &mut self,
         id: usize,
         kind: StdFsCallKind,
-        payload: &mut [u8],
+        _payload: &mut [u8],
         metadata: StdFsCallMeta,
         ctx: &CallerCtx,
     ) -> Result<usize> {
@@ -853,17 +1124,27 @@ impl SchemeSync for Scheme<'_> {
     }
 
     fn on_close(&mut self, fd: usize) {
-        let Some(Handle::Inode(inode)) = self.handles.remove(fd) else {
-            return;
-        };
-        let Some(inode_info) = self.filesystem.files.get_mut(&inode) else {
+        let Some(handle) = self.handles.remove(fd) else {
             return;
         };
 
-        inode_info.open_handles -= 1;
+        match handle {
+            Handle::Inode(inode) => {
+                let Some(inode_info) = self.filesystem.files.get_mut(&inode) else {
+                    return;
+                };
 
-        if inode_info.nlink == 0 && inode_info.open_handles == 0 {
-            self.filesystem.files.remove(&inode);
+                inode_info.open_handles -= 1;
+
+                if inode_info.nlink == 0 && inode_info.open_handles == 0 {
+                    self.filesystem.files.remove(&inode);
+                }
+            }
+
+            Handle::Ring(RingState::Inactive) => {}
+            Handle::Ring(RingState::Active { pipe_fd, .. }) => {
+                self.queue.unsubscribe(pipe_fd.into_raw()).unwrap();
+            }
         }
     }
 }
