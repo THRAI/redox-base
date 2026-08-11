@@ -2,7 +2,7 @@ use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult};
 use scheme_utils::{FpathWriter, HandleMap};
 use std::{
     cmp,
-    collections::{hash_map::Entry, HashMap},
+    collections::{btree_map::Entry, BTreeMap},
     rc::Rc,
 };
 use syscall::{
@@ -12,13 +12,14 @@ use syscall::{
 
 enum Handle {
     Shm(Rc<str>),
+    Directory(Rc<str>),
     SchemeRoot,
 }
 impl Handle {
     fn as_shm(&self) -> Result<&Rc<str>, Error> {
         match self {
             Self::Shm(path) => Ok(path),
-            Self::SchemeRoot => Err(Error::new(EBADF)),
+            Self::SchemeRoot | Self::Directory(_) => Err(Error::new(EBADF)),
         }
     }
 }
@@ -32,13 +33,13 @@ pub struct ShmHandle {
     unlinked: bool,
 }
 pub struct ShmScheme {
-    maps: HashMap<Rc<str>, ShmHandle>,
+    maps: BTreeMap<Rc<str>, ShmHandle>,
     handles: HandleMap<Handle>,
 }
 impl ShmScheme {
     pub fn new() -> Self {
         Self {
-            maps: HashMap::new(),
+            maps: BTreeMap::new(),
             handles: HandleMap::new(),
         }
     }
@@ -48,6 +49,7 @@ impl SchemeSync for ShmScheme {
     fn scheme_root(&mut self) -> Result<usize> {
         Ok(self.handles.insert(Handle::SchemeRoot))
     }
+
     //FIXME: Handle O_RDONLY/O_WRONLY/O_RDWR
     fn openat(
         &mut self,
@@ -58,11 +60,20 @@ impl SchemeSync for ShmScheme {
         _ctx: &CallerCtx,
     ) -> Result<OpenResult> {
         let handle = self.handles.get(dirfd)?;
-        if !matches!(handle, Handle::SchemeRoot) {
-            return Err(Error::new(EACCES));
+        let path = match handle {
+            Handle::SchemeRoot => Rc::from(path),
+            Handle::Directory(parent) => Rc::from(format!("{}.{}", *parent, path).as_str()),
+            _ => return Err(Error::new(EOPNOTSUPP)),
+        };
+
+        if flags & syscall::O_DIRECTORY != 0 {
+            let id = self.handles.insert(Handle::Directory(path));
+            return Ok(OpenResult::ThisScheme {
+                number: id,
+                flags: NewFdFlags::empty(),
+            });
         }
 
-        let path = Rc::from(path);
         let entry = match self.maps.entry(Rc::clone(&path)) {
             Entry::Occupied(e) => {
                 if flags & syscall::O_EXCL != 0 && flags & syscall::O_CREAT != 0 {

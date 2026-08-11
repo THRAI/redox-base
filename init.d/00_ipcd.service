@@ -1,5 +1,7 @@
 [unit]
 description = "IPC daemon"
+requires_weak = ["00_randd.service"]
+default_dependencies = false
 
 [service]
 cmd = "ipcd"

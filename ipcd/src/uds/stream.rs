@@ -1,8 +1,8 @@
 //! uds scheme for handling Unix Domain Socket stream communication
 
 use super::{
-    get_uid_gid_from_pid, path_buf_to_str, read_msghdr_info, read_num, AncillaryData, Credential,
-    DataPacket, MsgWriter, MIN_RECV_MSG_LEN,
+    create_token_generator, get_uid_gid_from_pid, path_buf_to_str, read_msghdr_info, read_num,
+    AncillaryData, Credential, DataPacket, MsgWriter, MIN_RECV_MSG_LEN,
 };
 
 use libc::{ucred, AF_UNIX};
@@ -16,7 +16,7 @@ use scheme_utils::FpathWriter;
 use std::{
     cell::RefCell,
     cmp,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     mem,
     rc::Rc,
     slice,
@@ -67,7 +67,7 @@ impl Connection {
         stream: &mut [u8],
         name_buf_size: usize,
         iov_size: usize,
-        options: HashSet<i32>,
+        options: BTreeSet<i32>,
     ) -> Result<usize> {
         let mut name: Option<String> = None;
         let mut payload_buffer: Vec<u8> = Vec::with_capacity(iov_size);
@@ -177,7 +177,7 @@ impl Default for State {
 pub struct Socket {
     primary_id: usize,
     path: Option<String>,
-    options: HashSet<i32>,
+    options: BTreeSet<i32>,
     flags: usize,
     state: State,
     awaiting: VecDeque<usize>,
@@ -191,7 +191,7 @@ impl Socket {
         id: usize,
         path: Option<String>,
         state: State,
-        options: HashSet<i32>,
+        options: BTreeSet<i32>,
         flags: usize,
         connection: Option<Connection>,
         ctx: &CallerCtx,
@@ -387,7 +387,7 @@ impl Handle {
 }
 
 pub struct UdsStreamScheme<'sock> {
-    handles: HashMap<usize, Handle>,
+    handles: BTreeMap<usize, Handle>,
     next_id: usize,
     socket_tokens: HashMap<u64, Rc<RefCell<Socket>>>,
     socket: &'sock SchemeSocket,
@@ -398,7 +398,7 @@ pub struct UdsStreamScheme<'sock> {
 impl<'sock> UdsStreamScheme<'sock> {
     pub fn new(socket: &'sock SchemeSocket) -> Result<Self> {
         Ok(Self {
-            handles: HashMap::new(),
+            handles: BTreeMap::new(),
             next_id: 0,
             socket_tokens: HashMap::new(),
             socket,
@@ -409,7 +409,7 @@ impl<'sock> UdsStreamScheme<'sock> {
                     0,
                 )?
             },
-            rng: rand::make_rng(),
+            rng: create_token_generator(),
         })
     }
 
@@ -468,7 +468,7 @@ impl<'sock> UdsStreamScheme<'sock> {
             new_id,
             None,
             State::Unbound,
-            HashSet::new(),
+            BTreeSet::new(),
             flags,
             None,
             ctx,
@@ -948,8 +948,8 @@ impl<'sock> UdsStreamScheme<'sock> {
         let mut new = Socket::new(
             new_id,
             None,
-            State::Unbound,
-            HashSet::new(),
+            State::Connecting,
+            BTreeSet::new(),
             flags,
             None,
             ctx,

@@ -2,7 +2,7 @@ use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult, Response, SignalBe
 use scheme_utils::FpathWriter;
 use std::{
     cmp,
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, VecDeque},
 };
 use syscall::{error::*, flag::*, schemev2::NewFdFlags, Error};
 
@@ -91,16 +91,16 @@ impl Handle {
 }
 
 pub struct ChanScheme<'sock> {
-    handles: HashMap<usize, Handle>,
-    listeners: HashMap<String, usize>,
+    handles: BTreeMap<usize, Handle>,
+    listeners: BTreeMap<String, usize>,
     next_id: usize,
     socket: &'sock Socket,
 }
 impl<'sock> ChanScheme<'sock> {
     pub fn new(socket: &'sock Socket) -> Self {
         Self {
-            handles: HashMap::new(),
-            listeners: HashMap::new(),
+            handles: BTreeMap::new(),
+            listeners: BTreeMap::new(),
             next_id: 0,
             socket,
         }
