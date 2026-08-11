@@ -8,4 +8,5 @@ requires_weak = [
     "00_rtcd.service",
     "00_zerod.service",
     "ramfs@logging.service",
+    "00_ipcd.service",
 ]
