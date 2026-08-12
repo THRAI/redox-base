@@ -2,7 +2,7 @@
 use std::mem::MaybeUninit;
 use std::ptr::addr_of_mut;
 use std::sync::{Arc, Mutex};
-use std::{mem, process, slice, thread};
+use std::{process, thread};
 
 use anyhow::Context;
 use ioslice::IoSlice;
@@ -14,26 +14,33 @@ use scheme_utils::ReadinessBased;
 
 use daemon::SchemeDaemon;
 
-use self::scheme::{AudioScheme, AudioSchemeInner};
+use self::scheme::{AudioChunk, AudioScheme, AudioSchemeInner};
 
 mod scheme;
 
 extern "C" fn sigusr_handler(_sig: usize) {}
 
 fn thread(inner_mutex: Arc<Mutex<AudioSchemeInner>>, pid: usize, hw_file: Fd) -> Result<()> {
+    let shm_fd = hw_file.openat("audio_shm", 0, 0)?;
+    let mut ring = redox_rings::user::Producer::<AudioChunk>::from_fd(shm_fd, false, None)?;
     loop {
         let buffer = {
             let mut inner = inner_mutex.lock().unwrap();
             inner.buffer()
         };
-        let buffer_u8 = unsafe {
-            slice::from_raw_parts(buffer.as_ptr() as *const u8, mem::size_of_val(&buffer))
-        };
-
         // Wake up the scheme thread
         libredox::call::kill(pid, libredox::flag::SIGUSR1 as u32)?;
 
-        hw_file.write(&buffer_u8)?;
+        loop {
+            match ring.push(buffer) {
+                Ok(_) => {
+                    break;
+                }
+                Err(_) => {
+                    thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }
     }
 }
 

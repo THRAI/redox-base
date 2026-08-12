@@ -23,6 +23,8 @@ enum Handle {
     SchemeRoot,
 }
 
+pub type AudioChunk = [(i16, i16); HW_BUFFER_SIZE];
+
 pub struct AudioSchemeInner {
     handles: HandleMap<Handle>,
     volume: i32,
@@ -36,7 +38,7 @@ impl AudioSchemeInner {
         }
     }
 
-    pub fn buffer(&mut self) -> [(i16, i16); HW_BUFFER_SIZE] {
+    pub fn buffer(&mut self) -> AudioChunk {
         let mut mix_buffer = [(0i16, 0i16); HW_BUFFER_SIZE];
 
         // Multiply each sample by the cube of volume divided by 100
