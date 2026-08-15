@@ -1031,13 +1031,6 @@ impl SchemeSync for IntelHDA {
         _fcntl_flags: u32,
         ctx: &CallerCtx,
     ) -> Result<OpenResult> {
-        {
-            let handles = self.handles.lock();
-            let handle = handles.get(dirfd)?;
-            if !matches!(handle, Handle::SchemeRoot) {
-                return Err(Error::new(EACCES));
-            }
-        }
         //let path: Vec<&str>;
         /*
         match str::from_utf8(_path) {
