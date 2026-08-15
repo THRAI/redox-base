@@ -4,7 +4,6 @@ use redox_scheme::Socket;
 use scheme_utils::ReadinessBased;
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
-use std::usize;
 
 use event::{user_data, EventQueue};
 use pcid_interface::irq_helpers::pci_allocate_interrupt_vector;
