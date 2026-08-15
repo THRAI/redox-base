@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::str;
 
+use libredox::protocol::TtyCall;
 use redox_scheme::scheme::SchemeSync;
 use redox_scheme::{CallerCtx, OpenResult};
 use syscall::data::Stat;
@@ -217,5 +218,94 @@ impl SchemeSync for PtyScheme {
 
     fn on_close(&mut self, id: usize) {
         let _ = self.handles.remove(&id);
+    }
+
+    fn call(
+        &mut self,
+        id: usize,
+        payload: &mut [u8],
+        metadata: &[u64],
+        _ctx: &CallerCtx, // Only pid and id are correct here, uid/gid are not used
+    ) -> Result<usize> {
+        const REQ_READ: u64 = 0;
+        const REQ_WRITE: u64 = 1;
+        let &[verb_raw, request] = metadata.get(0..2).ok_or(Error::new(EINVAL))? else {
+            return Err(Error::new(EINVAL));
+        };
+        let verb = TtyCall::try_from_raw(verb_raw as usize).ok_or(Error::new(EINVAL))?;
+
+        let old_handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+
+        let old_resource = match old_handle {
+            Handle::Resource(res) => res,
+            Handle::SchemeRoot => return Err(Error::new(EBADF)),
+        };
+
+        match verb {
+            TtyCall::Termios => {
+                let mut termios = PtyTermios::new(old_resource.pty(), old_resource.flags());
+                match request {
+                    REQ_READ => termios.read(payload),
+                    REQ_WRITE => termios.write(payload),
+                    _ => Err(Error::new(EINVAL)),
+                }
+            }
+            TtyCall::Flush => {
+                let mut flush = PtFlush::new(old_resource.pty(), old_resource.flags());
+                match request {
+                    REQ_READ => flush.read(payload),
+                    REQ_WRITE => flush.write(payload),
+                    _ => Err(Error::new(EINVAL)),
+                }
+            }
+            TtyCall::SendBreak => {
+                let mut sendbreak = PtSendbreak::new(old_resource.pty(), old_resource.flags());
+                match request {
+                    REQ_READ => sendbreak.read(payload),
+                    REQ_WRITE => sendbreak.write(payload),
+                    _ => Err(Error::new(EINVAL)),
+                }
+            }
+            TtyCall::Flow => {
+                let mut flow = PtFlow::new(old_resource.pty(), old_resource.flags());
+                match request {
+                    REQ_READ => flow.read(payload),
+                    REQ_WRITE => flow.write(payload),
+                    _ => Err(Error::new(EINVAL)),
+                }
+            }
+            TtyCall::PtsName => {
+                let mut ptsname = PtsName::new(old_resource.pty(), old_resource.flags());
+                match request {
+                    REQ_READ => ptsname.read(payload),
+                    REQ_WRITE => ptsname.write(payload),
+                    _ => Err(Error::new(EINVAL)),
+                }
+            }
+            TtyCall::PtLock => {
+                let mut ptlock = PtyLock::new(old_resource.pty(), old_resource.flags());
+                match request {
+                    REQ_READ => ptlock.read(payload),
+                    REQ_WRITE => ptlock.write(payload),
+                    _ => Err(Error::new(EINVAL)),
+                }
+            }
+            TtyCall::Pgrp => {
+                let mut pgrp = PtyPgrp::new(old_resource.pty(), old_resource.flags());
+                match request {
+                    REQ_READ => pgrp.read(payload),
+                    REQ_WRITE => pgrp.write(payload),
+                    _ => Err(Error::new(EINVAL)),
+                }
+            }
+            TtyCall::Winsize => {
+                let mut winsize = PtyWinsize::new(old_resource.pty(), old_resource.flags());
+                match request {
+                    REQ_READ => winsize.read(payload),
+                    REQ_WRITE => winsize.write(payload),
+                    _ => Err(Error::new(EINVAL)),
+                }
+            }
+        }
     }
 }
