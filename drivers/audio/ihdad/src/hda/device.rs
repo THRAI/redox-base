@@ -994,24 +994,8 @@ impl IntelHDA {
             Err(_) => [(0, 0); HW_BUFFER_SIZE],
         };
 
-        let num_input_streams = self.num_input_streams();
-        let num_output_streams = self.num_output_streams();
-        let base_addr = self.base;
-
         let index = 0;
-
-        let output = unsafe {
-            if index < num_output_streams {
-                Some(
-                    &mut *((base_addr + 0x80 + num_input_streams * 0x20 + index * 0x20)
-                        as *mut StreamDescriptorRegs),
-                )
-            } else {
-                None
-            }
-        }
-        .unwrap();
-
+        let output = self.get_output_stream_descriptor(index).unwrap();
         let os = self.output_streams.get_mut(index).unwrap();
 
         let open_block = (output.link_position() as usize) / os.block_size();
@@ -1047,13 +1031,6 @@ impl SchemeSync for IntelHDA {
         _fcntl_flags: u32,
         ctx: &CallerCtx,
     ) -> Result<OpenResult> {
-        {
-            let handles = self.handles.lock();
-            let handle = handles.get(dirfd)?;
-            if !matches!(handle, Handle::SchemeRoot) {
-                return Err(Error::new(EACCES));
-            }
-        }
         //let path: Vec<&str>;
         /*
         match str::from_utf8(_path) {
