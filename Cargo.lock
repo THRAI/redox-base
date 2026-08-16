@@ -1932,10 +1932,12 @@ checksum = "54ec1b67c01c63545205ea6d218b336751399f0d8974c1a635c28604bedb81bc"
 [[package]]
 name = "redox-rings"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/Ibuki.O/redox-rings.git?branch=u2u#928657fe8a0eb568383abb7ca2fe19487e88a2c7"
+source = "git+https://gitlab.redox-os.org/redox-os/redox-rings.git#8842a459c873c122596c591e4c454ad0753b9164"
 dependencies = [
+ "bitflags 2.13.1",
  "libredox",
  "redox_syscall 0.9.1",
+ "zerocopy",
 ]
 
 [[package]]
