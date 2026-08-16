@@ -224,6 +224,7 @@ dependencies = [
  "common",
  "daemon",
  "driver-block",
+ "executor",
  "fdt 0.2.0-alpha1",
  "libredox",
  "redox_event",
