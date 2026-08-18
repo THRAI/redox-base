@@ -6,8 +6,9 @@ use std::os::unix::io::AsRawFd;
 
 use indexmap::IndexMap;
 use libredox::Fd;
+use redox_path::RedoxReference;
 use syscall::error::{EACCES, EBADFD, EIO, EISDIR, ENFILE, ENOENT, ENOMEM, ENXIO, EOVERFLOW};
-use syscall::{Error, Result, TimeSpec, MODE_DIR, MODE_TYPE};
+use syscall::{Error, Result, TimeSpec, EINVAL, MODE_DIR, MODE_TYPE};
 
 use super::scheme::current_perm;
 
@@ -147,17 +148,21 @@ impl Filesystem {
         self.last_inode_number = next;
         Ok(next)
     }
-    fn resolve_generic(&self, mut parts: Vec<&str>, uid: u32, gid: u32) -> Result<usize> {
+    fn resolve_generic(&self, parts: RedoxReference<'_>, uid: u32, gid: u32) -> Result<usize> {
         let mut current_file = self
             .files
             .get(&Self::ROOT_INODE)
             .ok_or(Error::new(ENOENT))?;
         let mut current_inode = Self::ROOT_INODE;
 
-        let mut i = 0;
+        if parts.as_ref().is_empty() {
+            return Ok(current_inode);
+        }
+
+        let mut parts = parts.as_ref().split('/');
 
         loop {
-            let Some(&part) = parts.get(i) else {
+            let Some(part) = parts.next() else {
                 break;
             };
             let dentries = match current_file.data {
@@ -169,51 +174,34 @@ impl Filesystem {
                 return Err(Error::new(EACCES));
             }
 
-            if part == "." || part == ".." {
-                parts.remove(i);
-            }
-
-            let part = *parts.get(i).unwrap();
-            if part == ".." && i > 0 {
-                i -= 1;
-                parts.remove(i);
-            }
-            let part = *parts.get(i).unwrap();
-
             current_inode = dentries.get(part).ok_or(Error::new(ENOENT))?.0;
             current_file = self.files.get(&current_inode).ok_or(Error::new(EIO))?;
-
-            i += 1;
         }
         Ok(current_inode)
     }
     pub fn resolve_except_last<'a>(
         &self,
-        path_bytes: &'a str,
+        path: &'a str,
         uid: u32,
         gid: u32,
-    ) -> Result<(usize, Option<&'a str>)> {
-        let mut parts =
-            path_components_iter(path_bytes.trim_start_matches('/')).collect::<Vec<_>>();
+    ) -> Result<(usize, Option<RedoxReference<'a>>)> {
+        let path = RedoxReference::new(path)
+            .ok_or(Error::new(EINVAL))?
+            .canonical();
 
-        let last = if parts.len() >= 1 {
-            Some(parts.pop().unwrap())
-        } else {
-            None
-        };
-
-        Ok((self.resolve_generic(parts, uid, gid)?, last))
+        let (dir, name) = path.dirname_split();
+        Ok((
+            self.resolve_generic(dir, uid, gid)?,
+            name.map(|s| s.into_owned()),
+        ))
     }
     pub fn resolve(&self, path: &str, uid: u32, gid: u32) -> Result<usize> {
-        let parts = path_components_iter(path.trim_start_matches('/')).collect::<Vec<_>>();
+        let path = RedoxReference::new(path).ok_or(Error::new(EINVAL))?;
 
-        self.resolve_generic(parts, uid, gid)
+        self.resolve_generic(path.canonical(), uid, gid)
     }
 }
-pub fn path_components_iter(bytes: &str) -> impl Iterator<Item = &str> + '_ {
-    let components_iter = bytes.split(|c| c == '/');
-    components_iter.filter(|item| !item.is_empty())
-}
+
 pub fn current_time() -> TimeSpec {
     let sys_time = time::SystemTime::now();
 
