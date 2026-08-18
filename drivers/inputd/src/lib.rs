@@ -62,10 +62,7 @@ impl ConsumerHandle {
             O_CLOEXEC | O_NONBLOCK | O_RDWR,
             0,
         )
-        .map(|socket| unsafe { File::from_raw_fd(socket as RawFd) })
-        .unwrap_or_else(|err| {
-            panic!("failed to open display {:?}/v2_display: {}", self.0, err);
-        });
+        .map(|socket| unsafe { File::from_raw_fd(socket as RawFd) })?;
 
         Ok(display_file)
     }
