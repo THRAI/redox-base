@@ -425,6 +425,16 @@ impl SchemeSync for Scheme<'_> {
                 .resolve_except_last(path, ctx.uid, ctx.gid)?;
             let new_name = new_name.ok_or(Error::new(EINVAL))?; // cannot mkdir /
 
+            {
+                let parent_file = self
+                    .filesystem
+                    .files
+                    .get(&parent_dir_inode)
+                    .ok_or(Error::new(EIO))?;
+
+                check_permissions(O_WRONLY, current_perm(parent_file, ctx.uid, ctx.gid))?
+            }
+
             let current_time = filesystem::current_time();
 
             let new_inode_number = self.filesystem.next_inode_number()?;
@@ -801,12 +811,19 @@ impl SchemeSync for Scheme<'_> {
         let cur_type = file.mode & MODE_TYPE;
 
         /*
+        // TODO: validate ctx
+        if ctx.uid != 0 && ctx.uid != file.uid {
+            return Err(Error::new(EPERM));
+        }
+        */
+
+        /*
         if mode & MODE_TYPE != 0 {
             return Err(Error::new(EINVAL));
         }
         */
 
-        file.mode = mode | cur_type;
+        file.mode = (mode & 0o7777) | cur_type;
 
         Ok(())
     }
@@ -817,6 +834,8 @@ impl SchemeSync for Scheme<'_> {
             .files
             .get_mut(&inode)
             .ok_or(Error::new(EBADFD))?;
+
+        // TODO: validate ctx
 
         file.uid = uid;
         file.gid = gid;
