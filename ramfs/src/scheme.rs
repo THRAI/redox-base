@@ -198,17 +198,14 @@ impl<'a> Scheme<'a> {
                 .get_mut(&parent_dir_inode)
                 .ok_or(Error::new(EIO))?;
 
-            let mode = current_perm(parent, uid, gid);
-            if mode & 0o2 == 0 {
-                return Err(Error::new(EACCES));
-            }
+            check_permissions(O_WRONLY, current_perm(parent, uid, gid))?;
 
             let FileData::Directory(ref mut dentries) = parent.data else {
                 return Err(Error::new(ENOTDIR));
             };
 
             let Inode(entry_inode) = dentries
-                .shift_remove(name_to_delete)
+                .shift_remove(name_to_delete.as_ref())
                 .ok_or(Error::new(ENOENT))?;
 
             if let Some(File {
@@ -410,7 +407,10 @@ impl SchemeSync for Scheme<'_> {
             match parent_file.data {
                 FileData::File(_) | FileData::Socket(_) => return Err(Error::new(EIO)),
                 FileData::Directory(ref mut entries) => {
-                    entries.insert(new_name.to_owned(), Inode(new_inode_number));
+                    entries.insert(new_name.to_string(), Inode(new_inode_number));
+                    if flags & O_DIRECTORY != 0 {
+                        parent_file.nlink += 1; // for '..' backlink
+                    }
                 }
             }
 
@@ -1017,22 +1017,14 @@ impl SchemeSync for Scheme<'_> {
         }
         let other_scheme_fd = Fd::new(new_fd);
 
-        // TODO: Move the PATH_MAX definition to a more appropriate place.
-        const PATH_MAX: usize = 4096;
-        let mut url_buf = [0u8; PATH_MAX];
+        let mut url_buf = [0u8; redox_path::PATH_MAX];
         let url_len = other_scheme_fd.fpath(&mut url_buf)?;
-        let url_str = str::from_utf8(&url_buf[..url_len]).map_err(|_| Error::new(EINVAL))?;
-        let redox_path = RedoxPath::from_absolute(url_str).ok_or(Error::new(EINVAL))?;
+        let redox_path =
+            RedoxPath::from_absolute_buf(&url_buf, url_len).ok_or(Error::new(EINVAL))?;
         let (_, path) = redox_path.as_parts().ok_or(Error::new(EINVAL))?;
-
         let mut last_part = String::new();
-        for part in path.as_ref().split('/') {
-            if !part.is_empty() {
-                last_part = part.to_string();
-            }
-        }
 
-        if last_part.is_empty() {
+        if path.dirname_split().1.is_none() {
             return Err(Error::new(EINVAL));
         }
 
@@ -1074,7 +1066,7 @@ impl SchemeSync for Scheme<'_> {
         match parent_file.data {
             FileData::File(_) | FileData::Socket(_) => return Err(Error::new(EIO)),
             FileData::Directory(ref mut entries) => {
-                entries.insert(new_name.to_owned(), Inode(new_inode_number));
+                entries.insert(new_name.to_string(), Inode(new_inode_number));
             }
         }
 
