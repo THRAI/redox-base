@@ -19,7 +19,28 @@ fn main() {
 fn daemon(daemon: daemon::SchemeDaemon) -> ! {
     env_logger::init();
 
-    let scheme_name = env::args().nth(1).expect("Usage:\n\tramfs SCHEME_NAME");
+    let mut args = env::args().skip(1);
+    let mut scheme_name = None;
+    let mut root_mode = 0o755;
+
+    while let Some(arg) = args.next() {
+        if arg == "-p" {
+            let mode_str = args.next().expect("ramfs: expected mode after -p");
+            let clean_str = mode_str.trim_start_matches("0o");
+            root_mode = u16::from_str_radix(clean_str, 8).expect("ramfs: invalid octal mode");
+        } else if scheme_name.is_none() {
+            scheme_name = Some(arg);
+        } else {
+            panic!("Usage:\n\tramfs [-p 0oMODE] SCHEME_NAME");
+        }
+    }
+
+    let scheme_name = scheme_name.expect("Usage:\n\tramfs [-p 0oMODE] SCHEME_NAME");
+
+    if scheme_name.starts_with("tmp") {
+        // TODO: move this to service definition?
+        root_mode = 0o1777;
+    }
 
     let socket = redox_scheme::Socket::nonblock().expect("ramfs: failed to create socket");
 
@@ -28,7 +49,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
         .subscribe(socket.inner().raw(), 0, EventFlags::READ)
         .unwrap();
 
-    let mut scheme = Scheme::new(&socket, scheme_name.clone(), &event_queue)
+    let mut scheme = Scheme::new(&socket, scheme_name.clone(), &event_queue, root_mode)
         .expect("ramfs: failed to initialize scheme");
 
     let mut handler = Blocking::new(&socket, 16);
