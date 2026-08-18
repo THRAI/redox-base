@@ -1,5 +1,5 @@
 use common::io::Io as _;
-use driver_block::{Disk, DiskScheme, ExecutorTrait, FuturesExecutor};
+use driver_block::{Disk, DiskScheme, ExecutorTrait};
 use event::{EventFlags, RawEventQueue};
 use libredox::flag;
 use log::{error, info};
@@ -208,6 +208,8 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
         }
     }
 
+    let executor = executor::init_trivial();
+
     let scheme_name = format!("disk.{}", name);
     let mut scheme = DiskScheme::new(
         Some(daemon),
@@ -219,7 +221,7 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
             .collect(),
         // TODO: Should ided just use TrivialExecutor or would it be valuable to actually use a
         // real executor?
-        &FuturesExecutor,
+        &executor,
     );
 
     let primary_irq_fd = libredox::call::open(
@@ -257,7 +259,7 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
     for event in event_queue {
         let event = event.unwrap();
         if event.fd == scheme.event_handle().raw() {
-            FuturesExecutor.block_on(scheme.tick()).unwrap();
+            executor.block_on(scheme.tick()).unwrap();
         } else if event.fd == primary_irq_fd {
             let mut irq = [0; 8];
             if primary_irq_file
@@ -272,7 +274,7 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
                     .write(&irq)
                     .expect("ided: failed to write irq file");
 
-                FuturesExecutor.block_on(scheme.tick()).unwrap();
+                executor.block_on(scheme.tick()).unwrap();
             }
         } else if event.fd == secondary_irq_fd {
             let mut irq = [0; 8];
@@ -288,7 +290,7 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
                     .write(&irq)
                     .expect("ided: failed to write irq file");
 
-                FuturesExecutor.block_on(scheme.tick()).unwrap();
+                executor.block_on(scheme.tick()).unwrap();
             }
         } else {
             error!("Unknown event {}", event.fd);

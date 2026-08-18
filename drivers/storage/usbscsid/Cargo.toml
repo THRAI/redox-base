@@ -18,6 +18,7 @@ redox_event.workspace = true
 redox_syscall = { workspace = true, features = ["std"] }
 thiserror.workspace = true
 xhcid = { path = "../../usb/xhcid" }
+executor = { path = "../../executor" }
 
 [lints]
 workspace = true

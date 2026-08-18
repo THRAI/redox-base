@@ -36,7 +36,7 @@ impl Hardware for NvmeHw {
     fn current() -> std::rc::Rc<executor::LocalExecutor<Self>> {
         THE_EXECUTOR.with(|exec| Rc::clone(exec.borrow().as_ref().unwrap()))
     }
-    fn try_submit(
+    fn push_sqe(
         nvme: &Arc<Nvme>,
         sq_id: Self::SqId,
         success: impl FnOnce(Self::CmdId) -> Self::Sqe,
@@ -45,21 +45,25 @@ impl Hardware for NvmeHw {
         let ctxt = nvme.cur_thread_ctxt();
         let ctxt = ctxt.lock();
 
-        nvme.try_submit_raw(&*ctxt, sq_id, success, fail)
+        ctxt.push_sqe(sq_id, success, fail)
+    }
+    fn submit(nvme: &Arc<Nvme>, sq_id: Self::SqId) {
+        let ctxt = nvme.cur_thread_ctxt();
+        let ctxt = ctxt.lock();
+
+        ctxt.submit(sq_id)
     }
     fn poll_cqes(nvme: &Arc<Nvme>, mut handle: impl FnMut(Self::CqId, Self::Cqe)) {
         let ctxt = nvme.cur_thread_ctxt();
         let ctxt = ctxt.lock();
 
         for (sq_cq_id, (sq, cq)) in ctxt.queues.borrow_mut().iter_mut() {
-            while let Some((new_head, cqe)) = cq.complete() {
-                unsafe {
-                    nvme.completion_queue_head(*sq_cq_id, new_head);
-                }
+            while let Some(cqe) = cq.complete() {
                 sq.head = cqe.sq_head;
-                log::trace!("new head {new_head} cqe {cqe:?}");
                 handle(*sq_cq_id, cqe);
             }
+
+            cq.kick();
         }
     }
     fn sq_cq(_ctxt: &Arc<Nvme>, id: Self::CqId) -> Self::SqId {

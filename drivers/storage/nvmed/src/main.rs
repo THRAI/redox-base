@@ -4,10 +4,10 @@ use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::usize;
 
+use common::dma::Dma;
 use common::MemoryType;
-use driver_block::{Disk, DiskScheme};
+use driver_block::{Disk, PhysAddr, RingDiskScheme};
 use pcid_interface::{irq_helpers, PciFunctionHandle};
 
 use crate::nvme::NvmeNamespace;
@@ -16,6 +16,7 @@ use self::nvme::Nvme;
 
 mod nvme;
 
+#[derive(Clone)]
 struct NvmeDisk {
     nvme: Arc<Nvme>,
     ns: NvmeNamespace,
@@ -36,6 +37,38 @@ impl Disk for NvmeDisk {
 
     async fn write(&mut self, block: u64, buffer: &[u8]) -> syscall::Result<usize> {
         self.nvme.namespace_write(&self.ns, block, buffer).await
+    }
+
+    async unsafe fn write_dma(
+        &mut self,
+        start_lba: u64,
+        addr: PhysAddr,
+        num_sectors: u32,
+    ) -> syscall::Result<()> {
+        self.nvme
+            .namespace_write_zerocopy(
+                &self.ns,
+                start_lba,
+                addr.as_usize() as u64,
+                num_sectors as u64,
+            )
+            .await
+    }
+
+    async unsafe fn read_dma(
+        &mut self,
+        start_lba: u64,
+        addr: PhysAddr,
+        num_sectors: u32,
+    ) -> syscall::Result<()> {
+        self.nvme
+            .namespace_read_zerocopy(
+                &self.ns,
+                start_lba,
+                addr.as_usize() as u64,
+                num_sectors as u64,
+            )
+            .await
     }
 }
 
@@ -68,6 +101,14 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
         common::output_level(),
         common::file_level(),
     );
+
+    unsafe {
+        if libc::setpriority(libc::PRIO_PROCESS, 0, -10) == -1 {
+            log::error!("nvmed: Failed to set nice value");
+        } else {
+            log::error!("nvmed: Successfully set process priority to 10");
+        }
+    }
 
     log::debug!("NVME PCI CONFIG: {:?}", pci_config);
 
@@ -107,7 +148,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     });
     log::debug!("Initialized!");
 
-    let scheme = Rc::new(RefCell::new(DiskScheme::new(
+    let scheme = Rc::new(RefCell::new(RingDiskScheme::new(
         Some(daemon),
         scheme_name,
         namespaces
@@ -122,7 +163,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                 )
             })
             .collect(),
-        &*executor,
+        executor.clone(),
     )));
 
     let mut scheme_events = Box::pin(executor.register_external_event(
@@ -130,7 +171,8 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
         event::EventFlags::READ,
     ));
 
-    libredox::call::setrens(0, 0).expect("nvmed: failed to enter null namespace");
+    // TODO: Drivers-block will open time fd.
+    // libredox::call::setrens(0, 0).expect("nvmed: failed to enter null namespace");
 
     log::debug!("Starting to listen for scheme events");
 

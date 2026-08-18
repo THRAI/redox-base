@@ -1,14 +1,16 @@
+mod ring;
+
+pub use ring::*;
+
 use std::cmp;
-use std::future::{Future, IntoFuture};
+use std::fmt::Write;
+use std::future::IntoFuture;
 use std::io::{self, Read, Seek, SeekFrom};
 
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
-use std::fmt::Write;
-use std::str;
-use std::task::Poll;
 
-use executor::LocalExecutor;
+use event::EventFlags;
 use libredox::Fd;
 use partitionlib::{LogicalBlockSize, PartitionTable};
 use redox_scheme::scheme::{register_scheme_inner, SchemeAsync, SchemeState};
@@ -69,6 +71,16 @@ fn block_read(
     Ok(total_read)
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct PhysAddr(usize);
+
+impl PhysAddr {
+    pub fn as_usize(&self) -> usize {
+        self.0
+    }
+}
+
 pub trait Disk {
     fn block_size(&self) -> u32;
     fn size(&self) -> u64;
@@ -77,6 +89,26 @@ pub trait Disk {
     // FIXME maybe only operate on a single block worth of data?
     async fn read(&mut self, block: u64, buffer: &mut [u8]) -> syscall::Result<usize>;
     async fn write(&mut self, block: u64, buffer: &[u8]) -> syscall::Result<usize>;
+
+    #[allow(unused_variables)]
+    async unsafe fn read_dma(
+        &mut self,
+        start_lba: u64,
+        addr: PhysAddr,
+        num_sectors: u32,
+    ) -> syscall::Result<()> {
+        Err(Error::new(EOPNOTSUPP))
+    }
+
+    #[allow(unused_variables)]
+    async unsafe fn write_dma(
+        &mut self,
+        start_lba: u64,
+        addr: PhysAddr,
+        num_sectors: u32,
+    ) -> syscall::Result<()> {
+        Err(Error::new(EOPNOTSUPP))
+    }
 }
 
 impl<T: Disk + ?Sized> Disk for Box<T> {
@@ -350,6 +382,7 @@ impl<T: Disk> DiskScheme<T> {
     }
 }
 
+#[derive(Debug)]
 enum Handle {
     List(Vec<u8>),       // entries
     Disk(u32),           // disk num
@@ -363,37 +396,55 @@ struct DiskSchemeInner<T> {
     handles: HandleMap<Handle>,
 }
 
-pub trait ExecutorTrait {
-    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O;
+pub trait EventSource {
+    async fn next(&mut self);
 }
-impl<Hw: executor::Hardware> ExecutorTrait for LocalExecutor<Hw> {
-    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
-        LocalExecutor::block_on(self, fut)
-    }
-}
-#[deprecated = "use custom executor"]
-pub struct FuturesExecutor;
 
-#[allow(deprecated)]
-impl ExecutorTrait for FuturesExecutor {
-    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
-        futures::executor::block_on(fut.into_future())
+impl<Hw: executor::Hardware + 'static> EventSource for executor::ExternalEventHandle<Hw> {
+    async fn next(&mut self) {
+        let _ = std::pin::Pin::new(self).next().await;
     }
 }
-pub struct TrivialExecutor;
-impl ExecutorTrait for TrivialExecutor {
+
+pub trait JoinHandleTrait {
+    fn abort(self);
+}
+
+pub trait ExecutorTrait {
+    type Event: EventSource;
+    type JoinHandle: JoinHandleTrait;
+
+    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O;
+    fn spawn(
+        &self,
+        fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>,
+    ) -> Self::JoinHandle;
+    fn register_external_event(&self, fd: usize, flags: EventFlags) -> Self::Event;
+}
+
+impl<Hw: executor::Hardware + 'static> ExecutorTrait for std::rc::Rc<executor::LocalExecutor<Hw>> {
+    type Event = executor::ExternalEventHandle<Hw>;
+    type JoinHandle = executor::JoinHandle<Hw, ()>;
+
     fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
-        let mut fut = std::pin::pin!(fut.into_future());
-        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-        loop {
-            match fut.as_mut().poll(&mut cx) {
-                Poll::Ready(v) => return v,
-                Poll::Pending => {
-                    log::warn!("TrivialExecutor: future wasn't trivial");
-                    continue;
-                }
-            }
-        }
+        executor::LocalExecutor::block_on(self, fut.into_future())
+    }
+
+    fn spawn(
+        &self,
+        fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>,
+    ) -> Self::JoinHandle {
+        executor::LocalExecutor::spawn(self, fut)
+    }
+
+    fn register_external_event(&self, fd: usize, flags: EventFlags) -> Self::Event {
+        executor::LocalExecutor::register_external_event(self, fd, flags)
+    }
+}
+
+impl<Hw: executor::Hardware> JoinHandleTrait for executor::JoinHandle<Hw, ()> {
+    fn abort(self) {
+        executor::JoinHandle::abort(self)
     }
 }
 
@@ -655,6 +706,7 @@ impl<T: Disk> SchemeAsync for DiskSchemeInner<T> {
 
 impl<D: Disk> DiskSchemeInner<D> {
     pub fn on_close(&mut self, id: usize) {
-        let _ = self.handles.remove(id);
+        let _handle = self.handles.remove(id);
+        println!("removing handle: id: {}, {:?}", id, _handle);
     }
 }

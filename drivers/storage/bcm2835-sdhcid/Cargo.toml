@@ -12,6 +12,7 @@ common = { path = "../../common" }
 daemon = { path = "../../../daemon" }
 driver-block = { path = "../driver-block" }
 
+executor = { path = "../../executor" }
 libredox.workspace = true
 redox_syscall = { workspace = true, features = ["std"] }
 redox_event.workspace = true

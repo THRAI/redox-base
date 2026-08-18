@@ -8,6 +8,7 @@ edition = "2021"
 bitflags.workspace = true
 futures = "0.3"
 libredox.workspace = true
+libc.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 redox_event.workspace = true

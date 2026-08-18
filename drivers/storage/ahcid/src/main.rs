@@ -4,7 +4,7 @@ use std::usize;
 
 use common::io::Io;
 use common::MemoryType;
-use driver_block::{DiskScheme, ExecutorTrait, FuturesExecutor};
+use driver_block::{DiskScheme, ExecutorTrait};
 use event::{EventFlags, RawEventQueue};
 use pcid_interface::PciFunctionHandle;
 
@@ -41,6 +41,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
         .ptr
         .as_ptr()
         .expose_provenance();
+    let executor = executor::init_trivial();
     {
         let (hba_mem, disks) = ahci::disks(address as usize, &name);
 
@@ -53,7 +54,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                 .enumerate()
                 .map(|(i, disk)| (i as u32, disk))
                 .collect(),
-            &FuturesExecutor,
+            &executor,
         );
 
         let mut irq_file = irq.irq_handle("ahcid");
@@ -73,7 +74,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
         for event in event_queue {
             let event = event.unwrap();
             if event.fd == scheme.event_handle().raw() {
-                FuturesExecutor.block_on(scheme.tick()).unwrap();
+                executor.block_on(scheme.tick()).unwrap();
             } else if event.fd == irq_fd {
                 let mut irq = [0; 8];
                 if irq_file
@@ -98,7 +99,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                             .write(&irq)
                             .expect("ahcid: failed to write irq file");
 
-                        FuturesExecutor.block_on(scheme.tick()).unwrap();
+                        executor.block_on(scheme.tick()).unwrap();
                     }
                 }
             } else {
