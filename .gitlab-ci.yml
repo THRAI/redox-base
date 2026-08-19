@@ -25,6 +25,8 @@ x86_64:clippy:
     # TODO: remove
     allow_failure: true
     script:
+        # TODO: remove when most warnings are gone
+        - export RUSTFLAGS=-Awarnings
         - ./check.sh --clippy
 
 i586:

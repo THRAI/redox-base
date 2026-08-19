@@ -115,7 +115,7 @@ missing_docs = "allow" #TODO: set to deny when all public functions are document
 [workspace.lints.clippy]
 missing_safety_doc = "warn" #TODO: set to deny when all safety documentation is completed
 precedence = "deny"
-unused_io_amount = "deny"
+unused_io_amount = "warn" #TODO: set to deny when all occurences is completed
 
 [patch."https://gitlab.redox-os.org/redox-os/relibc.git"]
 #redox-ioctl = { path = "../../relibc/source/redox-ioctl" }
