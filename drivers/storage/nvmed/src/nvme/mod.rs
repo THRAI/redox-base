@@ -208,8 +208,9 @@ impl Nvme {
     }
 
     pub unsafe fn init(&mut self) -> Result<()> {
-        let asq_doorbell = self.get_doorbell(2 * 0);
-        let acq_doorbell = self.get_doorbell(2 * 0 + 1);
+        // first (zero) offset of io_cq_id / io_sq_id
+        let asq_doorbell = self.get_doorbell(0);
+        let acq_doorbell = self.get_doorbell(1);
 
         let thread_ctxts = self.thread_ctxts.get_mut();
 
