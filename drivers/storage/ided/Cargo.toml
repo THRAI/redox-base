@@ -13,7 +13,6 @@ pcid = { path = "../../pcid" }
 daemon = { path = "../../../daemon" }
 redox_syscall = { workspace = true, features = ["std"] }
 redox_event.workspace = true
-executor = { path = "../../executor" }
 
 [lints]
 workspace = true
