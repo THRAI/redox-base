@@ -1,4 +1,4 @@
-use acpi::{aml::AmlError, Handle, PciAddress, PhysicalMapping};
+use acpi::{Handle, PciAddress, PhysicalMapping, aml::AmlError};
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use common::io::{Io, Pio};
 use num_traits::PrimInt;
@@ -211,23 +211,25 @@ impl AmlPhysMemHandler {
 
 impl acpi::Handler for AmlPhysMemHandler {
     unsafe fn map_physical_region<T>(&self, phys: usize, size: usize) -> PhysicalMapping<Self, T> {
-        let phys_page = phys & PAGE_MASK;
-        let offset = phys & OFFSET_MASK;
-        let pages = (offset + size + PAGE_SIZE - 1) / PAGE_SIZE;
-        let map_size = pages * PAGE_SIZE;
-        let virt_page = common::physmap(
-            phys_page,
-            map_size,
-            common::Prot::RW,
-            common::MemoryType::default(),
-        )
-        .expect("failed to map physical region") as usize;
-        PhysicalMapping {
-            physical_start: phys,
-            virtual_start: NonNull::new((virt_page + offset) as *mut T).unwrap(),
-            region_length: size,
-            mapped_length: map_size,
-            handler: self.clone(),
+        unsafe {
+            let phys_page = phys & PAGE_MASK;
+            let offset = phys & OFFSET_MASK;
+            let pages = (offset + size + PAGE_SIZE - 1) / PAGE_SIZE;
+            let map_size = pages * PAGE_SIZE;
+            let virt_page = common::physmap(
+                phys_page,
+                map_size,
+                common::Prot::RW,
+                common::MemoryType::default(),
+            )
+            .expect("failed to map physical region") as usize;
+            PhysicalMapping {
+                physical_start: phys,
+                virtual_start: NonNull::new((virt_page + offset) as *mut T).unwrap(),
+                region_length: size,
+                mapped_length: map_size,
+                handler: self.clone(),
+            }
         }
     }
     fn unmap_physical_region<T>(region: &PhysicalMapping<Self, T>) {

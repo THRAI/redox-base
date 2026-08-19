@@ -16,9 +16,9 @@ use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
 
 use acpi::{
-    aml::{namespace::AmlName, AmlError, Interpreter},
-    platform::AcpiPlatform,
     AcpiTables,
+    aml::{AmlError, Interpreter, namespace::AmlName},
+    platform::AcpiPlatform,
 };
 use amlserde::aml_serde_name::aml_to_symbol;
 use amlserde::{AmlSerde, AmlSerdeValue};
@@ -744,7 +744,7 @@ pub struct Fadt(Sdt);
 
 impl Fadt {
     pub fn acpi_2_struct(&self) -> Option<&FadtAcpi2Struct> {
-        let bytes = &self.0 .0[mem::size_of::<FadtStruct>()..];
+        let bytes = &self.0.0[mem::size_of::<FadtStruct>()..];
 
         match plain::from_bytes::<FadtAcpi2Struct>(bytes) {
             Ok(fadt2) => Some(fadt2),
@@ -760,7 +760,7 @@ impl Deref for Fadt {
     type Target = FadtStruct;
 
     fn deref(&self) -> &Self::Target {
-        plain::from_bytes::<FadtStruct>(&self.0 .0)
+        plain::from_bytes::<FadtStruct>(&self.0.0)
             .expect("expected FADT struct to already be validated in Deref impl")
     }
 }
