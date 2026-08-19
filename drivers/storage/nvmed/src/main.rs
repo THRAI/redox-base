@@ -5,7 +5,6 @@ use std::os::fd::AsRawFd;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use common::dma::Dma;
 use common::MemoryType;
 use driver_block::{Disk, PhysAddr, RingDiskScheme};
 use pcid_interface::{irq_helpers, PciFunctionHandle};

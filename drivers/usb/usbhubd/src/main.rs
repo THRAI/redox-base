@@ -45,7 +45,7 @@ fn main() {
         .get_standard_descs()
         .expect("Failed to get standard descriptors");
 
-    let (conf_desc, if_desc) = desc
+    let (conf_desc, _if_desc) = desc
         .config_descs
         .iter()
         .find_map(|conf_desc| {

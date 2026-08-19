@@ -108,7 +108,7 @@ impl<'a> Transactional for GmbusPinPair<'a> {
                         chunk.copy_from_slice(&bytes[..chunk.len()]);
                     }
                 }
-                Operation::Write(buf) => {
+                Operation::Write(_buf) => {
                     log::warn!("TODO: GMBUS WRITE");
                     return Err(());
                 }

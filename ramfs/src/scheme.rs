@@ -1361,7 +1361,6 @@ impl SchemeSync for Scheme<'_> {
         let redox_path =
             RedoxPath::from_absolute_buf(&url_buf, url_len).ok_or(Error::new(EINVAL))?;
         let (_, path) = redox_path.as_parts().ok_or(Error::new(EINVAL))?;
-        let mut last_part = String::new();
 
         if path.dirname_split().1.is_none() {
             return Err(Error::new(EINVAL));

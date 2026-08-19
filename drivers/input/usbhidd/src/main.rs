@@ -622,7 +622,7 @@ fn main() -> Result<()> {
                     }
                 }
                 Some(UsagePage::KeyboardOrKeypad) => {
-                    let (pressed, shift_opt) = if event.value != 0 {
+                    let (pressed, _shift_opt) = if event.value != 0 {
                         (true, Some(left_shift | right_shift))
                     } else {
                         (false, None)

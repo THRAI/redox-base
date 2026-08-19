@@ -66,7 +66,8 @@ impl DiskATA {
             BufferKind::Write(ref buffer) => (true, buffer.as_ptr() as usize, buffer.len() / 512),
         };
 
-        loop {
+        // TODO: unindent
+        {
             let mut request = match self.request_opt.take() {
                 Some(request) => {
                     if address == request.address && total_sectors == request.total_sectors {
