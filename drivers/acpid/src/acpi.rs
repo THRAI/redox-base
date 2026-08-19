@@ -1,8 +1,8 @@
 use acpi::aml::object::{Object, WrappedObject};
 use acpi::aml::op_region::{RegionHandler, RegionSpace};
 use rustc_hash::FxHashMap;
+use std::cell::{OnceCell, RefCell};
 use std::convert::{TryFrom, TryInto};
-use std::error::Error;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -240,57 +240,53 @@ pub struct Ssdt(Sdt);
 // must empty the cache so it is rebuilt.
 // If you modify an SDT, you must discard the aml_context and rebuild it.
 pub struct AmlSymbols {
-    aml_context: Option<Interpreter<AmlPhysMemHandler>>,
+    aml_context: OnceCell<Interpreter<AmlPhysMemHandler>>,
     // k = name, v = description
     symbol_cache: FxHashMap<String, String>,
     page_cache: Arc<Mutex<AmlPageCache>>,
-    aml_region_handlers: Vec<(RegionSpace, Box<dyn RegionHandler>)>,
+    /// Read once by [`AmlSymbols::aml_context`] during initialization.
+    aml_region_handlers: RefCell<Vec<(RegionSpace, Box<dyn RegionHandler>)>>,
 }
 
 impl AmlSymbols {
     pub fn new(aml_region_handlers: Vec<(RegionSpace, Box<dyn RegionHandler>)>) -> Self {
         Self {
-            aml_context: None,
+            aml_context: OnceCell::new(),
             symbol_cache: FxHashMap::default(),
             page_cache: Arc::new(Mutex::new(AmlPageCache::default())),
-            aml_region_handlers,
+            aml_region_handlers: RefCell::new(aml_region_handlers),
         }
     }
 
-    pub fn init(&mut self, pci_fd: Option<&libredox::Fd>) -> Result<(), Box<dyn Error>> {
-        if self.aml_context.is_some() {
-            return Err("AML interpreter already initialized".into());
-        }
-        let format_err = |err| format!("{:?}", err);
-        let handler = AmlPhysMemHandler::new(pci_fd, Arc::clone(&self.page_cache));
-        //TODO: use these parsed tables for the rest of acpid
-        let rsdp_address = usize::from_str_radix(&std::env::var("RSDP_ADDR")?, 16)?;
-        let tables =
-            unsafe { AcpiTables::from_rsdp(handler.clone(), rsdp_address).map_err(format_err)? };
-        let platform = AcpiPlatform::new(tables, handler).map_err(format_err)?;
-        let interpreter = Interpreter::new_from_platform(&platform).map_err(format_err)?;
-        for (region, handler) in self.aml_region_handlers.drain(..) {
-            interpreter.install_region_handler(region, handler);
-        }
-        self.aml_context = Some(interpreter);
-        Ok(())
-    }
-
-    pub fn aml_context_mut(
-        &mut self,
+    pub fn aml_context(
+        &self,
         pci_fd: Option<&libredox::Fd>,
-    ) -> Result<&mut Interpreter<AmlPhysMemHandler>, AmlEvalError> {
-        if self.aml_context.is_none() {
-            match self.init(pci_fd) {
-                Ok(()) => (),
-                Err(err) => {
+    ) -> Result<&Interpreter<AmlPhysMemHandler>, AmlEvalError> {
+        self.aml_context.get_or_try_init(|| {
+            let format_err = |err| {
+                log::error!("failed to initialize AML context: {:?}", err);
+                AmlEvalError::NotInitialized
+            };
+            let handler = AmlPhysMemHandler::new(pci_fd, Arc::clone(&self.page_cache));
+            //TODO: use these parsed tables for the rest of acpid
+            let rsdp_address = usize::from_str_radix(
+                &std::env::var("RSDP_ADDR").map_err(|err| {
                     log::error!("failed to initialize AML context: {}", err);
-                }
+                    AmlEvalError::NotInitialized
+                })?,
+                16,
+            )
+            .expect("RSDP_ADDR should be a hex address");
+            let tables = unsafe {
+                AcpiTables::from_rsdp(handler.clone(), rsdp_address).map_err(format_err)?
+            };
+            let platform = AcpiPlatform::new(tables, handler).map_err(format_err)?;
+            let interpreter = Interpreter::new_from_platform(&platform).map_err(format_err)?;
+            for (region, handler) in self.aml_region_handlers.borrow_mut().drain(..) {
+                interpreter.install_region_handler(region, handler);
             }
-        }
-        self.aml_context
-            .as_mut()
-            .ok_or(AmlEvalError::NotInitialized)
+            Ok(interpreter)
+        })
     }
 
     pub fn symbols_cache(&self) -> &FxHashMap<String, String> {
@@ -306,7 +302,7 @@ impl AmlSymbols {
     }
 
     pub fn build_cache(&mut self, pci_fd: Option<&libredox::Fd>) {
-        let Ok(aml_context) = self.aml_context_mut(pci_fd) else {
+        let Ok(aml_context) = self.aml_context(pci_fd) else {
             return;
         };
 
@@ -396,8 +392,8 @@ impl AcpiContext {
         symbol: AmlName,
         args: Vec<AmlSerdeValue>,
     ) -> Result<AmlSerdeValue, AmlEvalError> {
-        let mut symbols = self.aml_symbols.write();
-        let interpreter = symbols.aml_context_mut(None)?;
+        let symbols = self.aml_symbols.read();
+        let interpreter = symbols.aml_context(None)?;
         interpreter.acquire_global_lock(16)?;
 
         let args = args
@@ -591,7 +587,7 @@ impl AcpiContext {
             }
         };
 
-        let s5 = match &aml_symbols.aml_context {
+        let s5 = match aml_symbols.aml_context.get() {
             Some(aml_context) => match aml_context.namespace.lock().get(s5_aml_name) {
                 Ok(s5) => s5,
                 Err(error) => {
