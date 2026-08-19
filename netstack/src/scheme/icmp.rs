@@ -269,9 +269,9 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
 
     fn handle_recvmsg(
         &mut self,
-        file: &mut SchemeFile<Self>,
-        how: &mut [u8],
-        flags: usize,
+        _file: &mut SchemeFile<Self>,
+        _how: &mut [u8],
+        _flags: usize,
     ) -> SyscallResult<usize> {
         return Err(SyscallError::new(syscall::EOPNOTSUPP));
     }

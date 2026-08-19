@@ -68,7 +68,7 @@ use bot::BulkOnlyTransport;
 pub fn setup<'a>(
     handle: &'a XhciClientHandle,
     protocol: u8,
-    dev_desc: &DevDesc,
+    _dev_desc: &DevDesc,
     conf_desc: &ConfDesc,
     if_desc: &IfDesc,
 ) -> Option<Box<dyn Protocol + 'a>> {

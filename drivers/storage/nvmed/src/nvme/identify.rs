@@ -121,7 +121,7 @@ impl PartialOrd for RelativePerformance {
 
 impl LbaFormat {
     pub fn relative_performance(&self) -> RelativePerformance {
-        match ((self.0 >> 24) & 0b11) {
+        match (self.0 >> 24) & 0b11 {
             0b00 => RelativePerformance::Best,
             0b01 => RelativePerformance::Better,
             0b10 => RelativePerformance::Good,
@@ -201,7 +201,7 @@ impl Nvme {
         let data: Dma<IdentifyNamespaceData> = unsafe { Dma::zeroed().unwrap().assume_init() };
 
         log::debug!("Attempting to identify namespace {nsid}");
-        let comp = self
+        let _comp = self
             .submit_and_complete_admin_command(|cid| {
                 NvmeCmd::identify_namespace(cid, data.physical(), nsid)
             })

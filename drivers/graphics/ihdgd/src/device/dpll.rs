@@ -57,11 +57,11 @@ impl Dpll {
         timing: &edid::DetailedTiming,
     ) -> Result<()> {
         // IHD-OS-TGL-Vol 12-1.22-Rev2.0 "Formula for HDMI Mode DPLL Programming"
-        const KHz: u64 = 1_000;
-        const MHz: u64 = KHz * 1_000;
-        let dco_min: u64 = 7_998 * MHz;
-        let dco_mid: u64 = 8_999 * MHz;
-        let dco_max: u64 = 10_000 * MHz;
+        const KHZ: u64 = 1_000;
+        const MHZ: u64 = KHZ * 1_000;
+        let dco_min: u64 = 7_998 * MHZ;
+        let dco_mid: u64 = 8_999 * MHZ;
+        let dco_max: u64 = 10_000 * MHZ;
 
         // If reference frequency is 38.4, use 19.2 because the DPLL automatically divides that by 2.
         if ref_freq == 38_400_000 {
@@ -69,7 +69,7 @@ impl Dpll {
         }
 
         //TODO: this symbol frequency is only valid for RGB 8 bits per color
-        let symbol_freq = (timing.pixel_clock as u64) * KHz;
+        let symbol_freq = (timing.pixel_clock as u64) * KHZ;
         let pll_freq = symbol_freq * 5;
 
         #[derive(Debug)]

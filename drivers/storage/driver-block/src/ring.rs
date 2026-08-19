@@ -1097,7 +1097,7 @@ impl<D: Disk> DiskWorker<D> {
                     yield_now().await;
                     cqe = entry;
                 }
-                Err(RingPushError::Broken(entry)) => {
+                Err(RingPushError::Broken(_entry)) => {
                     return Err(format!("Failed to push response: broken"));
                 }
             }

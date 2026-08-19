@@ -19,7 +19,6 @@ use syscall::error::{
 };
 
 use spin::Mutex;
-use std::sync::atomic::Ordering;
 use syscall::schemev2::NewFdFlags;
 
 use super::common::*;
@@ -640,7 +639,7 @@ impl IntelHDA {
 
     */
 
-    pub fn dump_codec(&self, codec: u8) -> String {
+    pub fn dump_codec(&self, _codec: u8) -> String {
         let mut string = String::new();
 
         for (_, widget) in self.widget_map.iter() {

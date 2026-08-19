@@ -460,7 +460,7 @@ impl<'sdt> Iterator for DmarRawIter<'sdt> {
                 return None;
             }
         };
-        let len_bytes = match self.bytes.get(2..4) {
+        let _len_bytes = match self.bytes.get(2..4) {
             Some(bytes) => bytes,
             None => {
                 log::warn!("DMAR table ended between two entries.");

@@ -253,9 +253,9 @@ where
 
     fn get_sock_opt(
         &self,
-        file: &SchemeFile<Self>,
-        name: usize,
-        buf: &mut [u8],
+        _file: &SchemeFile<Self>,
+        _name: usize,
+        _buf: &mut [u8],
     ) -> SyscallResult<usize> {
         // Return Err for default implementation
         Err(SyscallError::new(syscall::ENOPROTOOPT))
@@ -441,7 +441,7 @@ where
         fd: usize,
         payload: &mut [u8],
         metadata: &[u64],
-        ctx: &CallerCtx,
+        _ctx: &CallerCtx,
     ) -> SyscallResult<usize> {
         // metadata to Vec<u8>
         let Some(verb) = SocketCall::try_from_raw(metadata[0] as usize) else {

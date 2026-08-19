@@ -316,7 +316,7 @@ impl AmlSymbols {
             .namespace
             .lock()
             .traverse(|level_aml_name, level| {
-                for (child_seg, handle) in level.values.iter() {
+                for (child_seg, _handle) in level.values.iter() {
                     if let Ok(aml_name) =
                         AmlName::from_name_seg(child_seg.to_owned()).resolve(level_aml_name)
                     {

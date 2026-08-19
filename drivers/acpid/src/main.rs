@@ -1,8 +1,6 @@
 use std::convert::TryFrom;
-use std::fs::File;
 use std::mem;
 use std::ops::ControlFlow;
-use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
 use ::acpi::aml::op_region::{RegionHandler, RegionSpace};

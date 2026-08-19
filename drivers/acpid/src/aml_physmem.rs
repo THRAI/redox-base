@@ -419,12 +419,12 @@ impl acpi::Handler for AmlPhysMemHandler {
         Handle(0)
     }
 
-    fn acquire(&self, mutex: Handle, timeout: u16) -> Result<(), AmlError> {
+    fn acquire(&self, _mutex: Handle, _timeout: u16) -> Result<(), AmlError> {
         log::debug!("TODO: Handler::acquire");
         Ok(())
     }
 
-    fn release(&self, mutex: Handle) {
+    fn release(&self, _mutex: Handle) {
         log::debug!("TODO: Handler::release");
     }
 }

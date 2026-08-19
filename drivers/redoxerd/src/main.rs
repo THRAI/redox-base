@@ -1,5 +1,4 @@
 use anyhow::Context;
-use std::ffi::CStr;
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};

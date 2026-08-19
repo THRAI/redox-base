@@ -355,7 +355,7 @@ impl Nvme {
             .checked_sub(1)
             .expect("nvmed: internal error: CQID 0 for I/O CQ");
 
-        let comp = self
+        let _comp = self
             .submit_and_complete_admin_command(|cid| {
                 NvmeCmd::create_io_completion_queue(
                     cid,
@@ -386,7 +386,7 @@ impl Nvme {
             .checked_sub(1)
             .expect("nvmed: internal error: SQID 0 for I/O SQ");
 
-        let comp = self
+        let _comp = self
             .submit_and_complete_admin_command(|cid| {
                 NvmeCmd::create_io_submission_queue(
                     cid,

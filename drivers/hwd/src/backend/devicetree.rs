@@ -30,7 +30,8 @@ impl DeviceTreeBackend {
 impl Backend for DeviceTreeBackend {
     fn new() -> Result<Self, Box<dyn Error>> {
         let dtb = fs::read("/scheme/kernel.dtb")?;
-        let dt = fdt::Fdt::new(&dtb).map_err(|err| format!("failed to parse dtb: {}", err))?;
+        // FIXME: cache this parsed result for probing?
+        let _dt = fdt::Fdt::new(&dtb).map_err(|err| format!("failed to parse dtb: {}", err))?;
         Ok(Self { dtb })
     }
 
