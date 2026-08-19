@@ -155,16 +155,14 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
         }
     };
 
-    let executor = executor::init_trivial();
-
     let mut scheme = DiskScheme::new(
         Some(daemon),
         scheme_name,
         BTreeMap::from([(0, VirtioDisk::new(queue, device_space))]),
-        &executor,
+        &driver_block::FuturesExecutor,
     );
 
-    libredox::call::setrens(0, 0).expect("nvmed: failed to enter null namespace");
+    libredox::call::setrens(0, 0).expect("virtio-blkd: failed to enter null namespace");
 
     event_queue
         .subscribe(
@@ -176,7 +174,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
 
     for event in event_queue {
         match event.unwrap().user_data {
-            Event::Scheme => executor.block_on(scheme.tick()).unwrap(),
+            Event::Scheme => futures::executor::block_on(scheme.tick()).unwrap(),
         }
     }
 

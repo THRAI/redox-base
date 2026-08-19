@@ -4,11 +4,12 @@ pub use ring::*;
 
 use std::cmp;
 use std::fmt::Write;
-use std::future::IntoFuture;
+use std::future::{Future, IntoFuture};
 use std::io::{self, Read, Seek, SeekFrom};
 
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
+use std::task::Poll;
 
 use event::EventFlags;
 use libredox::Fd;
@@ -406,45 +407,38 @@ impl<Hw: executor::Hardware + 'static> EventSource for executor::ExternalEventHa
     }
 }
 
-pub trait JoinHandleTrait {
-    fn abort(self);
-}
-
 pub trait ExecutorTrait {
-    type Event: EventSource;
-    type JoinHandle: JoinHandleTrait;
-
     fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O;
-    fn spawn(
-        &self,
-        fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>,
-    ) -> Self::JoinHandle;
-    fn register_external_event(&self, fd: usize, flags: EventFlags) -> Self::Event;
 }
 
 impl<Hw: executor::Hardware + 'static> ExecutorTrait for std::rc::Rc<executor::LocalExecutor<Hw>> {
-    type Event = executor::ExternalEventHandle<Hw>;
-    type JoinHandle = executor::JoinHandle<Hw, ()>;
-
     fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
         executor::LocalExecutor::block_on(self, fut.into_future())
     }
+}
 
-    fn spawn(
-        &self,
-        fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>,
-    ) -> Self::JoinHandle {
-        executor::LocalExecutor::spawn(self, fut)
-    }
+pub struct FuturesExecutor;
 
-    fn register_external_event(&self, fd: usize, flags: EventFlags) -> Self::Event {
-        executor::LocalExecutor::register_external_event(self, fd, flags)
+impl ExecutorTrait for FuturesExecutor {
+    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
+        futures::executor::block_on(fut.into_future())
     }
 }
 
-impl<Hw: executor::Hardware> JoinHandleTrait for executor::JoinHandle<Hw, ()> {
-    fn abort(self) {
-        executor::JoinHandle::abort(self)
+pub struct TrivialExecutor;
+impl ExecutorTrait for TrivialExecutor {
+    fn block_on<'a, O: 'a>(&self, fut: impl IntoFuture<Output = O> + 'a) -> O {
+        let mut fut = std::pin::pin!(fut.into_future());
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => {
+                    log::warn!("TrivialExecutor: future wasn't trivial");
+                    continue;
+                }
+            }
+        }
     }
 }
 
