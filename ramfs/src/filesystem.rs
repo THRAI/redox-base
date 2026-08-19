@@ -109,21 +109,21 @@ impl Filesystem {
     pub const DEFAULT_BLOCK_SIZE: u32 = 4096;
     pub const ROOT_INODE: usize = 1;
 
-    pub fn new() -> Result<Self> {
+    pub fn new(root_mode: u16) -> Result<Self> {
         Ok(Self {
-            files: iter::once((Self::ROOT_INODE, Self::create_root_inode())).collect(),
+            files: iter::once((Self::ROOT_INODE, Self::create_root_inode(root_mode))).collect(),
             memory_file: fs::File::open("/scheme/memory").or(Err(Error::new(EIO)))?,
             last_inode_number: Self::ROOT_INODE,
         })
     }
-    fn create_root_inode() -> File {
+    fn create_root_inode(mode: u16) -> File {
         let cur_time = current_time();
         File {
             atime: cur_time,
             ctime: cur_time,
             mtime: cur_time,
 
-            mode: MODE_DIR | 0o755,
+            mode: MODE_DIR | (mode & 0o7777),
             nlink: 1,
             open_handles: 0,
 

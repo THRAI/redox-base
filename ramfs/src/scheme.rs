@@ -165,12 +165,17 @@ pub struct Scheme<'a> {
 
 impl<'a> Scheme<'a> {
     /// Create the scheme, with the name being used for `fpath`.
-    pub fn new(socket: &'a Socket, scheme_name: String, queue: &'a RawEventQueue) -> Result<Self> {
+    pub fn new(
+        socket: &'a Socket,
+        scheme_name: String,
+        queue: &'a RawEventQueue,
+        root_mode: u16,
+    ) -> Result<Self> {
         let shm_dir_name = format!("/scheme/shm/{scheme_name}");
         Ok(Self {
             scheme_name,
             socket,
-            filesystem: Filesystem::new()?,
+            filesystem: Filesystem::new(root_mode)?,
             handles: HandleMap::new(),
             proc_creds_capability: {
                 Fd::open(
@@ -188,65 +193,74 @@ impl<'a> Scheme<'a> {
 
     /// Remove a directory entry, where the entry can be both a file or a directory. Used by `unlinkat`.
     fn remove_dentry(&mut self, path: &str, uid: u32, gid: u32, directory: bool) -> Result<()> {
+        let (parent_dir_inode, name_to_delete) =
+            self.filesystem.resolve_except_last(path, uid, gid)?;
+        let name_to_delete = name_to_delete.ok_or(Error::new(EINVAL))?; // can't remove root
+
         let removed_inode = {
-            let (parent_dir_inode, name_to_delete) =
-                self.filesystem.resolve_except_last(path, uid, gid)?;
-            let name_to_delete = name_to_delete.ok_or(Error::new(EINVAL))?; // can't remove root
             let parent = self
                 .filesystem
                 .files
-                .get_mut(&parent_dir_inode)
+                .get(&parent_dir_inode)
                 .ok_or(Error::new(EIO))?;
 
             check_permissions(O_WRONLY, current_perm(parent, uid, gid))?;
 
-            let FileData::Directory(ref mut dentries) = parent.data else {
+            let FileData::Directory(ref dentries) = parent.data else {
                 return Err(Error::new(ENOTDIR));
             };
-
             let Inode(entry_inode) = dentries
-                .shift_remove(name_to_delete.as_ref())
+                .get(name_to_delete.as_ref())
+                .copied()
                 .ok_or(Error::new(ENOENT))?;
 
-            if let Some(File {
-                data: FileData::Directory(ref data),
-                ..
-            }) = self.filesystem.files.get(&entry_inode)
-            {
-                if !directory {
-                    return Err(Error::new(EISDIR));
-                } else if !data.is_empty() {
+            let entry = self
+                .filesystem
+                .files
+                .get(&entry_inode)
+                .ok_or(Error::new(EIO))?;
+
+            Self::check_sticky_bit(parent, entry, uid)?;
+
+            let is_dir = entry.mode & MODE_TYPE == MODE_DIR;
+
+            if directory && !is_dir {
+                return Err(Error::new(ENOTDIR));
+            }
+            if !directory && is_dir {
+                return Err(Error::new(EISDIR));
+            }
+            if is_dir {
+                let FileData::Directory(ref dentries) = entry.data else {
+                    return Err(Error::new(EIO));
+                };
+                if !dentries.is_empty() {
                     return Err(Error::new(ENOTEMPTY));
                 }
-                let parent = self
-                    .filesystem
-                    .files
-                    .get_mut(&parent_dir_inode)
-                    .ok_or(Error::new(EIO))?;
-                parent.nlink -= 1; // '..' of subdirectory
             }
 
             entry_inode
         };
 
-        let removed_inode_info = self
-            .filesystem
-            .files
-            .get_mut(&removed_inode)
-            .ok_or(Error::new(EIO))?;
-
-        if let FileData::File(_) | FileData::Socket(_) = removed_inode_info.data {
+        {
+            let parent = self.filesystem.files.get_mut(&parent_dir_inode).unwrap();
+            let FileData::Directory(ref mut dentries) = parent.data else {
+                unreachable!() // checked above
+            };
+            assert_eq!(
+                dentries.shift_remove(name_to_delete.as_ref()).unwrap().0,
+                removed_inode
+            );
             if directory {
-                // FIXME restore entry
-                return Err(Error::new(EISDIR));
+                parent.nlink -= 1; // '..' of subdirectory
             }
-            removed_inode_info.nlink -= 1; // only the parent entry
-        } else {
-            if !directory {
-                // FIXME restore entry
-                return Err(Error::new(ENOTDIR));
-            }
+        }
+
+        let removed_inode_info = self.filesystem.files.get_mut(&removed_inode).unwrap();
+        if directory {
             removed_inode_info.nlink -= 2; // both the parent entry and '.'
+        } else {
+            removed_inode_info.nlink -= 1;
         }
 
         if removed_inode_info.nlink == 0 && removed_inode_info.open_handles == 0 {
@@ -362,6 +376,19 @@ impl<'a> Scheme<'a> {
             new_name.to_string(),
         ))
     }
+
+    fn check_sticky_bit(
+        parent: &crate::filesystem::File,
+        child: &crate::filesystem::File,
+        uid: u32,
+    ) -> Result<()> {
+        if parent.mode & 0o1000 != 0 {
+            if uid != 0 && uid != parent.uid && uid != child.uid {
+                return Err(Error::new(EACCES));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl SchemeSync for Scheme<'_> {
@@ -397,6 +424,16 @@ impl SchemeSync for Scheme<'_> {
                 .filesystem
                 .resolve_except_last(path, ctx.uid, ctx.gid)?;
             let new_name = new_name.ok_or(Error::new(EINVAL))?; // cannot mkdir /
+
+            {
+                let parent_file = self
+                    .filesystem
+                    .files
+                    .get(&parent_dir_inode)
+                    .ok_or(Error::new(EIO))?;
+
+                check_permissions(O_WRONLY, current_perm(parent_file, ctx.uid, ctx.gid))?
+            }
 
             let current_time = filesystem::current_time();
 
@@ -774,12 +811,19 @@ impl SchemeSync for Scheme<'_> {
         let cur_type = file.mode & MODE_TYPE;
 
         /*
+        // TODO: validate ctx
+        if ctx.uid != 0 && ctx.uid != file.uid {
+            return Err(Error::new(EPERM));
+        }
+        */
+
+        /*
         if mode & MODE_TYPE != 0 {
             return Err(Error::new(EINVAL));
         }
         */
 
-        file.mode = mode | cur_type;
+        file.mode = (mode & 0o7777) | cur_type;
 
         Ok(())
     }
@@ -790,6 +834,8 @@ impl SchemeSync for Scheme<'_> {
             .files
             .get_mut(&inode)
             .ok_or(Error::new(EBADFD))?;
+
+        // TODO: validate ctx
 
         file.uid = uid;
         file.gid = gid;
@@ -920,7 +966,12 @@ impl SchemeSync for Scheme<'_> {
                 .files
                 .get(&old_parent_inode)
                 .ok_or(Error::new(EIO))?;
-            check_permissions(O_WRONLY, current_perm(old_parent, uid, gid))?
+
+            let file = self.filesystem.files.get(&inode).ok_or(Error::new(EIO))?;
+
+            check_permissions(O_WRONLY, current_perm(old_parent, uid, gid))?;
+
+            Self::check_sticky_bit(old_parent, file, uid)?;
         }
 
         let is_dir = {
