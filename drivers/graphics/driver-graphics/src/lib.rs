@@ -453,7 +453,6 @@ impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
         &mut self,
         _scheme_data: &mut Self::SchemeData,
         stat: &mut syscall::Stat,
-        _ctx: &CallerCtx,
     ) -> Result<()> {
         stat.st_dev = 226 /*DRM_MAJOR*/ << 8;
         Ok(())
@@ -463,7 +462,6 @@ impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
         &mut self,
         _scheme_data: &mut Self::SchemeData,
         w: &mut FpathWriter,
-        _ctx: &CallerCtx,
     ) -> syscall::Result<()> {
         write!(w, "v2/{}", self.vt).unwrap();
         Ok(())
@@ -493,7 +491,6 @@ impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
         offset: u64,
         _size: usize,
         _flags: MapFlags,
-        _ctx: &CallerCtx,
     ) -> syscall::Result<usize> {
         // log::trace!("KSMSG MMAP {} {:?} {} {}", id, _flags, _offset, _size);
         let framebuffer = self

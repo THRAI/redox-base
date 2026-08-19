@@ -176,12 +176,7 @@ impl<T: NetworkAdapter> ResourceSync for SchemeRoot<T> {
         Ok(ResourceOpenResult::ThisScheme { data, flags })
     }
 
-    fn fpath(
-        &mut self,
-        _scheme_data: &mut Self::SchemeData,
-        _w: &mut FpathWriter,
-        _ctx: &CallerCtx,
-    ) -> Result<()> {
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, _w: &mut FpathWriter) -> Result<()> {
         Ok(())
     }
 }
@@ -204,7 +199,6 @@ impl<T: NetworkAdapter> ResourceSync for Data<T> {
         buf: &mut [u8],
         _offset: u64,
         fcntl_flags: u32,
-        _ctx: &CallerCtx,
     ) -> Result<usize> {
         match scheme_data.adapter.read_packet(buf)? {
             Some(count) => Ok(count),
@@ -224,7 +218,6 @@ impl<T: NetworkAdapter> ResourceSync for Data<T> {
         buf: &[u8],
         _offset: u64,
         _fcntl_flags: u32,
-        _ctx: &CallerCtx,
     ) -> Result<usize> {
         Ok(scheme_data.adapter.write_packet(buf)?)
     }
@@ -233,26 +226,15 @@ impl<T: NetworkAdapter> ResourceSync for Data<T> {
         &mut self,
         _scheme_data: &mut Self::SchemeData,
         _flags: EventFlags,
-        _ctx: &CallerCtx,
     ) -> Result<EventFlags> {
         Ok(EventFlags::empty())
     }
 
-    fn fpath(
-        &mut self,
-        _scheme_data: &mut Self::SchemeData,
-        _w: &mut FpathWriter,
-        _ctx: &CallerCtx,
-    ) -> Result<()> {
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, _w: &mut FpathWriter) -> Result<()> {
         Ok(())
     }
 
-    fn fstat(
-        &mut self,
-        _scheme_data: &mut Self::SchemeData,
-        stat: &mut Stat,
-        _ctx: &CallerCtx,
-    ) -> Result<()> {
+    fn fstat(&mut self, _scheme_data: &mut Self::SchemeData, stat: &mut Stat) -> Result<()> {
         stat.st_mode = MODE_FILE | 0o700;
         Ok(())
     }
@@ -276,7 +258,6 @@ impl<T: NetworkAdapter> ResourceSync for Mac<T> {
         buf: &mut [u8],
         offset: u64,
         _fcntl_flags: u32,
-        _ctx: &CallerCtx,
     ) -> Result<usize> {
         let data = &scheme_data.adapter.mac_address()[offset as usize..];
         let i = cmp::min(buf.len(), data.len());
@@ -290,27 +271,16 @@ impl<T: NetworkAdapter> ResourceSync for Mac<T> {
         _buf: &[u8],
         _offset: u64,
         _fcntl_flags: u32,
-        _ctx: &CallerCtx,
     ) -> Result<usize> {
         Err(Error::new(EINVAL))
     }
 
-    fn fpath(
-        &mut self,
-        _scheme_data: &mut Self::SchemeData,
-        w: &mut FpathWriter,
-        _ctx: &CallerCtx,
-    ) -> Result<()> {
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, w: &mut FpathWriter) -> Result<()> {
         w.push_str("mac");
         Ok(())
     }
 
-    fn fstat(
-        &mut self,
-        _scheme_data: &mut Self::SchemeData,
-        stat: &mut Stat,
-        _ctx: &CallerCtx,
-    ) -> Result<()> {
+    fn fstat(&mut self, _scheme_data: &mut Self::SchemeData, stat: &mut Stat) -> Result<()> {
         stat.st_mode = MODE_FILE | 0o400;
         stat.st_size = 6;
         Ok(())

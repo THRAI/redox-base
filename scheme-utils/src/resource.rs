@@ -76,7 +76,6 @@ pub trait ResourceSync: Sized + Debug {
         buf: &mut [u8],
         offset: u64,
         fcntl_flags: u32,
-        ctx: &CallerCtx,
     ) -> Result<usize> {
         Err(Error::new(EBADF))
     }
@@ -87,12 +86,11 @@ pub trait ResourceSync: Sized + Debug {
         buf: &[u8],
         offset: u64,
         fcntl_flags: u32,
-        ctx: &CallerCtx,
     ) -> Result<usize> {
         Err(Error::new(EBADF))
     }
 
-    fn fsize(&mut self, scheme_data: &mut Self::SchemeData, ctx: &CallerCtx) -> Result<u64> {
+    fn fsize(&mut self, scheme_data: &mut Self::SchemeData) -> Result<u64> {
         Err(Error::new(ESPIPE))
     }
 
@@ -120,7 +118,6 @@ pub trait ResourceSync: Sized + Debug {
         scheme_data: &mut Self::SchemeData,
         cmd: usize,
         arg: usize,
-        ctx: &CallerCtx,
     ) -> Result<usize> {
         Err(Error::new(EOPNOTSUPP))
     }
@@ -129,7 +126,6 @@ pub trait ResourceSync: Sized + Debug {
         &mut self,
         scheme_data: &mut Self::SchemeData,
         flags: EventFlags,
-        ctx: &CallerCtx,
     ) -> Result<EventFlags> {
         Ok(EventFlags::empty())
     }
@@ -143,12 +139,7 @@ pub trait ResourceSync: Sized + Debug {
         Err(Error::new(EOPNOTSUPP))
     }
 
-    fn fpath(
-        &mut self,
-        scheme_data: &mut Self::SchemeData,
-        w: &mut FpathWriter,
-        ctx: &CallerCtx,
-    ) -> Result<()> {
+    fn fpath(&mut self, scheme_data: &mut Self::SchemeData, w: &mut FpathWriter) -> Result<()> {
         Err(Error::new(EOPNOTSUPP))
     }
 
@@ -161,12 +152,7 @@ pub trait ResourceSync: Sized + Debug {
         Err(Error::new(EOPNOTSUPP))
     }
 
-    fn fstat(
-        &mut self,
-        scheme_data: &mut Self::SchemeData,
-        stat: &mut Stat,
-        ctx: &CallerCtx,
-    ) -> Result<()> {
+    fn fstat(&mut self, scheme_data: &mut Self::SchemeData, stat: &mut Stat) -> Result<()> {
         Err(Error::new(EOPNOTSUPP))
     }
 
@@ -179,25 +165,15 @@ pub trait ResourceSync: Sized + Debug {
         Err(Error::new(EOPNOTSUPP))
     }
 
-    fn fsync(&mut self, scheme_data: &mut Self::SchemeData, ctx: &CallerCtx) -> Result<()> {
+    fn fsync(&mut self, scheme_data: &mut Self::SchemeData) -> Result<()> {
         Ok(())
     }
 
-    fn ftruncate(
-        &mut self,
-        scheme_data: &mut Self::SchemeData,
-        len: u64,
-        ctx: &CallerCtx,
-    ) -> Result<()> {
+    fn ftruncate(&mut self, scheme_data: &mut Self::SchemeData, len: u64) -> Result<()> {
         Err(Error::new(EBADF))
     }
 
-    fn futimens(
-        &mut self,
-        scheme_data: &mut Self::SchemeData,
-        times: &[TimeSpec],
-        ctx: &CallerCtx,
-    ) -> Result<()> {
+    fn futimens(&mut self, scheme_data: &mut Self::SchemeData, times: &[TimeSpec]) -> Result<()> {
         Err(Error::new(EBADF))
     }
 
@@ -237,7 +213,6 @@ pub trait ResourceSync: Sized + Debug {
         offset: u64,
         size: usize,
         flags: MapFlags,
-        ctx: &CallerCtx,
     ) -> Result<usize> {
         Err(Error::new(EOPNOTSUPP))
     }
@@ -248,7 +223,6 @@ pub trait ResourceSync: Sized + Debug {
         offset: u64,
         size: usize,
         flags: MunmapFlags,
-        ctx: &CallerCtx,
     ) -> Result<()> {
         Err(Error::new(EOPNOTSUPP))
     }
@@ -278,6 +252,13 @@ macro_rules! __resource_scheme {
         $($variant:ident($type:ty),)*
     } => $method:ident$(<$l:lifetime>)?($($arg:ident: $arg_ty:ty,)*) -> $ret:ty) => {
         fn $method$(<$l>)?(&mut self, id: usize, $($arg: $arg_ty,)*) -> syscall::Result<$ret> {
+            resource_scheme!(@method_helper self id $enum { $($variant),* } => $method (&mut self.scheme_data, $($arg),*))
+        }
+    };
+    (@method_noctx enum $enum:ident {
+        $($variant:ident($type:ty),)*
+    } => $method:ident$(<$l:lifetime>)?($($arg:ident: $arg_ty:ty,)*) -> $ret:ty) => {
+        fn $method$(<$l>)?(&mut self, id: usize, $($arg: $arg_ty,)* _ctx: &redox_scheme::CallerCtx) -> syscall::Result<$ret> {
             resource_scheme!(@method_helper self id $enum { $($variant),* } => $method (&mut self.scheme_data, $($arg),*))
         }
     };
@@ -385,23 +366,19 @@ macro_rules! __resource_scheme {
                 }.map(|res| res.into_scheme(&mut self.handles))
             }
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => read(
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => read(
                 buf: &mut [u8],
                 offset: u64,
                 fcntl_flags: u32,
-                ctx: &redox_scheme::CallerCtx,
             ) -> usize);
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => write(
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => write(
                 buf: &[u8],
                 offset: u64,
                 fcntl_flags: u32,
-                ctx: &redox_scheme::CallerCtx,
             ) -> usize);
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => fsize(
-                ctx: &redox_scheme::CallerCtx,
-            ) -> u64);
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => fsize() -> u64);
 
             $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => fchmod(
                 new_mode: u16,
@@ -414,15 +391,13 @@ macro_rules! __resource_scheme {
                 ctx: &redox_scheme::CallerCtx,
             ) -> ());
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => fcntl(
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => fcntl(
                 cmd: usize,
                 arg: usize,
-                ctx: &redox_scheme::CallerCtx,
             ) -> usize);
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => fevent(
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => fevent(
                 flags: syscall::EventFlags,
-                ctx: &redox_scheme::CallerCtx,
             ) -> syscall::EventFlags);
 
             $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => flink(
@@ -430,10 +405,10 @@ macro_rules! __resource_scheme {
                 ctx: &redox_scheme::CallerCtx,
             ) -> usize);
 
-            fn fpath(&mut self, id: usize, buf: &mut [u8], ctx: &CallerCtx) -> Result<usize> {
+            fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
                 FpathWriter::with(buf, &self.scheme_name, |w| {
                     match self.handles.get_mut(id)? {
-                        $($enum::$variant(arg) => arg.fpath(&mut self.scheme_data, w, ctx),)*
+                        $($enum::$variant(arg) => arg.fpath(&mut self.scheme_data, w),)*
                     }
                 })
             }
@@ -443,9 +418,8 @@ macro_rules! __resource_scheme {
                 ctx: &redox_scheme::CallerCtx,
             ) -> usize);
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => fstat(
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => fstat(
                 stat: &mut syscall::Stat,
-                ctx: &redox_scheme::CallerCtx,
             ) -> ());
 
             $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => fstatvfs(
@@ -453,18 +427,14 @@ macro_rules! __resource_scheme {
                 ctx: &redox_scheme::CallerCtx,
             ) -> ());
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => fsync(
-                ctx: &redox_scheme::CallerCtx,
-            ) -> ());
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => fsync() -> ());
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => ftruncate(
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => ftruncate(
                 len: u64,
-                ctx: &redox_scheme::CallerCtx,
             ) -> ());
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => futimens(
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => futimens(
                 times: &[syscall::TimeSpec],
-                ctx: &redox_scheme::CallerCtx,
             ) -> ());
 
             $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => call(
@@ -485,18 +455,16 @@ macro_rules! __resource_scheme {
                 opaque_offset: u64,
             ) -> syscall::dirent::DirentBuf<&'buf mut [u8]>);
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => mmap_prep(
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => mmap_prep(
                 offset: u64,
                 size: usize,
                 flags: syscall::MapFlags,
-                ctx: &redox_scheme::CallerCtx,
             ) -> usize);
 
-            $crate::resource_scheme!(@method enum $enum { $($variant($type),)* } => munmap(
+            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => munmap(
                 offset: u64,
                 size: usize,
                 flags: syscall::MunmapFlags,
-                ctx: &redox_scheme::CallerCtx,
             ) -> ());
 
             fn on_close(&mut self, id: usize) {
