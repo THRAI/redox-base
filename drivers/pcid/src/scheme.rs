@@ -351,7 +351,7 @@ impl SchemeSync for PciScheme {
 
         let ptr = unsafe { common::physmap(bar, bar_size, common::Prot::RW, memory_type) }?;
 
-        Ok(unsafe { ptr.add((offset << 5 >> 5) as usize) }.expose_provenance())
+        Ok(unsafe { ptr.byte_add((offset << 5 >> 5) as usize) }.expose_provenance())
     }
 
     fn on_close(&mut self, id: usize) {
