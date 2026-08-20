@@ -329,6 +329,17 @@ macro_rules! __resource_scheme {
             $scheme_vis fn handle_ids(&self) -> std::collections::btree_map::Keys<'_, usize, $enum<$($param),*>> {
                 self.handles.keys()
             }
+
+            $scheme_vis fn handles(&self) -> std::collections::btree_map::Iter<'_, usize, $enum<$($param),*>> {
+                self.handles.iter()
+            }
+
+            $scheme_vis fn handles_mut_and_scheme_data(&mut self) -> (
+                std::collections::btree_map::IterMut<'_, usize, $enum<$($param),*>>,
+                &mut $scheme_data,
+            ) {
+                (self.handles.iter_mut(), &mut self.scheme_data)
+            }
         }
 
         impl<$($param: $bound),*> redox_scheme::scheme::SchemeSync for $scheme<$($param),*> {
