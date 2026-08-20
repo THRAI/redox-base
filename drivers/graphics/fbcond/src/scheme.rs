@@ -73,7 +73,7 @@ impl FbconSchemeData {
             match fs::read(&config.font.path) {
                 Ok(contents) => Some(ConsoleFont::from_psf(&contents)),
                 Err(err) => {
-                    log::debug!("Failed to read font {}: {err}", &config.font.path);
+                    log::debug!("Failed to read font {}: {err}", config.font.path);
                     log::debug!("Using fallback font");
                     None
                 }

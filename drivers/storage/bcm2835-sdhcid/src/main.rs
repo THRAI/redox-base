@@ -97,8 +97,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         */
     }
 
-    let mut disks = Vec::new();
-    disks.push(sdhci);
+    let mut disks = vec![sdhci];
     let mut scheme = DiskScheme::new(
         Some(daemon),
         "disk.mmc".to_string(),

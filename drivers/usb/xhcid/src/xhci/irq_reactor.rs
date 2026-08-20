@@ -331,13 +331,12 @@ impl<const N: usize> IrqReactor<N> {
             trace!("Received Port Status Change Request on port {}", port_id);
             self.device_enumerator_sender
                 .send(DeviceEnumerationRequest { port_id })
-                .expect(
-                    format!(
+                .unwrap_or_else(|_| {
+                    panic!(
                         "Failed to transmit device numeration request on port {}",
                         port_id
                     )
-                    .as_str(),
-                );
+                });
             {
                 let mut ports = self.hci.ports.lock().unwrap();
                 let root_port_index = port_id.root_hub_port_index();

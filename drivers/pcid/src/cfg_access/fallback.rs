@@ -22,7 +22,7 @@ impl Pci {
     fn set_iopl() {
         // The IO privilege level is per-thread, so we need to do the initialization on every thread.
         thread_local! {
-            static IOPL_ONCE: Cell<bool> = Cell::new(false);
+            static IOPL_ONCE: Cell<bool> = const { Cell::new(false) };
         }
 
         IOPL_ONCE.with(|iopl_once| {

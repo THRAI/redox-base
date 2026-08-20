@@ -710,7 +710,7 @@ fn main() {
             // List available keymaps
             "--keymaps" => {
                 // TODO: configurable KeymapKind using files
-                for key in vec!["dvorak", "us", "gb", "azerty", "bepo", "it"] {
+                for key in ["dvorak", "us", "gb", "azerty", "bepo", "it"] {
                     println!("{}", key);
                 }
             }

@@ -55,6 +55,7 @@ test-gui: all
 
 clippy:
 	redoxer clippy
+	cd bootstrap && redoxer clippy 
 
 # -----------------------------------------------------------------------------
 # base

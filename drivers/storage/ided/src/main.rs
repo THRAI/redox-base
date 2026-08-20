@@ -58,7 +58,7 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
     common::acquire_port_io_rights().expect("ided: failed to get I/O privilege");
 
     //TODO: move this to ide.rs?
-    let chans = vec![
+    let chans = [
         Arc::new(Mutex::new(primary)),
         Arc::new(Mutex::new(secondary)),
     ];
