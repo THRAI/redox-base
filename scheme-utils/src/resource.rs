@@ -90,6 +90,18 @@ pub trait ResourceSync: Sized + Debug {
         Err(Error::new(EBADF))
     }
 
+    // FIXME remove this once logd no longer depends on it
+    fn write_with_ctx(
+        &mut self,
+        scheme_data: &mut Self::SchemeData,
+        buf: &[u8],
+        offset: u64,
+        fcntl_flags: u32,
+        _ctx_do_not_use: &CallerCtx,
+    ) -> Result<usize> {
+        self.write(scheme_data, buf, offset, fcntl_flags)
+    }
+
     fn fsize(&mut self, scheme_data: &mut Self::SchemeData) -> Result<u64> {
         Err(Error::new(ESPIPE))
     }
@@ -393,11 +405,24 @@ macro_rules! __resource_scheme {
                 fcntl_flags: u32,
             ) -> usize);
 
-            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => write(
+            // $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => write(
+            //     buf: &[u8],
+            //     offset: u64,
+            //     fcntl_flags: u32,
+            // ) -> usize);
+
+            fn write(
+                &mut self,
+                id: usize,
                 buf: &[u8],
                 offset: u64,
                 fcntl_flags: u32,
-            ) -> usize);
+                ctx: &redox_scheme::CallerCtx,
+            ) -> syscall::Result<usize> {
+                match self.handles.get_mut(id)? {
+                    $($enum::$variant(arg) => arg.write_with_ctx(&mut self.scheme_data, buf, offset, fcntl_flags, ctx),)*
+                }
+            }
 
             $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => fsize() -> u64);
 

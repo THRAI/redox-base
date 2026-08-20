@@ -3,28 +3,29 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::mem;
 use std::os::fd::{FromRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
 
-use redox_scheme::scheme::SchemeSync;
-use redox_scheme::{CallerCtx, OpenResult, SendFdRequest, Socket};
-use scheme_utils::{FpathWriter, HandleMap};
+use redox_scheme::{CallerCtx, SendFdRequest, Socket};
+use scheme_utils::{resource_scheme, FpathWriter, ResourceOpenResult, ResourceSync};
 use syscall::error::*;
 use syscall::schemev2::NewFdFlags;
 
-pub enum LogHandle {
-    Log {
-        context: Box<str>,
-        bufs: BTreeMap<usize, Vec<u8>>,
-    },
-    AddSink,
-    SchemeRoot,
+resource_scheme! {
+   pub(crate) LogScheme<>;
+   type SchemeData = LogSchemeData;
+
+   pub(crate) enum LogResource {
+       SchemeRoot(SchemeRoot),
+       AddSink(AddSink),
+       Log(Log),
+   }
 }
 
-pub struct LogScheme<'sock> {
-    socket: &'sock Socket,
+pub struct LogSchemeData {
+    socket: Rc<Socket>,
     kernel_debug: File,
     output_tx: Sender<OutputCmd>,
-    handles: HandleMap<LogHandle>,
 }
 
 enum OutputCmd {
@@ -32,8 +33,8 @@ enum OutputCmd {
     AddSink(usize),
 }
 
-impl<'sock> LogScheme<'sock> {
-    pub fn new(socket: &'sock Socket) -> Self {
+impl LogSchemeData {
+    pub fn new(socket: Rc<Socket>) -> Self {
         let kernel_debug = OpenOptions::new()
             .write(true)
             .open("/scheme/debug")
@@ -87,11 +88,10 @@ impl<'sock> LogScheme<'sock> {
             }
         });
 
-        LogScheme {
+        LogSchemeData {
             socket,
             kernel_debug,
             output_tx,
-            handles: HandleMap::new(),
         }
     }
 
@@ -130,124 +130,133 @@ impl<'sock> LogScheme<'sock> {
     }
 }
 
-impl<'sock> SchemeSync for LogScheme<'sock> {
-    fn scheme_root(&mut self) -> Result<usize> {
-        Ok(self.handles.insert(LogHandle::SchemeRoot))
-    }
-    fn openat(
+#[derive(Debug)]
+pub(crate) struct SchemeRoot;
+
+impl ResourceSync for SchemeRoot {
+    type ResourceEnum = LogResource;
+    type SchemeData = LogSchemeData;
+
+    fn openat<'a>(
         &mut self,
-        dirfd: usize,
+        _scheme_data: &mut Self::SchemeData,
         path: &str,
         _flags: usize,
         _fcntl_flags: u32,
         _ctx: &CallerCtx,
-    ) -> Result<OpenResult> {
-        if !matches!(self.handles.get(dirfd)?, LogHandle::SchemeRoot) {
-            return Err(Error::new(EACCES));
-        }
-
-        let id = if path == "add_sink" {
-            self.handles.insert(LogHandle::AddSink)
+    ) -> Result<ResourceOpenResult<Self::ResourceEnum>> {
+        let data = if path == "add_sink" {
+            LogResource::AddSink(AddSink)
         } else {
-            self.handles.insert(LogHandle::Log {
+            LogResource::Log(Log {
                 context: path.to_string().into_boxed_str(),
                 bufs: BTreeMap::new(),
             })
         };
 
-        Ok(OpenResult::ThisScheme {
-            number: id,
+        Ok(ResourceOpenResult::ThisScheme {
+            data,
             flags: NewFdFlags::empty(),
         })
     }
+}
 
-    fn read(
+#[derive(Debug)]
+struct AddSink;
+
+impl ResourceSync for AddSink {
+    type ResourceEnum = LogResource;
+    type SchemeData = LogSchemeData;
+
+    fn on_sendfd(
         &mut self,
-        id: usize,
-        _buf: &mut [u8],
-        _offset: u64,
-        _flags: u32,
-        _ctx: &CallerCtx,
+        scheme_data: &mut Self::SchemeData,
+        sendfd_request: &SendFdRequest,
     ) -> Result<usize> {
-        let _handle = self.handles.get(id)?;
-
-        // TODO
-
-        Ok(0)
-    }
-
-    fn write(
-        &mut self,
-        id: usize,
-        buf: &[u8],
-        _offset: u64,
-        _flags: u32,
-        ctx: &CallerCtx,
-    ) -> Result<usize> {
-        let (context, bufs) = match self.handles.get_mut(id)? {
-            LogHandle::Log { context, bufs } => (context, bufs),
-            LogHandle::SchemeRoot | LogHandle::AddSink => return Err(Error::new(EBADF)),
-        };
-
-        let handle_buf = bufs.entry(ctx.pid).or_insert_with(|| Vec::new());
-
-        Self::write_logs(
-            &self.output_tx,
-            handle_buf,
-            context,
-            buf,
-            Some(&mut self.kernel_debug),
-        );
-
-        Ok(buf.len())
-    }
-
-    fn on_sendfd(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
-        let id = sendfd_request.id();
-
-        if !matches!(self.handles.get(id)?, LogHandle::AddSink) {
-            return Err(Error::new(EBADF));
-        }
-
         let mut new_fd = usize::MAX;
         if let Err(e) = sendfd_request.obtain_fd(
-            &self.socket,
+            &scheme_data.socket,
             syscall::FobtainFdFlags::CLOEXEC,
             std::slice::from_mut(&mut new_fd),
         ) {
             return Err(e);
         }
-        self.output_tx.send(OutputCmd::AddSink(new_fd)).unwrap();
+        scheme_data
+            .output_tx
+            .send(OutputCmd::AddSink(new_fd))
+            .unwrap();
 
         Ok(1)
     }
 
-    fn fcntl(&mut self, id: usize, _cmd: usize, _arg: usize, _ctx: &CallerCtx) -> Result<usize> {
-        let _handle = self.handles.get(id)?;
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, w: &mut FpathWriter) -> Result<()> {
+        w.push_str("add_sink");
+        Ok(())
+    }
+}
 
+#[derive(Debug)]
+struct Log {
+    context: Box<str>,
+    bufs: BTreeMap<usize, Vec<u8>>,
+}
+
+impl ResourceSync for Log {
+    type ResourceEnum = LogResource;
+    type SchemeData = LogSchemeData;
+
+    fn read(
+        &mut self,
+        _scheme_data: &mut Self::SchemeData,
+        _buf: &mut [u8],
+        _offset: u64,
+        _fcntl_flags: u32,
+    ) -> Result<usize> {
         Ok(0)
     }
 
-    fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        FpathWriter::with(buf, "log", |w| {
-            w.push_str(match self.handles.get(id)? {
-                LogHandle::Log { context, .. } => context,
-                LogHandle::AddSink => "add_sink",
-                LogHandle::SchemeRoot => return Err(Error::new(EBADF)),
-            });
-            Ok(())
-        })
+    fn write_with_ctx(
+        &mut self,
+        scheme_data: &mut Self::SchemeData,
+        buf: &[u8],
+        _offset: u64,
+        _fcntl_flags: u32,
+        ctx_do_not_use: &CallerCtx,
+    ) -> Result<usize> {
+        // FIXME remove CallerCtx usage
+        let handle_buf = self
+            .bufs
+            .entry(ctx_do_not_use.pid)
+            .or_insert_with(|| Vec::new());
+
+        LogSchemeData::write_logs(
+            &scheme_data.output_tx,
+            handle_buf,
+            &self.context,
+            buf,
+            Some(&mut scheme_data.kernel_debug),
+        );
+
+        Ok(buf.len())
     }
 
-    fn fsync(&mut self, id: usize, _ctx: &CallerCtx) -> Result<()> {
-        let _handle = self.handles.get(id)?;
+    fn fcntl(
+        &mut self,
+        _scheme_data: &mut Self::SchemeData,
+        _cmd: usize,
+        _arg: usize,
+    ) -> Result<usize> {
+        Ok(0)
+    }
 
-        //TODO: flush remaining data?
-
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, w: &mut FpathWriter) -> Result<()> {
+        w.push_str(&self.context);
         Ok(())
     }
 
-    fn on_close(&mut self, id: usize) {
-        self.handles.remove(id);
+    fn fsync(&mut self, _scheme_data: &mut Self::SchemeData) -> Result<()> {
+        //TODO: flush remaining data?
+
+        Ok(())
     }
 }
