@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use acpi::aml::{
-    op_region::{OpRegion, RegionHandler, RegionSpace},
     AmlError,
+    op_region::{OpRegion, RegionHandler, RegionSpace},
 };
 use common::{
     io::{Io, Pio},
