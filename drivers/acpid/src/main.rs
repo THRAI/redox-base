@@ -1,3 +1,5 @@
+#![feature(once_cell_try)]
+
 use std::convert::TryFrom;
 use std::mem;
 use std::ops::ControlFlow;
