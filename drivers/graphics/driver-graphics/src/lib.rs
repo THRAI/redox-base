@@ -5,16 +5,17 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
+use std::marker::PhantomData;
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 
 use inputd::{DisplayHandle, VtEvent, VtEventKind};
 use libredox::Fd;
 use redox_scheme::scheme::{SchemeSync, register_scheme_inner};
-use redox_scheme::{CallerCtx, OpenResult, Socket};
-use scheme_utils::{Blocking, FpathWriter, HandleMap};
+use redox_scheme::{CallerCtx, Socket};
+use scheme_utils::{Blocking, FpathWriter, ResourceOpenResult, ResourceSync, resource_scheme};
 use syscall::schemev2::NewFdFlags;
-use syscall::{EACCES, EINVAL, ENOENT, EOPNOTSUPP, Error, MapFlags, Result};
+use syscall::{EINVAL, ENOENT, Error, MapFlags, Result};
 
 use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState};
 use crate::kms::objects::{
@@ -123,7 +124,7 @@ pub trait Framebuffer: Debug {}
 impl Framebuffer for () {}
 
 pub struct GraphicsScheme<T: GraphicsAdapter> {
-    inner: GraphicsSchemeInner<T>,
+    inner: GraphicsSchemeImpl<T>,
     _inputd_handle: DisplayHandle,
     handler: Blocking<Box<Socket>>,
 }
@@ -144,24 +145,28 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
             adapter.probe_connector(&mut objects, connector_id)
         }
 
-        let mut inner = GraphicsSchemeInner {
-            adapter,
-            scheme_name,
-            disable_graphical_debug,
-            objects,
-            handles: HandleMap::new(),
-            active_vt: 0,
-            vts: HashMap::new(),
-        };
+        let mut inner = GraphicsSchemeImpl::new(
+            scheme_name.clone(),
+            GraphicsSchemeData {
+                adapter,
+                disable_graphical_debug,
+                objects,
+                active_vt: 0,
+                vts: HashMap::new(),
+            },
+            GraphicsResource::SchemeRoot(SchemeRoot::<T>(PhantomData)),
+        );
 
         let cap_id = inner.scheme_root().expect("failed to get this scheme root");
-        register_scheme_inner(&socket, &inner.scheme_name, cap_id)
+        register_scheme_inner(&socket, &scheme_name, cap_id)
             .expect("failed to register graphics scheme root");
 
-        let control_id = inner.handles.insert(Handle::Control);
+        let control_id = inner
+            .handles
+            .insert(GraphicsResource::Control(Control::<T>(PhantomData)));
         let control_cap = Fd::new(socket.create_this_scheme_fd(0, control_id, 0, 0).unwrap());
 
-        let display_handle = DisplayHandle::new(&inner.scheme_name, control_cap, early).unwrap();
+        let display_handle = DisplayHandle::new(&scheme_name, control_cap, early).unwrap();
 
         Self {
             inner,
@@ -175,23 +180,24 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
     }
 
     pub fn adapter(&self) -> &T {
-        &self.inner.adapter
+        &self.inner.scheme_data().adapter
     }
 
     pub fn adapter_mut(&mut self) -> &mut T {
-        &mut self.inner.adapter
+        &mut self.inner.scheme_data_mut().adapter
     }
 
     pub fn kms_objects(&self) -> &KmsObjects<T> {
-        &self.inner.objects
+        &self.inner.scheme_data().objects
     }
 
     pub fn kms_objects_mut(&mut self) -> &mut KmsObjects<T> {
-        &mut self.inner.objects
+        &mut self.inner.scheme_data_mut().objects
     }
 
     pub fn adapter_and_kms_objects_mut(&mut self) -> (&mut T, &mut KmsObjects<T>) {
-        (&mut self.inner.adapter, &mut self.inner.objects)
+        let inner = self.inner.scheme_data_mut();
+        (&mut inner.adapter, &mut inner.objects)
     }
 
     pub fn notify_displays_changed(&mut self) {
@@ -218,13 +224,22 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
     }
 }
 
-struct GraphicsSchemeInner<T: GraphicsAdapter> {
+resource_scheme! {
+    GraphicsSchemeImpl<T: GraphicsAdapter>;
+    type SchemeData = GraphicsSchemeData<T>;
+
+    enum GraphicsResource {
+        SchemeRoot(SchemeRoot<T>),
+        Control(Control<T>),
+        DrmHandle(DrmHandle<T>),
+    }
+}
+
+struct GraphicsSchemeData<T: GraphicsAdapter> {
     adapter: T,
 
-    scheme_name: String,
     disable_graphical_debug: Option<File>,
     objects: KmsObjects<T>,
-    handles: HandleMap<Handle<T>>,
 
     active_vt: usize,
     vts: HashMap<usize, VtState<T>>,
@@ -251,20 +266,7 @@ impl<T: GraphicsAdapter> VtState<T> {
     }
 }
 
-enum Handle<T: GraphicsAdapter> {
-    V2(DrmHandle<T>),
-    SchemeRoot,
-    Control,
-}
-
-struct DrmHandle<T: GraphicsAdapter> {
-    vt: usize,
-    unique: Option<String>,
-    next_id: u32,
-    buffers: HashMap<u32, Arc<T::Buffer>>,
-}
-
-impl<T: GraphicsAdapter> GraphicsSchemeInner<T> {
+impl<T: GraphicsAdapter> GraphicsSchemeData<T> {
     fn get_or_create_vt<'a>(
         objects: &KmsObjects<T>,
         vts: &'a mut HashMap<usize, VtState<T>>,
@@ -299,7 +301,7 @@ impl<T: GraphicsAdapter> GraphicsSchemeInner<T> {
 
         self.active_vt = vt;
 
-        let vt_state = GraphicsSchemeInner::get_or_create_vt(&self.objects, &mut self.vts, vt);
+        let vt_state = GraphicsSchemeData::get_or_create_vt(&self.objects, &mut self.vts, vt);
 
         for (connector_idx, connector_state) in vt_state.connector_state.iter().enumerate() {
             let connector_id = self.objects.connector_ids()[connector_idx];
@@ -357,23 +359,26 @@ impl<T: GraphicsAdapter> GraphicsSchemeInner<T> {
     }
 }
 
-const MAP_FAKE_OFFSET_MULTIPLIER: usize = 0x10_000_000;
+struct SchemeRoot<T>(PhantomData<T>);
 
-impl<T: GraphicsAdapter> SchemeSync for GraphicsSchemeInner<T> {
-    fn scheme_root(&mut self) -> Result<usize> {
-        Ok(self.handles.insert(Handle::SchemeRoot))
+impl<T> std::fmt::Debug for SchemeRoot<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SchemeRoot").finish()
     }
+}
+
+impl<T: GraphicsAdapter> ResourceSync for SchemeRoot<T> {
+    type SchemeData = GraphicsSchemeData<T>;
+    type ResourceEnum = GraphicsResource<T>;
+
     fn openat(
         &mut self,
-        dirfd: usize,
+        scheme_data: &mut Self::SchemeData,
         path: &str,
         _flags: usize,
         _fcntl_flags: u32,
         _ctx: &CallerCtx,
-    ) -> Result<OpenResult> {
-        if !matches!(self.handles.get(dirfd)?, Handle::SchemeRoot) {
-            return Err(Error::new(EACCES));
-        }
+    ) -> Result<ResourceOpenResult<Self::ResourceEnum>> {
         if path.is_empty() {
             return Err(Error::new(EINVAL));
         }
@@ -387,9 +392,9 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsSchemeInner<T> {
                 .map_err(|_| Error::new(EINVAL))?;
 
             // Ensure the VT exists such that the rest of the methods can freely access it.
-            Self::get_or_create_vt(&self.objects, &mut self.vts, vt);
+            GraphicsSchemeData::get_or_create_vt(&scheme_data.objects, &mut scheme_data.vts, vt);
 
-            Handle::V2(DrmHandle {
+            GraphicsResource::DrmHandle(DrmHandle {
                 vt,
                 unique: None,
                 next_id: 0,
@@ -398,91 +403,105 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsSchemeInner<T> {
         } else {
             return Err(Error::new(EINVAL));
         };
-        let id = self.handles.insert(handle);
-        Ok(OpenResult::ThisScheme {
-            number: id,
+        Ok(ResourceOpenResult::ThisScheme {
+            data: handle,
             flags: NewFdFlags::empty(),
         })
     }
+}
 
-    fn fstat(&mut self, _id: usize, stat: &mut syscall::Stat, _ctx: &CallerCtx) -> Result<()> {
+struct Control<T>(PhantomData<T>);
+
+impl<T> std::fmt::Debug for Control<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Control").finish()
+    }
+}
+
+impl<T: GraphicsAdapter> ResourceSync for Control<T> {
+    type SchemeData = GraphicsSchemeData<T>;
+    type ResourceEnum = GraphicsResource<T>;
+
+    fn call(
+        &mut self,
+        scheme_data: &mut Self::SchemeData,
+        payload: &mut [u8],
+        _metadata: &[u64],
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
+        let vt_event = unsafe { VtEvent::from_bytes(payload) }.ok_or_else(|| Error::new(EINVAL))?;
+        match vt_event.kind {
+            VtEventKind::Activate => scheme_data.activate_vt(vt_event.vt),
+        }
+        Ok(0)
+    }
+}
+
+#[derive(Debug)]
+struct DrmHandle<T: GraphicsAdapter> {
+    vt: usize,
+    unique: Option<String>,
+    next_id: u32,
+    buffers: HashMap<u32, Arc<T::Buffer>>,
+}
+
+impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
+    type SchemeData = GraphicsSchemeData<T>;
+    type ResourceEnum = GraphicsResource<T>;
+
+    fn fstat(
+        &mut self,
+        _scheme_data: &mut Self::SchemeData,
+        stat: &mut syscall::Stat,
+    ) -> Result<()> {
         stat.st_dev = 226 /*DRM_MAJOR*/ << 8;
         Ok(())
     }
 
-    fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> syscall::Result<usize> {
-        FpathWriter::with(buf, &self.scheme_name, |w| {
-            match self.handles.get(id)? {
-                Handle::V2(DrmHandle {
-                    vt,
-                    unique: _,
-                    next_id: _,
-                    buffers: _,
-                }) => write!(w, "v2/{vt}").unwrap(),
-                Handle::SchemeRoot | Handle::Control => return Err(Error::new(EOPNOTSUPP)),
-            };
-            Ok(())
-        })
+    fn fpath(
+        &mut self,
+        _scheme_data: &mut Self::SchemeData,
+        w: &mut FpathWriter,
+    ) -> syscall::Result<()> {
+        write!(w, "v2/{}", self.vt).unwrap();
+        Ok(())
     }
 
     fn call(
         &mut self,
-        id: usize,
+        scheme_data: &mut Self::SchemeData,
         payload: &mut [u8],
         metadata: &[u64],
         _ctx: &CallerCtx,
     ) -> Result<usize> {
-        match self.handles.get_mut(id)? {
-            Handle::V2(handle) => ioctl::call_ioctl(
-                &mut self.adapter,
-                &mut self.objects,
-                self.active_vt,
-                &mut self.vts,
-                handle,
-                metadata[0],
-                payload,
-            ),
-            Handle::Control => {
-                let vt_event =
-                    unsafe { VtEvent::from_bytes(payload) }.ok_or_else(|| Error::new(EINVAL))?;
-                match vt_event.kind {
-                    VtEventKind::Activate => self.activate_vt(vt_event.vt),
-                }
-                Ok(0)
-            }
-            Handle::SchemeRoot => return Err(Error::new(EOPNOTSUPP)),
-        }
+        ioctl::call_ioctl(
+            &mut scheme_data.adapter,
+            &mut scheme_data.objects,
+            scheme_data.active_vt,
+            &mut scheme_data.vts,
+            self,
+            metadata[0],
+            payload,
+        )
     }
 
     fn mmap_prep(
         &mut self,
-        id: usize,
+        scheme_data: &mut Self::SchemeData,
         offset: u64,
         _size: usize,
         _flags: MapFlags,
-        _ctx: &CallerCtx,
     ) -> syscall::Result<usize> {
         // log::trace!("KSMSG MMAP {} {:?} {} {}", id, _flags, _offset, _size);
-        let (framebuffer, offset) = match self.handles.get(id)? {
-            Handle::V2(DrmHandle {
-                vt: _,
-                unique: _,
-                next_id: _,
-                buffers,
-            }) => (
-                buffers
-                    .get(&((offset as usize / MAP_FAKE_OFFSET_MULTIPLIER) as u32))
-                    .ok_or(Error::new(EINVAL))
-                    .unwrap(),
-                offset & (MAP_FAKE_OFFSET_MULTIPLIER as u64 - 1),
-            ),
-            Handle::SchemeRoot | Handle::Control => return Err(Error::new(EOPNOTSUPP)),
-        };
-        let ptr = T::map_dumb_buffer(&mut self.adapter, framebuffer);
+        let framebuffer = self
+            .buffers
+            .get(&((offset as usize / MAP_FAKE_OFFSET_MULTIPLIER) as u32))
+            .ok_or(Error::new(EINVAL))
+            .unwrap();
+        let offset = offset & (MAP_FAKE_OFFSET_MULTIPLIER as u64 - 1);
+        let ptr = T::map_dumb_buffer(&mut scheme_data.adapter, framebuffer);
         Ok(unsafe { ptr.add(offset as usize) } as usize)
     }
-
-    fn on_close(&mut self, id: usize) {
-        self.handles.remove(id);
-    }
 }
+
+const MAP_FAKE_OFFSET_MULTIPLIER: usize = 0x10_000_000;

@@ -1,12 +1,15 @@
+use std::marker::PhantomData;
 use std::{cmp, io};
 
 use libredox::flag::O_NONBLOCK;
 use libredox::Fd;
-use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult, Response, SignalBehavior, Socket};
-use scheme_utils::{FpathWriter, HandleMap, ReadinessBased};
-use syscall::schemev2::NewFdFlags;
+use redox_scheme::{CallerCtx, Response, SignalBehavior, Socket};
+use scheme_utils::{
+    resource_scheme, FpathWriter, ReadinessBased, ResourceOpenResult, ResourceSync,
+};
 use syscall::{
-    Error, EventFlags, Result, Stat, EACCES, EAGAIN, EBADF, EINVAL, EWOULDBLOCK, MODE_FILE,
+    schemev2::NewFdFlags, Error, EventFlags, Result, Stat, EACCES, EAGAIN, EINVAL, EWOULDBLOCK,
+    MODE_FILE,
 };
 
 pub trait NetworkAdapter {
@@ -29,7 +32,7 @@ pub trait NetworkAdapter {
 }
 
 pub struct NetworkScheme<T: NetworkAdapter> {
-    scheme: NetworkSchemeInner<T>,
+    scheme: NetworkSchemeImpl<T>,
     handler: ReadinessBased<Box<Socket>>,
 }
 
@@ -51,7 +54,11 @@ impl<T: NetworkAdapter> NetworkScheme<T> {
         assert!(scheme_name.starts_with("network"));
         let socket = Socket::nonblock().expect("failed to create network scheme");
         let adapter = adapter_fn();
-        let mut scheme = NetworkSchemeInner::new(adapter, scheme_name.clone());
+        let mut scheme = NetworkSchemeImpl::new(
+            scheme_name.clone(),
+            NetworkSchemeData::new(adapter),
+            NetworkResource::SchemeRoot(SchemeRoot::<T>(PhantomData)),
+        );
         redox_scheme::scheme::register_sync_scheme(&socket, &scheme_name, &mut scheme)
             .expect("failed to regitster network scheme");
         daemon.ready();
@@ -66,11 +73,11 @@ impl<T: NetworkAdapter> NetworkScheme<T> {
     }
 
     pub fn adapter(&self) -> &T {
-        &self.scheme.adapter
+        &self.scheme.scheme_data().adapter
     }
 
     pub fn adapter_mut(&mut self) -> &mut T {
-        &mut self.scheme.adapter
+        &mut self.scheme.scheme_data_mut().adapter
     }
 
     /// Process pending and new requests.
@@ -93,9 +100,9 @@ impl<T: NetworkAdapter> NetworkScheme<T> {
             .expect("driver-network: failed to write to socket");
 
         // Notify readers about incoming events
-        let available_for_read = self.scheme.adapter.available_for_read();
+        let available_for_read = self.scheme.scheme_data_mut().adapter.available_for_read();
         if available_for_read > 0 {
-            for &handle_id in self.scheme.handles.keys() {
+            for &handle_id in self.scheme.handle_ids() {
                 post_fevent(
                     &self.handler.socket(),
                     handle_id,
@@ -109,80 +116,91 @@ impl<T: NetworkAdapter> NetworkScheme<T> {
     }
 }
 
-struct NetworkSchemeInner<T: NetworkAdapter> {
+resource_scheme! {
+    NetworkSchemeImpl<T: NetworkAdapter>;
+    type SchemeData = NetworkSchemeData<T>;
+
+    enum NetworkResource {
+        SchemeRoot(SchemeRoot<T>),
+        Data(Data<T>),
+        Mac(Mac<T>),
+    }
+}
+
+struct NetworkSchemeData<T: NetworkAdapter> {
     adapter: T,
-    scheme_name: String,
-    handles: HandleMap<Handle>,
 }
 
-enum Handle {
-    Data,
-    Mac,
-    SchemeRoot,
-}
-
-impl<T: NetworkAdapter> NetworkSchemeInner<T> {
-    pub fn new(adapter: T, scheme_name: String) -> Self {
-        Self {
-            adapter,
-            scheme_name,
-            handles: HandleMap::new(),
-        }
+impl<T: NetworkAdapter> NetworkSchemeData<T> {
+    pub fn new(adapter: T) -> Self {
+        Self { adapter }
     }
 }
 
-impl<T: NetworkAdapter> SchemeSync for NetworkSchemeInner<T> {
-    fn scheme_root(&mut self) -> Result<usize> {
-        Ok(self.handles.insert(Handle::SchemeRoot))
-    }
+struct SchemeRoot<T>(PhantomData<T>);
 
-    fn openat(
+impl<T> std::fmt::Debug for SchemeRoot<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SchemeRoot").finish()
+    }
+}
+
+impl<T: NetworkAdapter> ResourceSync for SchemeRoot<T> {
+    type SchemeData = NetworkSchemeData<T>;
+    type ResourceEnum = NetworkResource<T>;
+
+    fn openat<'a>(
         &mut self,
-        fd: usize,
+        _scheme_data: &mut Self::SchemeData,
         path: &str,
         _flags: usize,
         _fcntl_flags: u32,
         ctx: &CallerCtx,
-    ) -> Result<OpenResult> {
-        if !matches!(self.handles.get(fd)?, Handle::SchemeRoot) {
-            return Err(Error::new(EACCES));
-        }
+    ) -> Result<ResourceOpenResult<Self::ResourceEnum>> {
         if ctx.uid != 0 {
             return Err(Error::new(EACCES));
         }
 
-        let (handle, flags) = match path {
-            "" => (Handle::Data, NewFdFlags::empty()),
-            "mac" => (Handle::Mac, NewFdFlags::POSITIONED),
+        let (data, flags) = match path {
+            "" => (
+                NetworkResource::Data(Data(PhantomData)),
+                NewFdFlags::empty(),
+            ),
+            "mac" => (
+                NetworkResource::Mac(Mac(PhantomData)),
+                NewFdFlags::POSITIONED,
+            ),
             _ => return Err(Error::new(EINVAL)),
         };
 
-        let id = self.handles.insert(handle);
-        Ok(OpenResult::ThisScheme { number: id, flags })
+        Ok(ResourceOpenResult::ThisScheme { data, flags })
     }
+
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, _w: &mut FpathWriter) -> Result<()> {
+        Ok(())
+    }
+}
+
+struct Data<T>(PhantomData<T>);
+
+impl<T> std::fmt::Debug for Data<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Data").finish()
+    }
+}
+
+impl<T: NetworkAdapter> ResourceSync for Data<T> {
+    type SchemeData = NetworkSchemeData<T>;
+    type ResourceEnum = NetworkResource<T>;
 
     fn read(
         &mut self,
-        id: usize,
+        scheme_data: &mut Self::SchemeData,
         buf: &mut [u8],
-        offset: u64,
+        _offset: u64,
         fcntl_flags: u32,
-        _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let handle = self.handles.get_mut(id)?;
-
-        match *handle {
-            Handle::Data => {}
-            Handle::Mac => {
-                let data = &self.adapter.mac_address()[offset as usize..];
-                let i = cmp::min(buf.len(), data.len());
-                buf[..i].copy_from_slice(&data[..i]);
-                return Ok(i);
-            }
-            _ => return Err(Error::new(EBADF)),
-        };
-
-        match self.adapter.read_packet(buf)? {
+        match scheme_data.adapter.read_packet(buf)? {
             Some(count) => Ok(count),
             None => {
                 if fcntl_flags & O_NONBLOCK as u32 != 0 {
@@ -196,63 +214,75 @@ impl<T: NetworkAdapter> SchemeSync for NetworkSchemeInner<T> {
 
     fn write(
         &mut self,
-        id: usize,
+        scheme_data: &mut Self::SchemeData,
         buf: &[u8],
         _offset: u64,
         _fcntl_flags: u32,
-        _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let handle = self.handles.get(id)?;
-
-        match handle {
-            Handle::Data => {}
-            Handle::Mac { .. } => return Err(Error::new(EINVAL)),
-            _ => return Err(Error::new(EBADF)),
-        }
-
-        Ok(self.adapter.write_packet(buf)?)
+        Ok(scheme_data.adapter.write_packet(buf)?)
     }
 
-    fn fevent(&mut self, id: usize, _flags: EventFlags, _ctx: &CallerCtx) -> Result<EventFlags> {
-        let _handle = self.handles.get(id)?;
+    fn fevent(
+        &mut self,
+        _scheme_data: &mut Self::SchemeData,
+        _flags: EventFlags,
+    ) -> Result<EventFlags> {
         Ok(EventFlags::empty())
     }
 
-    fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        FpathWriter::with(buf, &self.scheme_name, |w| {
-            let path = match self.handles.get(id)? {
-                Handle::Data { .. } => "",
-                Handle::Mac { .. } => "mac",
-                _ => "",
-            };
-            write!(w, "{path}").unwrap();
-            Ok(())
-        })
-    }
-
-    fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
-        let handle = self.handles.get(id)?;
-
-        match handle {
-            Handle::Data { .. } => {
-                stat.st_mode = MODE_FILE | 0o700;
-            }
-            Handle::Mac { .. } => {
-                stat.st_mode = MODE_FILE | 0o400;
-                stat.st_size = 6;
-            }
-            _ => return Err(Error::new(EBADF)),
-        }
-
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, _w: &mut FpathWriter) -> Result<()> {
         Ok(())
     }
 
-    fn fsync(&mut self, id: usize, _ctx: &CallerCtx) -> Result<()> {
-        let _handle = self.handles.get(id)?;
+    fn fstat(&mut self, _scheme_data: &mut Self::SchemeData, stat: &mut Stat) -> Result<()> {
+        stat.st_mode = MODE_FILE | 0o700;
+        Ok(())
+    }
+}
+
+struct Mac<T>(PhantomData<T>);
+
+impl<T> std::fmt::Debug for Mac<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Mac").finish()
+    }
+}
+
+impl<T: NetworkAdapter> ResourceSync for Mac<T> {
+    type SchemeData = NetworkSchemeData<T>;
+    type ResourceEnum = NetworkResource<T>;
+
+    fn read(
+        &mut self,
+        scheme_data: &mut Self::SchemeData,
+        buf: &mut [u8],
+        offset: u64,
+        _fcntl_flags: u32,
+    ) -> Result<usize> {
+        let data = &scheme_data.adapter.mac_address()[offset as usize..];
+        let i = cmp::min(buf.len(), data.len());
+        buf[..i].copy_from_slice(&data[..i]);
+        Ok(i)
+    }
+
+    fn write(
+        &mut self,
+        _scheme_data: &mut Self::SchemeData,
+        _buf: &[u8],
+        _offset: u64,
+        _fcntl_flags: u32,
+    ) -> Result<usize> {
+        Err(Error::new(EINVAL))
+    }
+
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, w: &mut FpathWriter) -> Result<()> {
+        w.push_str("mac");
         Ok(())
     }
 
-    fn on_close(&mut self, id: usize) {
-        self.handles.remove(id);
+    fn fstat(&mut self, _scheme_data: &mut Self::SchemeData, stat: &mut Stat) -> Result<()> {
+        stat.st_mode = MODE_FILE | 0o400;
+        stat.st_size = 6;
+        Ok(())
     }
 }

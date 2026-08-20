@@ -8,9 +8,11 @@ use syscall::{EBADF, Error, Result};
 
 mod blocking;
 mod readiness_based;
+mod resource;
 
 pub use blocking::Blocking;
 pub use readiness_based::ReadinessBased;
+pub use resource::{ResourceOpenResult, ResourceSync, resource_scheme};
 
 pub struct HandleMap<T> {
     handles: BTreeMap<usize, T>,
