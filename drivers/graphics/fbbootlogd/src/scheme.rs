@@ -7,13 +7,22 @@ use drm::control::Device;
 use graphics_ipc::V2GraphicsHandle;
 use inputd::ConsumerHandle;
 use orbclient::{Event, EventOption};
-use redox_scheme::scheme::SchemeSync;
-use redox_scheme::{CallerCtx, OpenResult};
-use scheme_utils::FpathWriter;
+use redox_scheme::CallerCtx;
+use scheme_utils::{resource_scheme, FpathWriter, ResourceOpenResult, ResourceSync};
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error, Result, EACCES, EBADF, EINVAL, ENOENT};
+use syscall::{Error, Result, ENOENT};
 
-pub struct FbbootlogScheme {
+resource_scheme! {
+    pub(crate) FbbootlogScheme<>;
+    type SchemeData = FbbootlogSchemeData;
+
+    pub(crate) enum FbbootlogResource {
+        SchemeRoot(SchemeRoot),
+        Log(Log),
+    }
+}
+
+pub struct FbbootlogSchemeData {
     pub input_handle: ConsumerHandle,
     display_map: Option<V2DisplayMap>,
     text_screen: console_draw::TextScreen,
@@ -23,9 +32,9 @@ pub struct FbbootlogScheme {
     shift: bool,
 }
 
-impl FbbootlogScheme {
-    pub fn new() -> FbbootlogScheme {
-        let mut scheme = FbbootlogScheme {
+impl FbbootlogSchemeData {
+    pub fn new() -> Self {
+        let mut scheme_data = Self {
             input_handle: ConsumerHandle::bootlog_vt().expect("fbbootlogd: Failed to open vt"),
             display_map: None,
             text_screen: console_draw::TextScreen::new(None),
@@ -35,9 +44,9 @@ impl FbbootlogScheme {
             shift: false,
         };
 
-        scheme.handle_handoff();
+        scheme_data.handle_handoff();
 
-        scheme
+        scheme_data
     }
 
     pub fn handle_handoff(&mut self) {
@@ -172,70 +181,62 @@ impl FbbootlogScheme {
     }
 }
 
-const SCHEME_ROOT_ID: usize = 1;
+#[derive(Debug)]
+pub(crate) struct SchemeRoot;
 
-impl SchemeSync for FbbootlogScheme {
-    fn scheme_root(&mut self) -> Result<usize> {
-        Ok(SCHEME_ROOT_ID)
-    }
+impl ResourceSync for SchemeRoot {
+    type ResourceEnum = FbbootlogResource;
+    type SchemeData = FbbootlogSchemeData;
 
-    fn openat(
+    fn openat<'a>(
         &mut self,
-        dirfd: usize,
-        path_str: &str,
+        _scheme_data: &mut Self::SchemeData,
+        path: &str,
         _flags: usize,
         _fcntl_flags: u32,
         _ctx: &CallerCtx,
-    ) -> Result<OpenResult> {
-        if dirfd != SCHEME_ROOT_ID {
-            return Err(Error::new(EACCES));
-        }
-        if !path_str.is_empty() {
+    ) -> Result<ResourceOpenResult<Self::ResourceEnum>> {
+        if !path.is_empty() {
             return Err(Error::new(ENOENT));
         }
 
-        Ok(OpenResult::ThisScheme {
-            number: 0,
+        Ok(ResourceOpenResult::ThisScheme {
+            data: FbbootlogResource::Log(Log),
             flags: NewFdFlags::empty(),
         })
     }
+}
 
-    fn fpath(&mut self, _id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        FpathWriter::with(buf, "fbbootlog", |_| Ok(()))
-    }
+#[derive(Debug)]
+pub(crate) struct Log;
 
-    fn fsync(&mut self, _id: usize, _ctx: &CallerCtx) -> Result<()> {
+impl ResourceSync for Log {
+    type ResourceEnum = FbbootlogResource;
+    type SchemeData = FbbootlogSchemeData;
+
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, _w: &mut FpathWriter) -> Result<()> {
         Ok(())
     }
 
-    fn read(
-        &mut self,
-        _id: usize,
-        _buf: &mut [u8],
-        _offset: u64,
-        _fcntl_flags: u32,
-        _ctx: &CallerCtx,
-    ) -> Result<usize> {
-        Err(Error::new(EINVAL))
+    fn fsync(&mut self, _scheme_data: &mut Self::SchemeData) -> Result<()> {
+        Ok(())
     }
 
     fn write(
         &mut self,
-        id: usize,
+        scheme_data: &mut Self::SchemeData,
         buf: &[u8],
         _offset: u64,
         _fcntl_flags: u32,
-        _ctx: &CallerCtx,
     ) -> Result<usize> {
-        if id == SCHEME_ROOT_ID {
-            return Err(Error::new(EBADF));
-        }
-        if let Some(map) = &mut self.display_map {
-            Self::handle_resize(map, &mut self.text_screen);
-            self.text_buffer.write(buf);
+        if let Some(map) = &mut scheme_data.display_map {
+            FbbootlogSchemeData::handle_resize(map, &mut scheme_data.text_screen);
+            scheme_data.text_buffer.write(buf);
 
-            if !self.is_scrollback {
-                let damage = self.text_screen.write(map, buf, &mut VecDeque::new());
+            if !scheme_data.is_scrollback {
+                let damage = scheme_data
+                    .text_screen
+                    .write(map, buf, &mut VecDeque::new());
                 map.dirty_fb(damage).unwrap();
             }
         }

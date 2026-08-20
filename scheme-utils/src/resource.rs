@@ -316,6 +316,16 @@ macro_rules! __resource_scheme {
                 &mut self.scheme_data
             }
 
+            $scheme_vis fn new_handle_fd(
+                &mut self,
+                socket: &redox_scheme::Socket,
+                data: $enum<$($param),*>,
+                flags: usize,
+            ) -> syscall::Result<libredox::Fd> {
+                let id = self.handles.insert(data);
+                socket.create_this_scheme_fd(0, id, flags, 0).map(libredox::Fd::new)
+            }
+
             $scheme_vis fn handle_ids(&self) -> std::collections::btree_map::Keys<'_, usize, $enum<$($param),*>> {
                 self.handles.keys()
             }

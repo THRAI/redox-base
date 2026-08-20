@@ -16,7 +16,7 @@ use orbclient::Event;
 use redox_scheme::Socket;
 use scheme_utils::Blocking;
 
-use crate::scheme::FbbootlogScheme;
+use crate::scheme::{FbbootlogResource, FbbootlogScheme, FbbootlogSchemeData, Log, SchemeRoot};
 
 mod scheme;
 
@@ -35,7 +35,11 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 
     let socket = Socket::nonblock().expect("fbbootlogd: failed to create fbbootlog scheme");
 
-    let mut scheme = FbbootlogScheme::new();
+    let mut scheme = FbbootlogScheme::new(
+        "fbbootlog".to_owned(),
+        FbbootlogSchemeData::new(),
+        FbbootlogResource::SchemeRoot(SchemeRoot),
+    );
     let mut handler = Blocking::new(Box::new(socket), 16);
 
     event_queue
@@ -48,17 +52,17 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 
     event_queue
         .subscribe(
-            scheme.input_handle.event_handle().as_raw_fd() as usize,
+            scheme.scheme_data().input_handle.event_handle().as_raw_fd() as usize,
             Source::Input,
             event::EventFlags::READ,
         )
         .expect("fbbootlogd: failed to subscribe to scheme events");
 
     {
-        let log_fd = handler
-            .socket()
-            .create_this_scheme_fd(0, 0, 0, 0)
-            .expect("fbbootlogd: failed to create log fd");
+        let log_fd = scheme
+            .new_handle_fd(handler.socket(), FbbootlogResource::Log(Log), 0)
+            .expect("fbbootlogd: failed to create log fd")
+            .into_raw();
         // Add ourself as log sink
         let log_file = libredox::Fd::open(
             "/scheme/log/add_sink",
@@ -92,6 +96,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
                 let mut events = [Event::new(); 16];
                 loop {
                     match scheme
+                        .scheme_data()
                         .input_handle
                         .read_events(&mut events)
                         .expect("fbbootlogd: error while reading events")
@@ -99,12 +104,12 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
                         ConsumerHandleEvent::Events(&[]) => break,
                         ConsumerHandleEvent::Events(events) => {
                             for event in events {
-                                scheme.handle_input(&event);
+                                scheme.scheme_data_mut().handle_input(&event);
                             }
                         }
                         ConsumerHandleEvent::Handoff => {
                             eprintln!("fbbootlogd: handoff requested");
-                            scheme.handle_handoff();
+                            scheme.scheme_data_mut().handle_handoff();
                         }
                     }
                 }
