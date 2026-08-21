@@ -480,7 +480,9 @@ impl<'sdt> Iterator for DmarRawIter<'sdt> {
         let len = usize::try_from(len).expect("expected u16 to fit within usize");
 
         if len > remainder.len() {
-            log::warn!("DMAR remapping structure length was smaller than the remaining length of the table.");
+            log::warn!(
+                "DMAR remapping structure length was smaller than the remaining length of the table."
+            );
             return None;
         }
 

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use ::acpi::aml::op_region::{RegionHandler, RegionSpace};
 use event::{EventFlags, RawEventQueue};
-use redox_scheme::{scheme::register_sync_scheme, Socket};
+use redox_scheme::{Socket, scheme::register_sync_scheme};
 use scheme_utils::Blocking;
 
 mod acpi;
