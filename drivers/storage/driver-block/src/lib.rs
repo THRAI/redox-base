@@ -9,9 +9,9 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
+use std::pin::Pin;
 use std::task::Poll;
 
-use event::EventFlags;
 use libredox::Fd;
 use partitionlib::{LogicalBlockSize, PartitionTable};
 use redox_scheme::scheme::{register_scheme_inner, SchemeAsync, SchemeState};
@@ -398,12 +398,12 @@ struct DiskSchemeInner<T> {
 }
 
 pub trait EventSource {
-    async fn next(&mut self);
+    async fn next(self: Pin<&mut Self>);
 }
 
 impl<Hw: executor::Hardware + 'static> EventSource for executor::ExternalEventHandle<Hw> {
-    async fn next(&mut self) {
-        let _ = std::pin::Pin::new(self).next().await;
+    async fn next(self: Pin<&mut Self>) {
+        let _ = self.next().await;
     }
 }
 

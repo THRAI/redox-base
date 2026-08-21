@@ -1,3 +1,5 @@
+#![feature(negative_impls)]
+
 mod task;
 
 use task::*;
@@ -13,7 +15,6 @@ use std::hash::Hash;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::os::fd::AsRawFd;
-use std::os::fd::FromRawFd;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -141,7 +142,9 @@ impl<Hw: Hardware> Drop for WorkQueue<Hw> {
             n += 1;
         }
 
-        log::warn!("WorkQueue::drop: cancelled {n} tasks");
+        if n != 0 {
+            log::warn!("executor: cancelled {n} tasks");
+        }
     }
 }
 
@@ -188,7 +191,7 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
             flags: event::EventFlags::empty(),
             user_data,
             fd,
-            _not_send_or_unpin: PhantomData,
+            _not_send: PhantomData,
         }
     }
 
@@ -509,28 +512,26 @@ impl Event {
     }
 }
 
-pub struct ExternalEventHandle<Hw: Hardware> {
-    flags: event::EventFlags,
-    fd: usize,
-    user_data: EventUserData,
-    _not_send_or_unpin: PhantomData<(*const (), fn() -> Hw)>,
-}
+pub struct NextEventFuture<'a, Hw: Hardware>(Pin<&'a mut ExternalEventHandle<Hw>>);
 
-impl<Hw: Hardware> ExternalEventHandle<Hw> {
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Event>> {
-        let this = unsafe { self.get_unchecked_mut() };
+impl<Hw: Hardware> Future for NextEventFuture<'_, Hw> {
+    type Output = Option<Event>;
 
-        let flags = std::mem::take(&mut this.flags);
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let event_handle = unsafe { this.0.as_mut().get_unchecked_mut() };
+
+        let flags = std::mem::take(&mut event_handle.flags);
 
         if flags.is_empty() {
             let (executor, task) = current_executor_and_task::<Hw>(cx);
             // NOTE: [`LocalExecutor::register_external_event`] returns a unique
             // [`ExternalEventHandle`] every time. If an entry in the `external_event` list already
             // exists, then this was a spurious poll.
-            let _ = executor
-                .external_event
-                .borrow_mut()
-                .insert(this.user_data, (task, (&mut this.flags).into()));
+            let _ = executor.external_event.borrow_mut().insert(
+                event_handle.user_data,
+                (task, (&mut event_handle.flags).into()),
+            );
 
             return Poll::Pending;
         }
@@ -540,8 +541,32 @@ impl<Hw: Hardware> ExternalEventHandle<Hw> {
             _not_send: PhantomData,
         }))
     }
-    pub async fn next(mut self: Pin<&mut Self>) -> Option<Event> {
-        core::future::poll_fn(|cx| self.as_mut().poll_next(cx)).await
+}
+
+impl<Hw: Hardware> Drop for NextEventFuture<'_, Hw> {
+    fn drop(&mut self) {
+        let executor = LocalExecutor::<Hw>::current();
+        let _pending = executor
+            .external_event
+            .borrow_mut()
+            .remove(&self.0.user_data);
+    }
+}
+
+pub struct ExternalEventHandle<Hw: Hardware> {
+    flags: event::EventFlags,
+    fd: usize,
+    user_data: EventUserData,
+    _not_send: PhantomData<(*const (), fn() -> Hw)>,
+}
+
+// The executor writes to the `flags` field on an event. Moving the struct would thereby make the
+// registered pointer invalid.
+impl<Hw: Hardware> !Unpin for ExternalEventHandle<Hw> {}
+
+impl<Hw: Hardware> ExternalEventHandle<Hw> {
+    pub fn next(self: Pin<&mut Self>) -> NextEventFuture<'_, Hw> {
+        NextEventFuture(self)
     }
 }
 
