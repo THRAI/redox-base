@@ -115,7 +115,8 @@ missing_docs = "allow" #TODO: set to deny when all public functions are document
 [workspace.lints.clippy]
 missing_safety_doc = "warn" #TODO: set to deny when all safety documentation is completed
 precedence = "deny"
-unused_io_amount = "warn" #TODO: set to deny when all occurences is completed
+unused_io_amount = "warn" #TODO: have an abstraction to irq file read/write, then set to deny
+perf = { level = "deny", priority = -1 }
 
 [patch."https://gitlab.redox-os.org/redox-os/relibc.git"]
 #redox-ioctl = { path = "../../relibc/source/redox-ioctl" }

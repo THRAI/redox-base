@@ -328,7 +328,7 @@ impl Ddi {
         }
 
         // IHD-OS-TGL-Vol 12-1.22-Rev2.0 "Voltage Swing Programming"
-        let settings = vec![
+        let settings = [
             // HDMI 450mV, 450mV, 0.0dB
             Setting::new(0b1010, 0x60, 0x3F, 0x00, 0b0),
             // HDMI 450mV, 650mV, 3.2dB

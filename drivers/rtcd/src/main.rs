@@ -8,7 +8,6 @@ mod x86;
 /// early logging benefits from knowing the time, even though this can be adjusted later once the
 /// time is known). The sole job of `rtcd` is to read from the hardware real-time clock, and then
 /// write the offset to the kernel.
-
 fn main() -> Result<()> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {

@@ -74,7 +74,7 @@ impl Hardware for NvmeHw {
 static VTABLE: std::task::RawWakerVTable = executor::vtable::<NvmeHw>();
 
 thread_local! {
-    static THE_EXECUTOR: RefCell<Option<Rc<LocalExecutor<NvmeHw>>>> = RefCell::new(None);
+    static THE_EXECUTOR: RefCell<Option<Rc<LocalExecutor<NvmeHw>>>> = const { RefCell::new(None) };
 }
 
 pub type NvmeExecutor = LocalExecutor<NvmeHw>;

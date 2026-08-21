@@ -2066,7 +2066,7 @@ impl<'a> ProcScheme<'a> {
                 log::trace!("No pctl {caller_pid:?} => {target_pid:?}");
                 return SendResult::Invalid;
             };
-            log::trace!("PCTL {:#x?}", &**sig_pctl);
+            log::trace!("PCTL {:#x?}", **sig_pctl);
             log::trace!(
                 "STS {:?} NTHRD {}",
                 target_proc.status,
@@ -2259,7 +2259,7 @@ impl<'a> ProcScheme<'a> {
                             let Some(ref tctl) = thread.sig_ctrl else {
                                 continue;
                             };
-                            log::trace!("TCTL {:#x?}", &**tctl);
+                            log::trace!("TCTL {:#x?}", **tctl);
                             if (tctl.word[sig_group].load(Ordering::Relaxed) >> 32) & (1 << sig_idx)
                                 != 0
                             {

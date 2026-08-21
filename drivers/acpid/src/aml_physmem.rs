@@ -3,6 +3,7 @@ use acpi::{Handle, PciAddress, PhysicalMapping, aml::AmlError};
 use common::io::{Io, Pio};
 use num_traits::PrimInt;
 use rustc_hash::FxHashMap;
+use std::collections::hash_map::Entry;
 use std::fmt::LowerHex;
 use std::mem::size_of;
 use std::ptr::NonNull;
@@ -53,21 +54,21 @@ impl AmlPageCache {
     /// get a virtual address for the given physical page
     fn get_page(&mut self, phys_target: usize) -> std::io::Result<&MappedPage> {
         let phys_page = phys_target & PAGE_MASK;
-        if self.page_cache.contains_key(&phys_page) {
+        if let Entry::Vacant(e) = self.page_cache.entry(phys_page) {
+            let mapped_page = MappedPage::new(phys_page)?;
+            log::trace!("adding page {:#x} to cache", mapped_page.phys_page);
+            e.insert(mapped_page);
+            Ok(self
+                .page_cache
+                .get(&phys_page)
+                .expect("can't find page that was just inserted"))
+        } else {
             log::trace!("re-using cached page {:#x}", phys_page);
 
             Ok(self
                 .page_cache
                 .get(&phys_page)
                 .expect("could not get page after contains=true"))
-        } else {
-            let mapped_page = MappedPage::new(phys_page)?;
-            log::trace!("adding page {:#x} to cache", mapped_page.phys_page);
-            self.page_cache.insert(phys_page, mapped_page);
-            Ok(self
-                .page_cache
-                .get(&phys_page)
-                .expect("can't find page that was just inserted"))
         }
     }
 
