@@ -90,6 +90,18 @@ pub trait ResourceSync: Sized + Debug {
         Err(Error::new(EBADF))
     }
 
+    // FIXME remove this once logd no longer depends on it
+    fn write_with_ctx(
+        &mut self,
+        scheme_data: &mut Self::SchemeData,
+        buf: &[u8],
+        offset: u64,
+        fcntl_flags: u32,
+        _ctx_do_not_use: &CallerCtx,
+    ) -> Result<usize> {
+        self.write(scheme_data, buf, offset, fcntl_flags)
+    }
+
     fn fsize(&mut self, scheme_data: &mut Self::SchemeData) -> Result<u64> {
         Err(Error::new(ESPIPE))
     }
@@ -316,8 +328,29 @@ macro_rules! __resource_scheme {
                 &mut self.scheme_data
             }
 
+            $scheme_vis fn new_handle_fd(
+                &mut self,
+                socket: &redox_scheme::Socket,
+                data: $enum<$($param),*>,
+                flags: usize,
+            ) -> syscall::Result<libredox::Fd> {
+                let id = self.handles.insert(data);
+                socket.create_this_scheme_fd(0, id, flags, 0).map(libredox::Fd::new)
+            }
+
             $scheme_vis fn handle_ids(&self) -> std::collections::btree_map::Keys<'_, usize, $enum<$($param),*>> {
                 self.handles.keys()
+            }
+
+            $scheme_vis fn handles(&self) -> std::collections::btree_map::Iter<'_, usize, $enum<$($param),*>> {
+                self.handles.iter()
+            }
+
+            $scheme_vis fn handles_mut_and_scheme_data(&mut self) -> (
+                std::collections::btree_map::IterMut<'_, usize, $enum<$($param),*>>,
+                &mut $scheme_data,
+            ) {
+                (self.handles.iter_mut(), &mut self.scheme_data)
             }
         }
 
@@ -372,11 +405,24 @@ macro_rules! __resource_scheme {
                 fcntl_flags: u32,
             ) -> usize);
 
-            $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => write(
+            // $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => write(
+            //     buf: &[u8],
+            //     offset: u64,
+            //     fcntl_flags: u32,
+            // ) -> usize);
+
+            fn write(
+                &mut self,
+                id: usize,
                 buf: &[u8],
                 offset: u64,
                 fcntl_flags: u32,
-            ) -> usize);
+                ctx: &redox_scheme::CallerCtx,
+            ) -> syscall::Result<usize> {
+                match self.handles.get_mut(id)? {
+                    $($enum::$variant(arg) => arg.write_with_ctx(&mut self.scheme_data, buf, offset, fcntl_flags, ctx),)*
+                }
+            }
 
             $crate::resource_scheme!(@method_noctx enum $enum { $($variant($type),)* } => fsize() -> u64);
 

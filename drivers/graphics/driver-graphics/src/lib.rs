@@ -161,10 +161,13 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
         register_scheme_inner(&socket, &scheme_name, cap_id)
             .expect("failed to register graphics scheme root");
 
-        let control_id = inner
-            .handles
-            .insert(GraphicsResource::Control(Control::<T>(PhantomData)));
-        let control_cap = Fd::new(socket.create_this_scheme_fd(0, control_id, 0, 0).unwrap());
+        let control_cap = inner
+            .new_handle_fd(
+                &socket,
+                GraphicsResource::Control(Control::<T>(PhantomData)),
+                0,
+            )
+            .unwrap();
 
         let display_handle = DisplayHandle::new(&scheme_name, control_cap, early).unwrap();
 

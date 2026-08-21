@@ -4,11 +4,10 @@ use std::os::fd::AsRawFd;
 
 use console_draw::ConsoleFont;
 use event::{EventQueue, UserData};
-use redox_scheme::scheme::SchemeSync;
-use redox_scheme::{CallerCtx, OpenResult};
-use scheme_utils::{FpathWriter, HandleMap};
+use redox_scheme::CallerCtx;
+use scheme_utils::{resource_scheme, FpathWriter, ResourceOpenResult, ResourceSync};
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error, EventFlags, Result, EACCES, EAGAIN, EBADF, ENOENT, O_NONBLOCK};
+use syscall::{Error, EventFlags, Result, EAGAIN, EBADF, ENOENT, O_NONBLOCK};
 
 use serde::Deserialize;
 
@@ -32,25 +31,22 @@ impl UserData for VtIndex {
     }
 }
 
-pub struct FdHandle {
-    pub vt_i: VtIndex,
-    pub flags: usize,
-    pub events: EventFlags,
-    pub notified_read: bool,
+resource_scheme! {
+    pub(crate) FbconScheme<>;
+    type SchemeData = FbconSchemeData;
+
+    pub(crate) enum FbconResource {
+        SchemeRoot(SchemeRoot),
+        Vt(FdHandle),
+    }
 }
 
-pub enum Handle {
-    Vt(FdHandle),
-    SchemeRoot,
+pub(crate) struct FbconSchemeData {
+    pub(crate) vts: BTreeMap<VtIndex, TextScreen>,
 }
 
-pub struct FbconScheme {
-    pub vts: BTreeMap<VtIndex, TextScreen>,
-    pub handles: HandleMap<Handle>,
-}
-
-impl FbconScheme {
-    pub fn new(vt_ids: &[usize], event_queue: &mut EventQueue<VtIndex>) -> FbconScheme {
+impl FbconSchemeData {
+    pub(crate) fn new(vt_ids: &[usize], event_queue: &mut EventQueue<VtIndex>) -> FbconSchemeData {
         let mut vts = BTreeMap::new();
 
         let config = match fs::read_to_string("/etc/fbcond.toml") {
@@ -99,103 +95,93 @@ impl FbconScheme {
             vts.insert(VtIndex(vt_i), TextScreen::new(display, font.clone()));
         }
 
-        FbconScheme {
-            vts,
-            handles: HandleMap::new(),
-        }
-    }
-
-    fn get_vt_handle_mut(&mut self, id: usize) -> Result<&mut FdHandle> {
-        match self.handles.get_mut(id)? {
-            Handle::Vt(handle) => Ok(handle),
-            Handle::SchemeRoot => Err(Error::new(EBADF)),
-        }
+        FbconSchemeData { vts }
     }
 }
 
-impl SchemeSync for FbconScheme {
-    fn scheme_root(&mut self) -> Result<usize> {
-        Ok(self.handles.insert(Handle::SchemeRoot))
-    }
+#[derive(Debug)]
+pub(crate) struct SchemeRoot;
 
-    fn openat(
+impl ResourceSync for SchemeRoot {
+    type ResourceEnum = FbconResource;
+    type SchemeData = FbconSchemeData;
+
+    fn openat<'a>(
         &mut self,
-        dirfd: usize,
-        path_str: &str,
+        scheme_data: &mut Self::SchemeData,
+        path: &str,
         flags: usize,
         fcntl_flags: u32,
         _ctx: &CallerCtx,
-    ) -> Result<OpenResult> {
-        if !matches!(self.handles.get(dirfd)?, Handle::SchemeRoot) {
-            return Err(Error::new(EACCES));
-        }
-
-        let vt_i = VtIndex(path_str.parse::<usize>().map_err(|_| Error::new(ENOENT))?);
-        if self.vts.contains_key(&vt_i) {
-            let id = self.handles.insert(Handle::Vt(FdHandle {
-                vt_i,
-                flags: flags | fcntl_flags as usize,
-                events: EventFlags::empty(),
-                notified_read: false,
-            }));
-
-            Ok(OpenResult::ThisScheme {
-                number: id,
+    ) -> Result<ResourceOpenResult<Self::ResourceEnum>> {
+        let vt_i = VtIndex(path.parse::<usize>().map_err(|_| Error::new(ENOENT))?);
+        if scheme_data.vts.contains_key(&vt_i) {
+            Ok(ResourceOpenResult::ThisScheme {
+                data: FbconResource::Vt(FdHandle {
+                    vt_i,
+                    flags: flags | fcntl_flags as usize,
+                    events: EventFlags::empty(),
+                    notified_read: false,
+                }),
                 flags: NewFdFlags::empty(),
             })
         } else {
             Err(Error::new(ENOENT))
         }
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct FdHandle {
+    pub(crate) vt_i: VtIndex,
+    flags: usize,
+    pub(crate) events: EventFlags,
+    pub(crate) notified_read: bool,
+}
+
+impl ResourceSync for FdHandle {
+    type ResourceEnum = FbconResource;
+    type SchemeData = FbconSchemeData;
 
     fn fevent(
         &mut self,
-        id: usize,
+        _scheme_data: &mut Self::SchemeData,
         flags: syscall::EventFlags,
-        _ctx: &CallerCtx,
     ) -> Result<syscall::EventFlags> {
-        let handle = self.get_vt_handle_mut(id)?;
-
-        handle.notified_read = false;
-        handle.events = flags;
+        self.notified_read = false;
+        self.events = flags;
 
         Ok(syscall::EventFlags::empty())
     }
 
-    fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        FpathWriter::with(buf, "fbcon", |w| {
-            let handle = self.get_vt_handle_mut(id)?;
-            write!(w, "{}", handle.vt_i.0).unwrap();
-            Ok(())
-        })
-    }
-
-    fn fsync(&mut self, id: usize, _ctx: &CallerCtx) -> Result<()> {
-        let _handle = self.get_vt_handle_mut(id)?;
+    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, w: &mut FpathWriter) -> Result<()> {
+        write!(w, "{}", self.vt_i.0).unwrap();
         Ok(())
     }
 
-    fn fcntl(&mut self, id: usize, _cmd: usize, _arg: usize, _ctx: &CallerCtx) -> Result<usize> {
-        self.handles.get(id)?;
+    fn fsync(&mut self, _scheme_data: &mut Self::SchemeData) -> Result<()> {
+        Ok(())
+    }
+
+    fn fcntl(
+        &mut self,
+        _scheme_data: &mut Self::SchemeData,
+        _cmd: usize,
+        _arg: usize,
+    ) -> Result<usize> {
         Ok(0)
     }
 
     fn read(
         &mut self,
-        id: usize,
+        scheme_data: &mut Self::SchemeData,
         buf: &mut [u8],
         _offset: u64,
         _fcntl_flags: u32,
-        _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let handle = match self.handles.get(id)? {
-            Handle::Vt(handle) => Ok(handle),
-            Handle::SchemeRoot => Err(Error::new(EBADF)),
-        }?;
-
-        if let Some(screen) = self.vts.get_mut(&handle.vt_i) {
+        if let Some(screen) = scheme_data.vts.get_mut(&self.vt_i) {
             if !screen.can_read() {
-                if handle.flags & O_NONBLOCK != 0 {
+                if self.flags & O_NONBLOCK != 0 {
                     Err(Error::new(EAGAIN))
                 } else {
                     Err(Error::new(EAGAIN))
@@ -210,23 +196,18 @@ impl SchemeSync for FbconScheme {
 
     fn write(
         &mut self,
-        id: usize,
+        scheme_data: &mut Self::SchemeData,
         buf: &[u8],
         _offset: u64,
         _fcntl_flags: u32,
-        _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let vt_i = self.get_vt_handle_mut(id)?.vt_i;
+        let vt_i = self.vt_i;
 
-        if let Some(console) = self.vts.get_mut(&vt_i) {
+        if let Some(console) = scheme_data.vts.get_mut(&vt_i) {
             console.write(buf)
         } else {
             Err(Error::new(EBADF))
         }
-    }
-
-    fn on_close(&mut self, id: usize) {
-        self.handles.remove(id);
     }
 }
 

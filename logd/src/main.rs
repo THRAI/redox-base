@@ -1,15 +1,21 @@
+use std::rc::Rc;
+
 use redox_scheme::Socket;
 use scheme_utils::Blocking;
 
-use crate::scheme::LogScheme;
+use crate::scheme::{LogResource, LogScheme, LogSchemeData, SchemeRoot};
 
 mod scheme;
 
 fn daemon(daemon: daemon::SchemeDaemon) -> ! {
-    let socket = Socket::create().expect("logd: failed to create log scheme");
+    let socket = Rc::new(Socket::create().expect("logd: failed to create log scheme"));
 
-    let mut scheme = LogScheme::new(&socket);
-    let handler = Blocking::new(&socket, 16);
+    let mut scheme = LogScheme::new(
+        "log".to_owned(),
+        LogSchemeData::new(socket.clone()),
+        LogResource::SchemeRoot(SchemeRoot),
+    );
+    let handler = Blocking::new(&*socket, 16);
 
     let _ = daemon.ready_sync_scheme(&socket, &mut scheme);
 

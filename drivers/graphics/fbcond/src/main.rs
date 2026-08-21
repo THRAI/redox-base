@@ -6,7 +6,7 @@ use scheme_utils::ReadinessBased;
 use std::env;
 use syscall::EVENT_READ;
 
-use crate::scheme::{FbconScheme, Handle, VtIndex};
+use crate::scheme::{FbconResource, FbconScheme, FbconSchemeData, SchemeRoot, VtIndex};
 
 mod display;
 mod scheme;
@@ -41,7 +41,11 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
         )
         .expect("fbcond: failed to subscribe to scheme events");
 
-    let mut scheme = FbconScheme::new(&vt_ids, &mut event_queue);
+    let mut scheme = FbconScheme::new(
+        "fbcon".to_owned(),
+        FbconSchemeData::new(&vt_ids, &mut event_queue),
+        FbconResource::SchemeRoot(SchemeRoot),
+    );
     let mut readiness = ReadinessBased::new(Box::new(socket), 16);
 
     let _ = daemon.ready_sync_scheme(readiness.socket(), &mut scheme);
@@ -52,7 +56,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 
     // Handle all events that could have happened before registering with the event queue.
     handle_event(&mut scheme, &mut readiness, VtIndex::SCHEMA_SENTINEL);
-    for vt_i in scheme.vts.keys().copied().collect::<Vec<_>>() {
+    for vt_i in scheme.scheme_data().vts.keys().copied().collect::<Vec<_>>() {
         handle_event(&mut scheme, &mut readiness, vt_i);
     }
 
@@ -76,7 +80,7 @@ fn handle_event(
                 .expect("fbcond: failed to read from socket");
         }
         vt_i => {
-            let vt = scheme.vts.get_mut(&vt_i).unwrap();
+            let vt = scheme.scheme_data_mut().vts.get_mut(&vt_i).unwrap();
 
             let mut events = [Event::new(); 16];
             loop {
@@ -106,17 +110,18 @@ fn handle_event(
         .write_responses()
         .expect("fbcond: failed to write to socket");
 
-    for (handle_id, handle) in scheme.handles.iter_mut() {
+    let (handles, scheme_data) = scheme.handles_mut_and_scheme_data();
+    for (handle_id, handle) in handles {
         let handle = match handle {
-            Handle::SchemeRoot => continue,
-            Handle::Vt(handle) => handle,
+            FbconResource::SchemeRoot(SchemeRoot) => continue,
+            FbconResource::Vt(handle) => handle,
         };
 
         if !handle.events.contains(EVENT_READ) {
             continue;
         }
 
-        let can_read = scheme
+        let can_read = scheme_data
             .vts
             .get(&handle.vt_i)
             .map_or(false, |console| console.can_read());
