@@ -448,7 +448,6 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> RingDiskSchemeInner<T, Hw> {
             return;
         };
 
-        println!("removing handle: id: {id}");
         match handle {
             Handle::Ring(RingState::Active { join_handle, .. }) => {
                 join_handle.abort();
