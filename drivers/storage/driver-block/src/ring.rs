@@ -1,6 +1,7 @@
 use std::cmp;
 use std::fmt::Write;
 use std::io::{self, Read, Seek, SeekFrom};
+use std::pin::{pin, Pin};
 use std::rc::Rc;
 
 use std::collections::BTreeMap;
@@ -35,15 +36,15 @@ use crate::{EventSource, PhysAddr};
 
 use super::Disk;
 
-struct RingEventSource<Ev: EventSource>(Mutex<Ev>);
+struct RingEventSource<'a, Ev: EventSource>(Mutex<Pin<&'a mut Ev>>);
 
-impl<Ev: EventSource> WaitNotifyAsync for RingEventSource<Ev> {
+impl<'a, Ev: EventSource> WaitNotifyAsync for RingEventSource<'a, Ev> {
     async fn wait_on_tail(
         &self,
         _expected_tail: u32,
         _deadline_opt: Option<&TimeSpec>,
     ) -> FutexWaitResult {
-        self.0.lock().unwrap().next().await;
+        self.0.lock().unwrap().as_mut().next().await;
         FutexWaitResult::Waited
     }
 
@@ -447,7 +448,6 @@ impl<T: Disk + Clone + 'static, Hw: Hardware> RingDiskSchemeInner<T, Hw> {
             return;
         };
 
-        println!("removing handle: id: {id}");
         match handle {
             Handle::Ring(RingState::Active { join_handle, .. }) => {
                 join_handle.abort();
@@ -938,9 +938,8 @@ async fn ring_worker_task<Hw: Hardware, D: Disk + Clone + 'static>(
 ) {
     let mut queue = Vec::<DiskOpSqe>::with_capacity(BATCH_LIMIT);
     let cq = Rc::new(Mutex::new(cq));
-    let source = RingEventSource(Mutex::new(
-        executor.register_external_event(pipe_fd.raw(), EventFlags::READ),
-    ));
+    let ev_handle = pin!(executor.register_external_event(pipe_fd.raw(), EventFlags::READ));
+    let source = RingEventSource(Mutex::new(ev_handle));
     let wq = WorkQueue::<Hw>::new();
     let mut tmp_buf = [0; 1];
 
