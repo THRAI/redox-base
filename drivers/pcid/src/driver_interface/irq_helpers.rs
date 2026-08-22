@@ -275,8 +275,7 @@ impl Msix {
     }
 
     pub fn alloc(&mut self) -> InterruptVector {
-        let table_size = self.mapped.info.table_size;
-        if self.next < table_size {
+        if self.next < self.mapped.info.table_size {
             let index = self.next;
             self.next += 1;
 
@@ -355,6 +354,7 @@ impl InterruptVector {
 /// MSI-X, MSI, and INTx# pin.
 ///
 /// For more than one MSI-X vector, use [`Msix::enable`] and call [`Msix::alloc`] per vector.
+// FIXME move MSI-X IRQ allocation to pcid
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn pci_allocate_interrupt_vector(
     pcid_handle: &mut PciFunctionHandle,

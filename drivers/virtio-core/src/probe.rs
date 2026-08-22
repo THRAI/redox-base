@@ -1,16 +1,17 @@
-use std::fs::File;
-use std::sync::Arc;
-
 use common::MemoryType;
-use pcid_interface::*;
+use pcid_interface::{
+    irq_helpers::{InterruptVector, Msix},
+    PciFunctionHandle,
+};
+use std::sync::{Arc, Mutex};
 
 use crate::spec::*;
-use crate::transport::{Error, StandardTransport, Transport};
+use crate::transport::{Error, Queue, StandardTransport, Transport};
 
 pub struct Device {
     pub transport: Arc<dyn Transport>,
     pub device_space: *const u8,
-    pub irq_handle: File,
+    msix: Mutex<Msix>,
 }
 
 // FIXME(andypython): `device_space` should not be `Send` nor `Sync`. Take
@@ -18,7 +19,22 @@ pub struct Device {
 unsafe impl Send for Device {}
 unsafe impl Sync for Device {}
 
-pub const MSIX_PRIMARY_VECTOR: u16 = 0;
+impl Device {
+    /// Next MSI-X vector and a virtqueue on it.
+    /// Later allocs reuse vector 0 if the MSI-X table is exhausted.
+    pub fn setup_queue(&self) -> Result<Arc<Queue>, Error> {
+        let irq = self.alloc_irq();
+        self.transport.setup_queue(irq)
+    }
+
+    /// Next MSI-X vector without a virtqueue.
+    ///
+    /// For device-config interrupts (`setup_config_notify`).
+    /// This does not spawn an IRQ thread. (see virtio-gpud).
+    pub fn alloc_irq(&self) -> InterruptVector {
+        self.msix.lock().unwrap().alloc()
+    }
+}
 
 /// VirtIO Device Probe
 ///
@@ -27,7 +43,7 @@ pub const MSIX_PRIMARY_VECTOR: u16 = 0;
 ///
 /// The caller is required to do the following:
 /// * Negotiate the device and driver supported features (finialize via [`StandardTransport::finalize_features`])
-/// * Create the device specific virtio queues (via [`StandardTransport::setup_queue`]). This is *required* to be done
+/// * Create the device specific virtio queues (via [`Device::setup_queue`]). This is *required* to be done
 ///   before starting the device.
 /// * Finally start the device (via [`StandardTransport::run_device`]). At this point, the device
 ///   is alive.
@@ -112,14 +128,14 @@ pub fn probe_device(pcid_handle: &mut PciFunctionHandle) -> Result<Device, Error
 
     // According to the virtio specification, the device REQUIRED to support MSI-X.
     assert!(has_msix, "virtio: device does not support MSI-X");
-    let irq_handle = crate::arch::enable_msix(pcid_handle)?;
+    let msix = Msix::enable(pcid_handle, "virtio");
 
     log::debug!("virtio: using standard PCI transport");
 
     let device = Device {
         transport,
         device_space,
-        irq_handle,
+        msix: Mutex::new(msix),
     };
 
     device.transport.reset();

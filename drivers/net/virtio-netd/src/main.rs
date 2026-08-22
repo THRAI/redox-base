@@ -95,14 +95,8 @@ fn daemon(
     // > packets, and outgoing packets are enqueued into another
     // > for transmission in that order.
     //
-    // TODO(andypython): Should we use the same IRQ vector for both?
-    let rx_queue = device
-        .transport
-        .setup_queue(virtio_core::MSIX_PRIMARY_VECTOR, &device.irq_handle)?;
-
-    let tx_queue = device
-        .transport
-        .setup_queue(virtio_core::MSIX_PRIMARY_VECTOR, &device.irq_handle)?;
+    let rx_queue = device.setup_queue()?;
+    let tx_queue = device.setup_queue()?;
 
     device.transport.run_device();
 
