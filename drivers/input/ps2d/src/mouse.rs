@@ -258,6 +258,19 @@ impl MouseState {
                     log::debug!("BAT completed");
                     *self = MouseState::Bat;
                     MouseResult::Timeout(COMMAND_TIMEOUT)
+                } else if data == 0xFE {
+                    // The mouse may have stream mode originally enabled
+                    match ps2.mouse_command_async(MouseCommand::SetDefaultsDisable as u8) {
+                        Ok(_) => {
+                            log::debug!("mouse set defaults disable");
+                            // this is async... maybe sleep?
+                            let _ = syscall::sched_yield();
+                        }
+                        Err(e) => {
+                            log::warn!("mouse set defaults disable send error {:?}", e);
+                        }
+                    }
+                    self.reset(ps2)
                 } else {
                     log::warn!("unknown mouse response {:02X} after reset", data);
                     self.reset(ps2)
