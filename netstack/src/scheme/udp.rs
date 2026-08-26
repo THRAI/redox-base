@@ -149,7 +149,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
                     let addr = route_table
                         .lookup_src_addr(&remote_endpoint.addr.expect("Checked in is_specified"));
                     if matches!(addr, None) {
-                        error!("Opening a TCP connection with a probably invalid source IP as no route have been found for destination: {}", remote_endpoint);
+                        error!("Opening a UDP connection with a probably invalid source IP as no route have been found for destination: {}", remote_endpoint);
                     }
                     addr
                 }

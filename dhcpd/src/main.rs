@@ -289,6 +289,7 @@ fn dhcp(iface: &str, verbose: bool) -> Result<(), String> {
             subnet = !subnet;
             subnet.leading_zeros()
         } else {
+            println!("DHCP: No subnet mask");
             0
         };
 
@@ -321,6 +322,8 @@ fn dhcp(iface: &str, verbose: bool) -> Result<(), String> {
                 let new_router = try_fmt!(get_cfg_value("route/list"), "failed to get ip router");
                 println!("DHCP: New Router: {}", new_router.trim());
             }
+        } else {
+            println!("DHCP: No router");
         }
 
         if let Some(mut dns) = dns_option {
@@ -346,6 +349,8 @@ fn dhcp(iface: &str, verbose: bool) -> Result<(), String> {
                 let new_dns = try_fmt!(get_cfg_value("resolv/nameserver"), "failed to get dns");
                 println!("DHCP: New DNS: {}", new_dns.trim());
             }
+        } else {
+            println!("DHCP: No DNS resolver");
         }
     }
 
