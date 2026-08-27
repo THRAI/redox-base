@@ -9,21 +9,21 @@ use virtio_core::transport::Queue;
 
 use crate::{VirtHeader, MAX_BUFFER_LEN};
 
-pub struct VirtioNet<'a> {
+pub struct VirtioNet {
     mac_address: [u8; 6],
 
     /// Reciever Queue.
-    rx: Arc<Queue<'a>>,
+    rx: Arc<Queue>,
     rx_buffers: Vec<Dma<[u8]>>,
 
     /// Transmiter Queue.
-    tx: Arc<Queue<'a>>,
+    tx: Arc<Queue>,
 
     recv_head: u16,
 }
 
-impl<'a> VirtioNet<'a> {
-    pub fn new(mac_address: [u8; 6], rx: Arc<Queue<'a>>, tx: Arc<Queue<'a>>) -> Self {
+impl VirtioNet {
+    pub fn new(mac_address: [u8; 6], rx: Arc<Queue>, tx: Arc<Queue>) -> Self {
         // Populate all of the `rx_queue` with buffers to maximize performence.
         let mut rx_buffers = vec![];
         for i in 0..(rx.descriptor_len() as usize) {
@@ -37,7 +37,7 @@ impl<'a> VirtioNet<'a> {
                 .chain(Buffer::new_unsized(&rx_buffers[i]).flags(DescriptorFlags::WRITE_ONLY))
                 .build();
 
-            let _ = rx.send(chain);
+            rx.post(chain);
         }
 
         Self {
@@ -81,7 +81,7 @@ impl<'a> VirtioNet<'a> {
     }
 }
 
-impl<'a> NetworkAdapter for VirtioNet<'a> {
+impl NetworkAdapter for VirtioNet {
     fn mac_address(&mut self) -> [u8; 6] {
         self.mac_address
     }

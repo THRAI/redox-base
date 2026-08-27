@@ -49,16 +49,16 @@ impl KmsPlaneDriver for VirtGpuPlane {
     type State = ();
 }
 
-pub struct VirtGpuFramebuffer<'a> {
-    queue: Arc<Queue<'a>>,
+pub struct VirtGpuFramebuffer {
+    queue: Arc<Queue>,
     id: ResourceId,
     sgl: sgl::Sgl,
     width: u32,
     height: u32,
 }
 
-impl<'a> fmt::Debug for VirtGpuFramebuffer<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl fmt::Debug for VirtGpuFramebuffer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("VirtGpuFramebuffer")
             .field("id", &self.id)
             .field("sgl", &self.sgl)
@@ -68,13 +68,13 @@ impl<'a> fmt::Debug for VirtGpuFramebuffer<'a> {
     }
 }
 
-impl DrmBuffer for VirtGpuFramebuffer<'_> {
+impl DrmBuffer for VirtGpuFramebuffer {
     fn size(&self) -> usize {
         (self.width * self.height * 4) as usize
     }
 }
 
-impl Drop for VirtGpuFramebuffer<'_> {
+impl Drop for VirtGpuFramebuffer {
     fn drop(&mut self) {
         futures::executor::block_on(async {
             let request = Dma::new(ResourceUnref::new(self.id)).unwrap();
@@ -102,12 +102,12 @@ pub struct Display {
 pub struct VirtGpuAdapter<'a> {
     unique: String,
     pub config: &'a mut GpuConfig,
-    control_queue: Arc<Queue<'a>>,
-    cursor_queue: Arc<Queue<'a>>,
+    control_queue: Arc<Queue>,
+    cursor_queue: Arc<Queue>,
     transport: Arc<dyn Transport>,
     has_edid: bool,
     displays: Vec<Display>,
-    hidden_cursor: Option<Arc<VirtGpuFramebuffer<'a>>>,
+    hidden_cursor: Option<Arc<VirtGpuFramebuffer>>,
 }
 
 impl<'a> fmt::Debug for VirtGpuAdapter<'a> {
@@ -266,7 +266,7 @@ impl<'a> VirtGpuAdapter<'a> {
         &mut self,
         width: u32,
         height: u32,
-    ) -> Result<(VirtGpuFramebuffer<'a>, u32), Error> {
+    ) -> Result<(VirtGpuFramebuffer, u32), Error> {
         let bpp = 32;
         let fb_size = width as usize * height as usize * bpp / 8;
         let sgl = sgl::Sgl::new(fb_size)?;
@@ -296,7 +296,7 @@ impl<'a> VirtGpuAdapter<'a> {
 
     async fn update_cursor(
         &mut self,
-        cursor: &VirtGpuFramebuffer<'_>,
+        cursor: &VirtGpuFramebuffer,
         x: i32,
         y: i32,
         hot_x: i32,
@@ -355,7 +355,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
     type Crtc = ();
     type Plane = VirtGpuPlane;
 
-    type Buffer = VirtGpuFramebuffer<'a>;
+    type Buffer = VirtGpuFramebuffer;
     type Framebuffer = ();
 
     fn name(&self) -> &'static [u8] {
@@ -575,8 +575,8 @@ impl<'a> GpuScheme {
     pub fn new(
         unique: String,
         config: &'a mut GpuConfig,
-        control_queue: Arc<Queue<'a>>,
-        cursor_queue: Arc<Queue<'a>>,
+        control_queue: Arc<Queue>,
+        cursor_queue: Arc<Queue>,
         transport: Arc<dyn Transport>,
         has_edid: bool,
     ) -> Result<GraphicsScheme<VirtGpuAdapter<'a>>, Error> {

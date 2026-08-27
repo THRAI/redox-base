@@ -127,9 +127,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
     let device = virtio_core::probe_device(&mut pcid_handle)?;
     device.transport.finalize_features();
 
-    let queue = device
-        .transport
-        .setup_queue(virtio_core::MSIX_PRIMARY_VECTOR, &device.irq_handle)?;
+    let queue = device.setup_queue()?;
 
     let device_space = BlockDeviceConfig::new(&device.transport);
 

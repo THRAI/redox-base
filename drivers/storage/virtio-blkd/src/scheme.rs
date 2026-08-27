@@ -13,7 +13,7 @@ trait BlkExtension {
     async fn write(&self, block: u64, target: &[u8]) -> usize;
 }
 
-impl BlkExtension for Queue<'_> {
+impl BlkExtension for Queue {
     async fn read(&self, block: u64, target: &mut [u8]) -> usize {
         let req = Dma::new(BlockVirtRequest {
             ty: BlockRequestTy::In,
@@ -73,18 +73,18 @@ impl BlkExtension for Queue<'_> {
     }
 }
 
-pub(crate) struct VirtioDisk<'a> {
-    queue: Arc<Queue<'a>>,
+pub(crate) struct VirtioDisk {
+    queue: Arc<Queue>,
     cfg: BlockDeviceConfig,
 }
 
-impl<'a> VirtioDisk<'a> {
-    pub(crate) fn new(queue: Arc<Queue<'a>>, cfg: BlockDeviceConfig) -> Self {
+impl VirtioDisk {
+    pub(crate) fn new(queue: Arc<Queue>, cfg: BlockDeviceConfig) -> Self {
         Self { queue, cfg }
     }
 }
 
-impl driver_block::Disk for VirtioDisk<'_> {
+impl driver_block::Disk for VirtioDisk {
     fn block_size(&self) -> u32 {
         self.cfg.block_size()
     }

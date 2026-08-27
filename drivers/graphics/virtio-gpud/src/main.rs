@@ -28,7 +28,6 @@ use event::{user_data, EventQueue};
 use pcid_interface::PciFunctionHandle;
 
 use virtio_core::utils::VolatileCell;
-use virtio_core::MSIX_PRIMARY_VECTOR;
 
 mod scheme;
 
@@ -514,16 +513,13 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
     device.transport.finalize_features();
 
     // Queue for sending control commands.
-    let control_queue = device
-        .transport
-        .setup_queue(MSIX_PRIMARY_VECTOR, &device.irq_handle)?;
+    let control_queue = device.setup_queue()?;
 
     // Queue for sending cursor updates.
-    let cursor_queue = device
-        .transport
-        .setup_queue(MSIX_PRIMARY_VECTOR, &device.irq_handle)?;
+    let cursor_queue = device.setup_queue()?;
 
-    device.transport.setup_config_notify(MSIX_PRIMARY_VECTOR);
+    let config_irq = device.alloc_irq();
+    device.transport.setup_config_notify(&config_irq);
 
     device.transport.run_device();
 
@@ -559,7 +555,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
         .unwrap();
     event_queue
         .subscribe(
-            device.irq_handle.as_raw_fd() as usize,
+            config_irq.irq_handle().as_raw_fd() as usize,
             Source::Interrupt,
             event::EventFlags::READ,
         )

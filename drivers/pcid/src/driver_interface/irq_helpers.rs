@@ -8,7 +8,14 @@ use std::fs::{self, File};
 use std::io::{self, prelude::*};
 use std::num::NonZeroU8;
 
-use crate::driver_interface::msi::{MsiAddrAndData, MsixTableEntry};
+use crate::msi::{MsiAddrAndData, MsixTableEntry};
+use crate::PciFunctionHandle;
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use crate::{
+    msi::{x86 as x86_msix, MappedMsixRegs},
+    MsiSetFeatureInfo, PciFeature, PciFeatureInfo, SetFeatureInfo,
+};
 
 /// Read the local APIC ID of the bootstrap processor.
 pub fn read_bsp_apic_id() -> io::Result<usize> {
@@ -181,8 +188,6 @@ pub fn allocate_single_interrupt_vector(cpu_id: usize) -> io::Result<Option<(u8,
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn allocate_single_interrupt_vector_for_msi(cpu_id: usize) -> (MsiAddrAndData, File) {
-    use crate::driver_interface::msi::x86 as x86_msix;
-
     // FIXME for cpu_id >255 we need to use the IOMMU to use IRQ remapping
     let lapic_id = u8::try_from(cpu_id).expect("CPU id couldn't fit inside u8");
     let rh = false;
@@ -204,11 +209,7 @@ pub fn allocate_single_interrupt_vector_for_msi(cpu_id: usize) -> (MsiAddrAndDat
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub fn allocate_first_msi_interrupt_on_bsp(
-    pcid_handle: &mut crate::driver_interface::PciFunctionHandle,
-) -> File {
-    use crate::driver_interface::{MsiSetFeatureInfo, PciFeature, SetFeatureInfo};
-
+pub fn allocate_first_msi_interrupt_on_bsp(pcid_handle: &mut PciFunctionHandle) -> File {
     // TODO: Allow allocation of up to 32 vectors.
 
     let destination_id = read_bsp_apic_id().expect("failed to read BSP apic id");
@@ -232,6 +233,95 @@ pub struct InterruptVector {
     irq_handle: File,
     vector: u16,
     kind: InterruptVectorKind,
+}
+
+/// Sequential MSI-X table allocator. The first `alloc` takes table entry 0,
+/// later calls take 1, 2, etc. until the table is exhausted, then they share
+/// entry 0. Drivers hold one `Msix` for the PCI function and call `alloc`
+/// once per virtqueue (or config vector).
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub struct Msix {
+    mapped: MappedMsixRegs,
+    next: u16,
+    bsp: usize,
+    handles: Vec<File>,
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+impl Msix {
+    pub fn enable(pcid_handle: &mut PciFunctionHandle, driver: &str) -> Self {
+        let msix_info = match pcid_handle.feature_info(PciFeature::MsiX) {
+            PciFeatureInfo::MsiX(msix) => msix,
+            _ => unreachable!("{driver}: MSI-X advertised but capability missing"),
+        };
+        let mapped = unsafe { msix_info.map_and_mask_all(pcid_handle) };
+        assert!(mapped.info.table_size > 0, "{driver}: MSI-X table is empty");
+        pcid_handle.enable_feature(PciFeature::MsiX);
+
+        let bsp = read_bsp_apic_id()
+            .unwrap_or_else(|err| panic!("{driver}: failed to read BSP APIC ID: {err}"));
+
+        log::debug!(
+            "{driver}: MSI-X enabled (table_size={})",
+            mapped.info.table_size
+        );
+
+        Self {
+            mapped,
+            next: 0,
+            bsp,
+            handles: Vec::new(),
+        }
+    }
+
+    pub fn alloc(&mut self) -> InterruptVector {
+        if self.next < self.mapped.info.table_size {
+            let index = self.next;
+            self.next += 1;
+
+            let (msg_addr_and_data, irq_handle) =
+                allocate_single_interrupt_vector_for_msi(self.bsp);
+            let entry = self.mapped.table_entry_pointer(index as usize);
+            entry.write_addr_and_data(msg_addr_and_data);
+            entry.unmask();
+
+            self.handles.push(
+                irq_handle
+                    .try_clone()
+                    .expect("failed to clone MSI-X IRQ handle"),
+            );
+
+            InterruptVector {
+                irq_handle,
+                vector: index,
+                kind: InterruptVectorKind::MsiX { table_entry: entry },
+            }
+        } else {
+            let irq_handle = self.handles[0]
+                .try_clone()
+                .expect("failed to clone MSI-X IRQ handle");
+            let entry = self.mapped.table_entry_pointer(0);
+            InterruptVector {
+                irq_handle,
+                vector: 0,
+                kind: InterruptVectorKind::MsiX { table_entry: entry },
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+pub struct Msix;
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+impl Msix {
+    pub fn enable(_pcid_handle: &mut PciFunctionHandle, driver: &str) -> Self {
+        unimplemented!("{driver}: MSI-X is not implemented on this architecture")
+    }
+
+    pub fn alloc(&mut self) -> InterruptVector {
+        unimplemented!("MSI-X is not implemented on this architecture")
+    }
 }
 
 enum InterruptVectorKind {
@@ -261,13 +351,13 @@ impl InterruptVector {
 }
 
 /// Get the most optimal supported interrupt mechanism: either (in the order of preference):
-/// MSI-X, MSI, and INTx# pin. Returns both runtime interrupt structures (MSI/MSI-X capability
-/// structures), and the handles to the interrupts.
-// FIXME allow allocating multiple interrupt vectors
+/// MSI-X, MSI, and INTx# pin.
+///
+/// For more than one MSI-X vector, use [`Msix::enable`] and call [`Msix::alloc`] per vector.
 // FIXME move MSI-X IRQ allocation to pcid
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn pci_allocate_interrupt_vector(
-    pcid_handle: &mut crate::driver_interface::PciFunctionHandle,
+    pcid_handle: &mut PciFunctionHandle,
     driver: &str,
 ) -> InterruptVector {
     let features = pcid_handle.fetch_all_features();
@@ -276,27 +366,7 @@ pub fn pci_allocate_interrupt_vector(
     let has_msix = features.iter().any(|feature| feature.is_msix());
 
     if has_msix {
-        let msix_info = match pcid_handle.feature_info(super::PciFeature::MsiX) {
-            super::PciFeatureInfo::MsiX(msix) => msix,
-            _ => unreachable!(),
-        };
-        let mut info = unsafe { msix_info.map_and_mask_all(pcid_handle) };
-
-        pcid_handle.enable_feature(crate::driver_interface::PciFeature::MsiX);
-
-        let entry = info.table_entry_pointer(0);
-
-        let bsp_cpu_id = read_bsp_apic_id()
-            .unwrap_or_else(|err| panic!("{driver}: failed to read BSP APIC ID: {err}"));
-        let (msg_addr_and_data, irq_handle) = allocate_single_interrupt_vector_for_msi(bsp_cpu_id);
-        entry.write_addr_and_data(msg_addr_and_data);
-        entry.unmask();
-
-        InterruptVector {
-            irq_handle,
-            vector: 0,
-            kind: InterruptVectorKind::MsiX { table_entry: entry },
-        }
+        Msix::enable(pcid_handle, driver).alloc()
     } else if has_msi {
         InterruptVector {
             irq_handle: allocate_first_msi_interrupt_on_bsp(pcid_handle),
@@ -318,7 +388,7 @@ pub fn pci_allocate_interrupt_vector(
 // FIXME support MSI on non-x86 systems
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 pub fn pci_allocate_interrupt_vector(
-    pcid_handle: &mut crate::driver_interface::PciFunctionHandle,
+    pcid_handle: &mut PciFunctionHandle,
     driver: &str,
 ) -> InterruptVector {
     if let Some(irq) = pcid_handle.config().func.legacy_interrupt_line {

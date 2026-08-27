@@ -7,11 +7,14 @@ use event::RawEventQueue;
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU16, Ordering};
 
-use std::fs::File;
+use std::collections::HashMap;
 use std::future::Future;
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Poll, Waker};
+
+use pcid_interface::irq_helpers::InterruptVector;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -54,105 +57,139 @@ pub const fn queue_part_sizes(queue_size: usize) -> (usize, usize, usize) {
     )
 }
 
-pub fn spawn_irq_thread(irq_handle: &File, queue: &Arc<Queue<'static>>) {
-    let irq_fd = irq_handle.as_raw_fd();
-    let queue_copy = queue.clone();
-
-    std::thread::spawn(move || {
-        let event_queue = RawEventQueue::new().unwrap();
-
-        event_queue
-            .subscribe(irq_fd as usize, 0, event::EventFlags::READ)
-            .unwrap();
-
-        for _ in event_queue.map(Result::unwrap) {
-            // Wake up the tasks waiting on the queue.
-            for (_, task) in queue_copy.waker.lock().unwrap().iter() {
-                task.wake_by_ref();
-            }
-        }
-    });
+/// Queues that share one MSI-X table entry. One thread watches that vector
+/// and drains every queue in the group.
+struct IrqGroup {
+    queues: Mutex<Vec<Arc<Queue>>>,
 }
 
 pub trait NotifyBell {
     fn ring(&self, queue_index: u16);
 }
 
-pub struct PendingRequest<'a> {
-    queue: Arc<Queue<'a>>,
-    first_descriptor: u32,
+struct Completion {
+    waker: Option<Waker>,
+    written: Option<u32>,
 }
 
-impl<'a> Future for PendingRequest<'a> {
-    type Output = u32;
+enum PendingState {
+    PendingSubmit(Vec<Buffer>),
+    Submitted(u32),
+}
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        // XXX: Register the waker before checking the queue to avoid the race condition
-        //      where you lose a notification.
-        self.queue
-            .waker
-            .lock()
-            .unwrap()
-            .insert(self.first_descriptor, cx.waker().clone());
+pub struct PendingRequest {
+    queue: Arc<Queue>,
+    state: PendingState,
+}
 
-        let used_head = self.queue.used.head_index();
-
-        if used_head == self.queue.used_head.load(Ordering::SeqCst) {
-            // No new requests have been completed.
-            return Poll::Pending;
-        }
-
-        let used_element = self.queue.used.get_element_at((used_head - 1) as usize);
-        let written = used_element.written.get();
-
-        let mut table_index = used_element.table_index.get();
-
-        if table_index == self.first_descriptor {
-            // The request has been completed; recycle the descriptors used.
-            while self.queue.descriptor[table_index as usize]
-                .flags()
-                .contains(DescriptorFlags::NEXT)
-            {
-                let next_index = self.queue.descriptor[table_index as usize].next();
-                self.queue.descriptor_stack.push(table_index as u16);
-                table_index = next_index.into();
-            }
-
-            // Push the last descriptor.
-            self.queue.descriptor_stack.push(table_index as u16);
-            self.queue
-                .waker
-                .lock()
-                .unwrap()
-                .remove(&self.first_descriptor);
-
-            self.queue.used_head.store(used_head, Ordering::SeqCst);
-            return Poll::Ready(written);
-        } else {
-            return Poll::Pending;
+impl PendingRequest {
+    fn try_submit_waiting(&self) -> Option<u32> {
+        match &self.state {
+            PendingState::PendingSubmit(chain) => self.queue.try_submit(chain, true),
+            PendingState::Submitted(_) => None,
         }
     }
 }
 
-pub struct Queue<'a> {
+impl Future for PendingRequest {
+    type Output = u32;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        let first_descriptor = match this.state {
+            PendingState::Submitted(first) => first,
+            PendingState::PendingSubmit(_) => {
+                this.queue.drain_used_ring();
+                if let Some(first) = this.try_submit_waiting() {
+                    this.state = PendingState::Submitted(first);
+                    first
+                } else {
+                    this.queue
+                        .submit_waiters
+                        .lock()
+                        .unwrap()
+                        .push(cx.waker().clone());
+                    this.queue.drain_used_ring();
+                    if let Some(first) = this.try_submit_waiting() {
+                        this.state = PendingState::Submitted(first);
+                        first
+                    } else {
+                        return Poll::Pending;
+                    }
+                }
+            }
+        };
+
+        this.queue.drain_used_ring();
+
+        // Race-safety note:
+        // - IRQ fires before `poll` acquires the completions lock:
+        //    `poll` blocks until the IRQ thread completes and releases the lock.
+        //    Once acquired, `poll` observes the updated state and returns `Poll::Ready` (no waker needed).
+        // - IRQ fires after `poll` acquires the lock:
+        //    `poll` observes the incomplete state, registers the waker, releases the lock,
+        //    and returns `Poll::Pending`. The IRQ thread then acquires the lock and invokes the waker.
+        //
+        // This guarantees that lost completions/wakeups cannot occur.
+        let mut completions = this.queue.completions.lock().unwrap();
+        let slot = completions
+            .get_mut(&first_descriptor)
+            .expect("virtio-core: missing completion slot");
+
+        if let Some(written) = slot.written {
+            completions.remove(&first_descriptor);
+            return Poll::Ready(written);
+        }
+
+        slot.waker = Some(cx.waker().clone());
+        Poll::Pending
+    }
+}
+
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        let PendingState::Submitted(first_descriptor) = &self.state else {
+            return;
+        };
+        let first_descriptor = *first_descriptor;
+        // clears the waker only, while the completion slot stays so drain
+        // can still recycle the chain
+        if let Some(slot) = self
+            .queue
+            .completions
+            .lock()
+            .unwrap()
+            .get_mut(&first_descriptor)
+        {
+            slot.waker = None;
+        }
+    }
+}
+
+pub struct Queue {
     pub queue_index: u16,
-    pub waker: Mutex<std::collections::HashMap<u32, Waker>>,
-    pub used: Used<'a>,
+    pub used: Used,
     pub descriptor: Dma<[Descriptor]>,
-    pub available: Available<'a>,
-    pub used_head: AtomicU16,
+    pub available: Available,
     vector: u16,
+
+    consumed_index: AtomicU16,
+    completions: Mutex<HashMap<u32, Completion>>,
+    drain_lock: Mutex<()>,
+    submit_lock: Mutex<()>,
+    submit_waiters: Mutex<Vec<Waker>>,
 
     notification_bell: Box<dyn NotifyBell>,
     descriptor_stack: crossbeam_queue::SegQueue<u16>,
     sref: Weak<Self>,
 }
 
-impl<'a> Queue<'a> {
+impl Queue {
     pub fn new<N>(
         descriptor: Dma<[Descriptor]>,
-        available: Available<'a>,
-        used: Used<'a>,
+        available: Available,
+        used: Used,
 
         notification_bell: N,
         queue_index: u16,
@@ -169,17 +206,22 @@ impl<'a> Queue<'a> {
             available,
             descriptor,
             used,
-            waker: Mutex::new(std::collections::HashMap::new()),
             queue_index,
             descriptor_stack,
-            used_head: AtomicU16::new(0),
+            consumed_index: AtomicU16::new(0),
+            completions: Mutex::new(HashMap::new()),
+            drain_lock: Mutex::new(()),
+            submit_lock: Mutex::new(()),
+            submit_waiters: Mutex::new(Vec::new()),
             sref: sref.clone(),
             vector,
         })
     }
 
     fn reinit(&self) {
-        self.used_head.store(0, Ordering::SeqCst);
+        self.consumed_index.store(0, Ordering::SeqCst);
+        self.completions.lock().unwrap().clear();
+        self.submit_waiters.lock().unwrap().clear();
         self.available.set_head_idx(0);
 
         // Drain all of the available descriptors.
@@ -189,46 +231,155 @@ impl<'a> Queue<'a> {
         (0..self.descriptor.len() as u16).for_each(|i| self.descriptor_stack.push(i));
     }
 
-    #[must_use = "The function returns a future that must be awaited to ensure the sent request is completed."]
-    pub fn send(&self, chain: Vec<Buffer>) -> PendingRequest<'a> {
-        let mut first_descriptor: Option<usize> = None;
-        let mut last_descriptor: Option<usize> = None;
-
-        for buffer in chain.iter() {
-            let descriptor = self.descriptor_stack.pop().unwrap() as usize;
-
-            if first_descriptor.is_none() {
-                first_descriptor = Some(descriptor);
+    fn recycle_chain(&self, mut table_index: u32) {
+        loop {
+            let idx = table_index as usize;
+            if idx >= self.descriptor.len() {
+                log::error!("virtio-core: used ring table_index {table_index} out of range");
+                return;
             }
 
-            self.descriptor[descriptor].set_addr(buffer.buffer as u64);
-            self.descriptor[descriptor].set_flags(buffer.flags);
-            self.descriptor[descriptor].set_size(buffer.size as u32);
+            let has_next = self.descriptor[idx].flags().contains(DescriptorFlags::NEXT);
+            let next = self.descriptor[idx].next();
+            self.descriptor_stack.push(table_index as u16);
+            if !has_next {
+                break;
+            }
+            table_index = u32::from(next);
+        }
+    }
 
-            if let Some(index) = last_descriptor {
-                self.descriptor[index].set_next(Some(descriptor as u16));
+    fn check_chain(&self, chain: &[Buffer]) {
+        if chain.is_empty() {
+            panic!("virtio-core: submitted chain is empty");
+        }
+        if chain.len() > self.descriptor_len() {
+            panic!("virtio-core: submitted chain is longer than the virtqueue");
+        }
+    }
+
+    fn try_submit(&self, chain: &[Buffer], track_completion: bool) -> Option<u32> {
+        let first_descriptor = {
+            let _guard = self.submit_lock.lock().unwrap();
+
+            let mut allocated = Vec::with_capacity(chain.len());
+            for buffer in chain {
+                let Some(descriptor) = self.descriptor_stack.pop() else {
+                    for desc in allocated {
+                        self.descriptor_stack.push(desc);
+                    }
+                    return None;
+                };
+                allocated.push(descriptor);
+
+                let idx = descriptor as usize;
+                self.descriptor[idx].set_addr(buffer.buffer as u64);
+                self.descriptor[idx].set_flags(buffer.flags);
+                self.descriptor[idx].set_size(buffer.size as u32);
             }
 
-            last_descriptor = Some(descriptor);
+            for pair in allocated.windows(2) {
+                self.descriptor[pair[0] as usize].set_next(Some(pair[1]));
+            }
+            let first_descriptor = u32::from(allocated[0]);
+            let last_descriptor = allocated[allocated.len() - 1];
+            self.descriptor[last_descriptor as usize].set_next(None);
+
+            if track_completion {
+                self.completions.lock().unwrap().insert(
+                    first_descriptor,
+                    Completion {
+                        waker: None,
+                        written: None,
+                    },
+                );
+            }
+
+            let avail_idx = self.available.head_index();
+            self.available
+                .get_element_at(avail_idx as usize)
+                .set_table_index(allocated[0]);
+            self.available.set_head_idx(avail_idx.wrapping_add(1));
+            self.notification_bell.ring(self.queue_index);
+            first_descriptor
+        };
+
+        self.drain_used_ring();
+        Some(first_descriptor)
+    }
+
+    /// Harvest every newly-used descriptor chain. Individual futures must not
+    /// advance the used-ring bookmark which can race and drop completions.
+    pub fn drain_used_ring(&self) {
+        let guard = self.drain_lock.lock().unwrap();
+        let mut to_wake = Vec::new();
+        let mut recycled = false;
+
+        loop {
+            let consumed = self.consumed_index.load(Ordering::SeqCst);
+            let device_head = self.used.head_index();
+            if consumed == device_head {
+                break;
+            }
+
+            let element = self.used.get_element_at(consumed as usize);
+            let table_index = element.table_index.get();
+            let written = element.written.get();
+
+            {
+                let mut completions = self.completions.lock().unwrap();
+                if let Some(slot) = completions.get_mut(&table_index) {
+                    self.recycle_chain(table_index);
+                    recycled = true;
+                    slot.written = Some(written);
+                    if let Some(waker) = slot.waker.take() {
+                        to_wake.push(waker);
+                    }
+                }
+            }
+
+            self.consumed_index
+                .store(consumed.wrapping_add(1), Ordering::SeqCst);
         }
 
-        let last_descriptor = last_descriptor.unwrap();
-        let first_descriptor = first_descriptor.unwrap();
+        drop(guard);
+        for waker in to_wake {
+            waker.wake();
+        }
+        if recycled {
+            let waiters: Vec<Waker> = self.submit_waiters.lock().unwrap().drain(..).collect();
+            for waker in waiters {
+                waker.wake();
+            }
+        }
+    }
 
-        self.descriptor[last_descriptor].set_next(None);
+    /// Submit a chain without tracking completion. Used when the caller reads
+    /// the used ring itself (virtio-net RX) and does not recycle via `send()`.
+    ///
+    /// ## Panics
+    /// Empty chain, chain longer than the virtqueue, or no free descriptors.
+    /// The RX path is expected to post at most [`Self::descriptor_len`] buffers.
+    pub fn post(&self, chain: Vec<Buffer>) -> u32 {
+        self.check_chain(&chain);
+        self.try_submit(&chain, false)
+            .expect("virtio-core: virtqueue is out of descriptors")
+    }
 
-        let index = self.available.head_index() as usize;
-
-        self.available
-            .get_element_at(index)
-            .set_table_index(first_descriptor as u16);
-
-        self.available.set_head_idx(index as u16 + 1);
-        self.notification_bell.ring(self.queue_index);
-
+    /// Submit a chain and wait until the device has used it.
+    ///
+    /// The chain is placed on the ring on first poll. If the virtqueue is
+    /// temporarily out of descriptors, the future stays pending until drain
+    /// recycles enough, then submits.
+    ///
+    /// ## Panics
+    /// Empty chain, or chain longer than the virtqueue.
+    #[must_use = "The function returns a future that must be awaited to ensure the sent request is completed."]
+    pub fn send(&self, chain: Vec<Buffer>) -> PendingRequest {
+        self.check_chain(&chain);
         PendingRequest {
             queue: self.sref.upgrade().unwrap(),
-            first_descriptor: first_descriptor as u32,
+            state: PendingState::PendingSubmit(chain),
         }
     }
 
@@ -238,70 +389,20 @@ impl<'a> Queue<'a> {
     }
 }
 
-unsafe impl Sync for Queue<'_> {}
-unsafe impl Send for Queue<'_> {}
+unsafe impl Sync for Queue {}
+unsafe impl Send for Queue {}
 
-pub struct Available<'a> {
-    mem: Mem<'a>,
+pub struct Available {
+    mem: Dma<[u8]>,
     queue_size: usize,
 }
-pub struct Borrowed<'a> {
-    phys: usize,
-    virt: usize,
-    size: usize,
-    _unused: &'a (),
-}
-pub enum Mem<'a> {
-    Owned(Dma<[u8]>),
-    Borrowed(Borrowed<'a>),
-}
-impl Borrowed<'_> {
-    pub unsafe fn new(phys: usize, virt: usize, size: usize) -> Self {
-        Self {
-            phys,
-            virt,
-            size,
-            _unused: &(),
-        }
-    }
-}
-impl<'a> Mem<'a> {
-    pub fn as_ptr<T>(&self) -> *const T {
-        match *self {
-            Self::Owned(ref dma) => dma.as_ptr().cast(),
-            Self::Borrowed(Borrowed {
-                phys: _,
-                virt,
-                size: _,
-                _unused,
-            }) => virt as *const T,
-        }
-    }
-    pub fn as_mut_ptr<T>(&mut self) -> *mut T {
-        match *self {
-            Self::Owned(ref mut dma) => dma.as_mut_ptr().cast(),
-            Self::Borrowed(Borrowed {
-                phys: _,
-                virt,
-                size: _,
-                _unused,
-            }) => virt as *mut T,
-        }
-    }
-    pub fn physical(&self) -> usize {
-        match self {
-            Self::Owned(dma) => dma.physical(),
-            Self::Borrowed(borrowed) => borrowed.phys,
-        }
-    }
-}
 
-impl<'a> Available<'a> {
+impl<'a> Available {
     pub fn ring(&self) -> &AvailableRing {
-        unsafe { &*self.mem.as_ptr() }
+        unsafe { &*self.mem.as_ptr().cast() }
     }
     pub fn ring_mut(&mut self) -> &mut AvailableRing {
-        unsafe { &mut *self.mem.as_mut_ptr() }
+        unsafe { &mut *self.mem.as_mut_ptr().cast() }
     }
     pub fn new(queue_size: usize) -> Result<Self, Error> {
         let (_, _, size) = queue_part_sizes(queue_size);
@@ -311,11 +412,11 @@ impl<'a> Available<'a> {
                 .assume_init()
         };
 
-        unsafe { Self::from_raw(Mem::Owned(mem), queue_size) }
+        unsafe { Self::from_raw(mem, queue_size) }
     }
 
     /// `addr` is the physical address of the ring.
-    pub unsafe fn from_raw(mem: Mem<'a>, queue_size: usize) -> Result<Self, Error> {
+    pub unsafe fn from_raw(mem: Dma<[u8]>, queue_size: usize) -> Result<Self, Error> {
         let ring = Self { mem, queue_size };
 
         for i in 0..queue_size {
@@ -356,7 +457,7 @@ impl<'a> Available<'a> {
     }
 }
 
-impl<'a> Drop for Available<'a> {
+impl<'a> Drop for Available {
     fn drop(&mut self) {
         log::warn!(
             "virtio-core: dropping 'available' ring at {:#x}",
@@ -365,18 +466,17 @@ impl<'a> Drop for Available<'a> {
     }
 }
 
-pub struct Used<'a> {
-    mem: Mem<'a>,
+pub struct Used {
+    mem: Dma<[u8]>,
     queue_size: usize,
-    _unused: &'a (),
 }
 
-impl<'a> Used<'a> {
+impl Used {
     fn ring(&self) -> &UsedRing {
-        unsafe { &*self.mem.as_ptr() }
+        unsafe { &*self.mem.as_ptr().cast() }
     }
     fn ring_mut(&mut self) -> &mut UsedRing {
-        unsafe { &mut *self.mem.as_mut_ptr() }
+        unsafe { &mut *self.mem.as_mut_ptr().cast() }
     }
 
     pub fn new(queue_size: usize) -> Result<Self, Error> {
@@ -387,16 +487,12 @@ impl<'a> Used<'a> {
                 .assume_init()
         };
 
-        unsafe { Self::from_raw(Mem::Owned(mem), queue_size) }
+        unsafe { Self::from_raw(mem, queue_size) }
     }
 
     /// `addr` is the physical address of the ring.
-    pub unsafe fn from_raw(mem: Mem<'a>, queue_size: usize) -> Result<Self, Error> {
-        let mut ring = Self {
-            mem,
-            queue_size,
-            _unused: &(),
-        };
+    pub unsafe fn from_raw(mem: Dma<[u8]>, queue_size: usize) -> Result<Self, Error> {
+        let mut ring = Self { mem, queue_size };
 
         for i in 0..queue_size {
             // Setting them to `u32::MAX` helps with debugging since qemu reports them
@@ -431,7 +527,7 @@ impl<'a> Used<'a> {
             self.ring_mut()
                 .elements
                 .as_mut_slice(queue_size)
-                .get_mut(index % 256)
+                .get_mut(index % queue_size)
                 .expect("virtio-core::used: index out of bounds")
         }
     }
@@ -449,7 +545,7 @@ impl<'a> Used<'a> {
     }
 }
 
-impl Drop for Used<'_> {
+impl Drop for Used {
     fn drop(&mut self) {
         log::warn!(
             "virtio-core: dropping 'used' ring at {:#x}",
@@ -462,7 +558,7 @@ pub trait Transport: Sync + Send {
     /// `size` specifies the size of the read in bytes.
     ///
     /// ## Panics
-    /// This function panics if the provided `size` is more then `size_of::<u64>()`.
+    /// This function panics if the provided `size` is more than `size_of::<u64>()`.
     fn load_config(&self, offset: u8, size: u8) -> u64;
 
     /// Resets the device.
@@ -481,28 +577,26 @@ pub trait Transport: Sync + Send {
     /// device status flags.
     fn finalize_features(&self);
 
-    /// Runs the device.
-    ///
-    /// At this point, all of the queues must be created and the features must be
-    /// finalized.
-    ///
-    /// ## Panics
-    /// This function panics if the device is already running.
+    /// Sets `DRIVER_OK`. Queues must already exist and features must be finalized.
     fn run_device(&self) {
         self.insert_status(DeviceStatusFlags::DRIVER_OK);
     }
 
-    /// Request to be notified on configuration changes on the given MSI-X vector.
-    fn setup_config_notify(&self, vector: u16);
+    /// Ask the device to fire `vector` on configuration changes.
+    ///
+    /// Writes `config_msix_vector` only; no IRQ thread. Take `vector` from
+    /// [`crate::Device::alloc_irq`] and wait on that file yourself.
+    fn setup_config_notify(&self, irq_vec: &InterruptVector);
 
     /// Each time the device configuration changes this number will be updated.
     fn config_generation(&self) -> u32;
 
-    /// Creates a new queue.
+    /// Creates a virtqueue on `irq`'s vector and watches that vector.
     ///
-    /// ## Panics
-    /// This function panics if the device is running.
-    fn setup_queue(&self, vector: u16, irq_handle: &File) -> Result<Arc<Queue<'_>>, Error>;
+    /// Prefer [`crate::Device::setup_queue`], which allocates `irq` from this
+    /// device's [`pcid_interface::irq_helpers::Msix`] table. `InterruptVector`
+    /// is what keeps the table index and IRQ file paired.
+    fn setup_queue(&self, irq: InterruptVector) -> Result<Arc<Queue>, Error>;
 
     // TODO(andypython): Should this function be unsafe?
     fn reinit_queue(&self, queue: Arc<Queue>);
@@ -525,6 +619,7 @@ pub struct StandardTransport<'a> {
     device_space: *const u8,
 
     queue_index: AtomicU16,
+    irq_groups: Mutex<HashMap<u16, Arc<IrqGroup>>>,
 }
 
 impl<'a> StandardTransport<'a> {
@@ -540,8 +635,59 @@ impl<'a> StandardTransport<'a> {
             notify_mul,
 
             queue_index: AtomicU16::new(0),
+            irq_groups: Mutex::new(HashMap::new()),
             device_space,
         })
+    }
+
+    fn attach_irq(&self, irq: InterruptVector, queue: Arc<Queue>) {
+        let group = {
+            let vector = queue.vector;
+            let mut groups = self.irq_groups.lock().unwrap();
+
+            if let Some(group) = groups.get(&vector) {
+                group.queues.lock().unwrap().push(queue);
+                return;
+            }
+
+            let group = Arc::new(IrqGroup {
+                queues: Mutex::new(vec![queue]),
+            });
+            groups.insert(vector, group.clone());
+
+            group
+        };
+
+        // `Device::setup_queue` drops `InterruptVector` on return, the thread
+        // still needs this fd to subscribe and ACK
+        let mut irq_file = irq
+            .irq_handle()
+            .try_clone()
+            .expect("virtio-core: failed to clone IRQ handle");
+
+        let event_queue = RawEventQueue::new().unwrap();
+        event_queue
+            .subscribe(irq_file.as_raw_fd() as usize, 0, event::EventFlags::READ)
+            .unwrap();
+
+        std::thread::spawn(move || {
+            for _ in event_queue.map(Result::unwrap) {
+                let queues = group.queues.lock().unwrap().clone();
+                for queue in &queues {
+                    queue.drain_used_ring();
+                }
+
+                let mut buf = [0u8; size_of::<usize>()];
+                if irq_file.read(&mut buf).unwrap_or(0) == size_of::<usize>() {
+                    let _ = irq_file.write(&buf);
+                }
+
+                // ACK can unmask completions that arrived during the read.
+                for queue in &queues {
+                    queue.drain_used_ring();
+                }
+            }
+        });
     }
 }
 
@@ -607,15 +753,19 @@ impl Transport for StandardTransport<'_> {
         assert!((confirm & DeviceStatusFlags::FEATURES_OK) == DeviceStatusFlags::FEATURES_OK);
     }
 
-    fn setup_config_notify(&self, vector: u16) {
-        self.common.lock().unwrap().config_msix_vector.set(vector);
+    fn setup_config_notify(&self, irq_vec: &InterruptVector) {
+        self.common
+            .lock()
+            .unwrap()
+            .config_msix_vector
+            .set(irq_vec.vector());
     }
 
     fn config_generation(&self) -> u32 {
         u32::from(self.common.lock().unwrap().config_generation.get())
     }
 
-    fn setup_queue(&self, vector: u16, irq_handle: &File) -> Result<Arc<Queue<'_>>, Error> {
+    fn setup_queue(&self, irq: InterruptVector) -> Result<Arc<Queue>, Error> {
         let mut common = self.common.lock().unwrap();
 
         let queue_index = self.queue_index.fetch_add(1, Ordering::SeqCst);
@@ -639,6 +789,7 @@ impl Transport for StandardTransport<'_> {
         common.queue_device.set(used.phys_addr() as u64);
 
         // Set the MSI-X vector.
+        let vector = irq.vector();
         common.queue_msix_vector.set(vector);
         assert!(common.queue_msix_vector.get() == vector);
 
@@ -650,7 +801,9 @@ impl Transport for StandardTransport<'_> {
             &mut *(self.notify.add(offset as usize) as *mut AtomicU16)
         };
 
-        log::debug!("virtio-core: enabled queue #{queue_index} (size={queue_size})");
+        log::debug!(
+            "virtio-core: enabled queue #{queue_index} (size={queue_size} vector={vector})"
+        );
 
         let queue = Queue::new(
             descriptor,
@@ -661,7 +814,8 @@ impl Transport for StandardTransport<'_> {
             vector,
         );
 
-        spawn_irq_thread(irq_handle, &queue);
+        drop(common);
+        self.attach_irq(irq, queue.clone());
         Ok(queue)
     }
 
