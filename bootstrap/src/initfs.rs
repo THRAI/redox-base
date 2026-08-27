@@ -500,6 +500,6 @@ pub unsafe extern "C" fn redox_sys_call_v0(
         (true, true) => redox_rt::sys::sys_call_rw(fd, payload, flags, metadata),
         (true, false) => redox_rt::sys::sys_call_ro(fd, payload, flags, metadata),
         (false, true) => redox_rt::sys::sys_call_wo(fd, payload, flags, metadata),
-        (false, false) => redox_rt::sys::sys_call(fd, payload, flags, metadata),
+        (false, false) => redox_rt::sys::sys_call(fd, flags, metadata),
     }) as isize
 }
