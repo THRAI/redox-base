@@ -25,7 +25,7 @@ dependencies = [
  "log",
  "plain",
  "redox-initfs",
- "redox-path 0.4.0",
+ "redox-path",
  "redox-rt",
  "redox-scheme",
  "redox_syscall",
@@ -41,7 +41,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 [[package]]
 name = "generic-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#e8d4ce4822d721d4dafaafa8c04dcbfe626622e7"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#e2e9f2f039472b558d41dfa0b739a03f7e2247b7"
 
 [[package]]
 name = "goblin"
@@ -77,9 +77,9 @@ checksum = "459427e2af2b9c839b132acb702a1c654d95e10f8c326bfc2ad11310e458b1c5"
 
 [[package]]
 name = "libredox"
-version = "0.1.18"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652"
+checksum = "28d0a00925a9f930d679b6789b721e3a7f9ed110f41b86d2497caa780c3a070a"
 dependencies = [
  "bitflags",
  "libc",
@@ -144,12 +144,6 @@ dependencies = [
 
 [[package]]
 name = "redox-path"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "436d45c2b6a5b159d43da708e62b25be3a4a3d5550d654b72216ade4c4bfd717"
-
-[[package]]
-name = "redox-path"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54ec1b67c01c63545205ea6d218b336751399f0d8974c1a635c28604bedb81bc"
@@ -157,7 +151,7 @@ checksum = "54ec1b67c01c63545205ea6d218b336751399f0d8974c1a635c28604bedb81bc"
 [[package]]
 name = "redox-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#e8d4ce4822d721d4dafaafa8c04dcbfe626622e7"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#e2e9f2f039472b558d41dfa0b739a03f7e2247b7"
 dependencies = [
  "bitflags",
  "generic-rt",
@@ -165,7 +159,7 @@ dependencies = [
  "ioslice",
  "libredox",
  "plain",
- "redox-path 0.3.1",
+ "redox-path",
  "redox_syscall",
 ]
 
@@ -181,9 +175,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.9.0"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5102a6aaa05aa011a238e178e6bca86d2cb56fc9f586d37cb80f5bca6e07759"
+checksum = "d678d17679829e73d371e96880897e98fee2ded7acc0a50bdf8af2affa4b2fe5"
 dependencies = [
  "bitflags",
 ]
