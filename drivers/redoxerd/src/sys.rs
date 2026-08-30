@@ -51,15 +51,22 @@ mod imp {
 
 #[cfg(target_arch = "riscv64")]
 mod imp {
+    use common::{physmap, MemoryType, Prot};
+    use qemu_exit::QEMUExit;
+
+    // https://github.com/rust-embedded/qemu-exit/blob/main/tests/exit_13.rs
+    const TEST_BASE: usize = 0x10_0000;
 
     pub fn exit(success: bool) {
-        todo!()
-        // let q = qemu_exit::RISCV64::new(addr);
-        // if success {
-        //     q.exit(51)
-        // } else {
-        //     q.exit(53)
-        // }
+        common::init();
+        let addr = unsafe { physmap(TEST_BASE, 0x1000, Prot::RW, MemoryType::Uncacheable) }
+            .expect("unable to physmap redoxer device");
+        let q = qemu_exit::RISCV64::new(addr.addr() as u64);
+        if success {
+            q.exit(51);
+        } else {
+            q.exit(53);
+        }
     }
 
     pub fn write_debug(b: u8) -> syscall::Result<()> {
