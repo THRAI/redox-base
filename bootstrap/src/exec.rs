@@ -7,10 +7,10 @@ use hashbrown::HashMap;
 use redox_scheme::Socket;
 
 use libredox::protocol::O_CLOEXEC;
+use syscall::CallFlags;
 use syscall::data::{GlobalSchemes, KernelSchemeInfo};
 use syscall::flag::{O_DIRECTORY, O_RDONLY, O_STAT};
-use syscall::CallFlags;
-use syscall::{Error, EINTR};
+use syscall::{EINTR, Error};
 
 use redox_rt::proc::*;
 

@@ -121,7 +121,7 @@ unsafe impl alloc::alloc::GlobalAlloc for Allocator {
                 unsafe { heap.extend(HEAP_INCREASE_BY) };
                 state.heap_top += HEAP_INCREASE_BY;
 
-                return unsafe { self.alloc(layout) };
+                unsafe { self.alloc(layout) }
             }
         }
     }

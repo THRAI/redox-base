@@ -12,12 +12,12 @@ use redox_path::RedoxPath;
 use redox_path::RedoxScheme;
 use redox_rt::proc::{FdGuard, FdGuardUpper};
 use redox_scheme::{
-    scheme::{SchemeState, SchemeSync},
     CallerCtx, OpenResult, RequestKind, Response, SendFdRequest, SignalBehavior, Socket,
+    scheme::{SchemeState, SchemeSync},
 };
-use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
 use syscall::Stat;
-use syscall::{error::*, schemev2::NewFdFlags, CallFlags, FobtainFdFlags};
+use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
+use syscall::{CallFlags, FobtainFdFlags, error::*, schemev2::NewFdFlags};
 
 #[derive(Debug, Clone)]
 struct Namespace {
@@ -468,7 +468,7 @@ impl<'sock> SchemeSync for NamespaceScheme<'sock> {
             }
             if let Err(err) = buf.entry(DirEntry {
                 kind: DirentKind::Unspecified,
-                name: name,
+                name,
                 inode: 0,
                 next_opaque_id: i as u64 + 1,
             }) {
