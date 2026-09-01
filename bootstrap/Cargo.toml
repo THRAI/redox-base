@@ -12,7 +12,7 @@ hashbrown = { version = "0.15", default-features = false, features = [
     "default-hasher",
 ] }
 linked_list_allocator = "0.10"
-libredox = { version = "0.1.18", default-features = false, features = ["protocol"] }
+libredox = { version = "0.1.21", default-features = false, features = ["protocol"] }
 log = { version = "0.4", default-features = false }
 plain = "0.2"
 redox-initfs = { path = "../initfs", default-features = false }

@@ -19,8 +19,8 @@ use hashbrown::hash_map::{Entry, OccupiedEntry, VacantEntry};
 use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
 
 use libredox::protocol::{
-    ProcCall, ProcKillTarget, ProcMeta, RtSigInfo, SIGCHLD, SIGCONT, SIGHUP, SIGKILL, SIGSTOP,
-    SIGTSTP, SIGTTIN, SIGTTOU, ThreadCall, WaitFlags,
+    PidfdCall, ProcCall, ProcKillTarget, ProcMeta, RtSigInfo, SIGCHLD, SIGCONT, SIGHUP, SIGKILL,
+    SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU, ThreadCall, WaitFlags,
 };
 use redox_rt::proc::FdGuard;
 use redox_scheme::scheme::{IntoTag, Op, OpCall};
@@ -352,7 +352,7 @@ impl<T> Page<T> {
                     },
                 )? as *mut T
             })
-            .unwrap(),
+            .expect("mmap_min is always non-zero in practice"),
         })
     }
 }
@@ -411,17 +411,17 @@ struct WaitpidKey {
 impl Ord for WaitpidKey {
     fn cmp(&self, other: &WaitpidKey) -> cmp::Ordering {
         // If both have pid set, compare that
-        if let Some(s_pid) = self.pid {
-            if let Some(o_pid) = other.pid {
-                return s_pid.cmp(&o_pid);
-            }
+        if let Some(s_pid) = self.pid
+            && let Some(o_pid) = other.pid
+        {
+            return s_pid.cmp(&o_pid);
         }
 
         // If both have pgid set, compare that
-        if let Some(s_pgid) = self.pgid {
-            if let Some(o_pgid) = other.pgid {
-                return s_pgid.cmp(&o_pgid);
-            }
+        if let Some(s_pgid) = self.pgid
+            && let Some(o_pgid) = other.pgid
+        {
+            return s_pgid.cmp(&o_pgid);
         }
 
         // If either has pid set, it is greater
@@ -520,7 +520,15 @@ enum WaitpidStatus {
 #[derive(Debug)]
 enum Handle {
     Init,
+
+    // A subject handle representing what a process can do to another process.
     Proc(ProcessId),
+
+    // An object handle representing what a caller can do to a process.
+    ProcObj(ProcessId),
+
+    // An object handle representing what a caller can do to a process group.
+    PgrpObj(ProcessId),
 
     // Needs to be weak so the thread is owned only by the process. Otherwise there would be a
     // cyclic reference since the underlying context's file table almost certainly contains the
@@ -722,7 +730,7 @@ impl<'a> ProcScheme<'a> {
             waitpid: BTreeMap::new(),
             waitpid_waiting: VecDeque::new(),
 
-            sig_pctl: None, // TODO
+            sig_pctl: None,
             rtqs: Vec::new(),
         }));
         if let Err(err) = new_process.borrow_mut().sync_kernel_attrs(&self.auth) {
@@ -856,9 +864,12 @@ impl<'a> ProcScheme<'a> {
                 buf[..len].copy_from_slice(&src_buf[..len]);
                 Ok(len)
             }
-            Handle::Init | Handle::Thread(_) | Handle::ProcCredsCapability | Handle::SchemeRoot => {
-                return Err(Error::new(EBADF));
-            }
+            Handle::Init
+            | Handle::Thread(_)
+            | Handle::ProcCredsCapability
+            | Handle::SchemeRoot
+            | Handle::ProcObj(_)
+            | Handle::PgrpObj(_) => Err(Error::new(EBADF)),
         }
     }
     fn on_dup(&mut self, old_id: usize, buf: &[u8]) -> Result<OpenResult> {
@@ -888,12 +899,12 @@ impl<'a> ProcScheme<'a> {
                     let process = self.processes.get(&pid).ok_or(Error::new(EBADFD))?.borrow();
                     let thread = Rc::downgrade(process.threads.get(idx).ok_or(Error::new(ENOENT))?);
 
-                    return Ok(OpenResult::ThisScheme {
+                    Ok(OpenResult::ThisScheme {
                         number: self.handles.insert(Handle::Thread(thread)),
                         flags: NewFdFlags::empty(),
-                    });
+                    })
                 }
-                _ => return Err(Error::new(EINVAL)),
+                _ => Err(Error::new(EINVAL)),
             },
             Handle::Thread(ref thread_weak) => {
                 let thread_rc = thread_weak.upgrade().ok_or(Error::new(EOWNERDEAD))?;
@@ -905,9 +916,12 @@ impl<'a> ProcScheme<'a> {
                     fd: thread.fd.dup(buf)?.take(),
                 })
             }
-            Handle::Init | Handle::Ps(_) | Handle::ProcCredsCapability | Handle::SchemeRoot => {
-                Err(Error::new(EBADF))
-            }
+            Handle::Init
+            | Handle::Ps(_)
+            | Handle::ProcCredsCapability
+            | Handle::SchemeRoot
+            | Handle::ProcObj(_)
+            | Handle::PgrpObj(_) => Err(Error::new(EBADF)),
         }
     }
     fn on_call(
@@ -1085,6 +1099,70 @@ impl<'a> ProcScheme<'a> {
                                 .map(|prio| prio as usize),
                             op,
                         ))
+                    }
+                }
+            }
+            Handle::ProcObj(fd_pid) => {
+                let Some(verb) = PidfdCall::try_from_raw(metadata[0] as usize) else {
+                    log::trace!("Invalid proc call: {metadata:?}");
+                    return Response::ready_err(EINVAL, op);
+                };
+                match verb {
+                    PidfdCall::SendSignal => {
+                        let target = KillTarget::Proc(fd_pid);
+                        let Some(signal) = u8::try_from(metadata[1]).ok().filter(|s| *s <= 64)
+                        else {
+                            return Response::ready_err(EINVAL, op);
+                        };
+                        Ready(Response::new(
+                            self.on_send_sig(
+                                fd_pid,
+                                target,
+                                signal,
+                                &mut false,
+                                KillMode::Idempotent,
+                                false,
+                                awoken,
+                            )
+                            .map(|()| 0),
+                            op,
+                        ))
+                    }
+                }
+            }
+            Handle::PgrpObj(fd_pgid) => {
+                let Some(verb) = PidfdCall::try_from_raw(metadata[0] as usize) else {
+                    log::trace!("Invalid proc call: {metadata:?}");
+                    return Response::ready_err(EINVAL, op);
+                };
+                match verb {
+                    PidfdCall::SendSignal => {
+                        let Some(signal) = u8::try_from(metadata[1]).ok().filter(|s| *s <= 64)
+                        else {
+                            return Response::ready_err(EINVAL, op);
+                        };
+                        let Some(group_rc) = self.groups.get(&fd_pgid) else {
+                            return Response::ready_err(ESRCH, op);
+                        };
+                        let group = group_rc.borrow();
+                        for process in &group.processes {
+                            let Some(proc_rc) = process.upgrade() else {
+                                // some process in a group exited and was awaited
+                                // TODO remove process if they have been dropped
+                                continue;
+                            };
+                            let target = KillTarget::Proc(proc_rc.borrow().pid);
+                            let _ = self.on_send_sig(
+                                fd_pgid,
+                                target,
+                                signal,
+                                &mut false,
+                                KillMode::Idempotent,
+                                false,
+                                awoken,
+                            );
+                        }
+                        Ready(Response::new(Ok(0), op))
                     }
                 }
             }
@@ -1362,10 +1440,10 @@ impl<'a> ProcScheme<'a> {
             for thread in &process.threads {
                 let thread = thread.borrow_mut();
                 // TODO: cancel all threads anyway on error?
-                if let Err(err) = thread.status_hndl.write(&usize::MAX.to_ne_bytes()) {
-                    if let Some(tag) = tag {
-                        return Response::ready_err(err.errno, tag);
-                    }
+                if let Err(err) = thread.status_hndl.write(&usize::MAX.to_ne_bytes())
+                    && let Some(tag) = tag
+                {
+                    return Response::ready_err(err.errno, tag);
                 }
             }
 
@@ -1646,7 +1724,7 @@ impl<'a> ProcScheme<'a> {
         let state = state_entry.get_mut();
         let this_state = core::mem::replace(state, PendingState::Placeholder);
         match this_state {
-            PendingState::Placeholder => return Pending, // unreachable!(),
+            PendingState::Placeholder => Pending, // unreachable!(),
             PendingState::AwaitingThreadsTermination(current_pid, tag) => {
                 let Some(proc_rc) = self.processes.get(&current_pid) else {
                     return if let Some(tag) = tag {
@@ -1747,7 +1825,7 @@ impl<'a> ProcScheme<'a> {
                                         self.groups.get(&affected_pgid).map(|r| r.borrow())
                                 {
                                     for process_rc in
-                                        group.processes.iter().filter_map(|w| Weak::upgrade(&w))
+                                        group.processes.iter().filter_map(Weak::upgrade)
                                     {
                                         if !matches!(
                                             process_rc.borrow().status,
@@ -1932,7 +2010,7 @@ impl<'a> ProcScheme<'a> {
         let mut num_succeeded = 0;
 
         for (pid, proc_rc) in self.processes.iter() {
-            if match_grp.map_or(false, |g| proc_rc.borrow().pgid != g) {
+            if match_grp.is_some_and(|g| proc_rc.borrow().pgid != g) {
                 continue;
             }
             let res = self.on_send_sig(
@@ -2116,7 +2194,7 @@ impl<'a> ProcScheme<'a> {
                     && target_proc
                         .sig_pctl
                         .as_ref()
-                        .map_or(false, |proc| proc.signal_will_stop(sig)))
+                        .is_some_and(|proc| proc.signal_will_stop(sig)))
             {
                 if is_conditional_stop {
                     let pgid = target_proc.pgid;
@@ -2353,8 +2431,8 @@ impl<'a> ProcScheme<'a> {
                 }
                 // POSIX XSI allows but does not require SIGCONT to send signals to the parent.
                 // TODO(err): Just ignore EINVAL (missing signal config), otherwise handle error?
-                if ppid != INIT_PID {
-                    if let Err(err) = self.on_send_sig(
+                if ppid != INIT_PID
+                    && let Err(err) = self.on_send_sig(
                         INIT_PID, // caller, TODO?
                         KillTarget::Proc(ppid),
                         SIGCHLD as u8,
@@ -2362,9 +2440,9 @@ impl<'a> ProcScheme<'a> {
                         KillMode::Idempotent,
                         true, // stop_or_continue
                         awoken,
-                    ) {
-                        log::trace!("failed to SIGCHLD parent (SIGCONT): {err}");
-                    }
+                    )
+                {
+                    log::trace!("failed to SIGCHLD parent (SIGCONT): {err}");
                 }
             }
         }
@@ -2587,6 +2665,7 @@ impl<'a> ProcScheme<'a> {
         Ok(())
     }
 
+    // FIXME use caller_pid or remove it from function signature
     fn on_getprocprio(&self, caller_pid: ProcessId, target_pid: ProcessId) -> Result<u32> {
         let target_rc = self.processes.get(&target_pid).ok_or(Error::new(ESRCH))?;
         Ok(target_rc.borrow().prio)
