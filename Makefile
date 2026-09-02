@@ -16,7 +16,7 @@ INITFS_BINS = ipcd init logd ramfs randd zerod \
 	acpid fbbootlogd hwd inputd lived \
 	pcid pcid-spawner rtcd vesad
 INITFS_DRIVERS_BINS = nvmed virtio-blkd  virtio-gpud
-BASE_BINS = fbcond inputd pcid pcid-spawner redoxerd audiod dhcpd ptyd netstack
+BASE_BINS = fbcond getty inputd pcid pcid-spawner redoxerd audiod dhcpd ptyd netstack
 DRIVERS_BINS = e1000d ihdad ihdgd ixgbed rtl8139d rtl8168d \
 	usbctl usbhidd usbhubd usbscsid virtio-netd xhcid
 
@@ -55,7 +55,7 @@ test-gui: all
 
 clippy:
 	redoxer clippy
-	cd bootstrap && redoxer clippy 
+	cd bootstrap && redoxer clippy
 
 # -----------------------------------------------------------------------------
 # base
