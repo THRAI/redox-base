@@ -1,12 +1,9 @@
-#[macro_use]
-extern crate clap;
-
-use core::ptr::slice_from_raw_parts;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, ErrorKind, Read, Stderr, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::process::{Child, Command, Stdio};
+use std::ptr::slice_from_raw_parts;
 use std::str;
 use std::time::{Duration, Instant};
 
@@ -264,20 +261,17 @@ fn daemon(tty: &mut File, clear: bool, contain: bool, stderr: &mut Stderr) {
 pub fn main() {
     let mut stderr = io::stderr();
 
-    let args = clap_app!(getty =>
-        (author: "Jeremy Soller")
-        (about: "Set terminal mode")
-        (@arg TTY: +required "")
-        (@arg NO_CLEAR: -J --("no-clear") "Do not clear the screen before forking")
-        (@arg CONTAIN: -C --("contain") "Run contain_login instead of login")
-    )
-    .get_matches();
+    let args = clap::Command::new("getty")
+        .author("Jeremy Soller")
+        .about("Set terminal mode")
+        .arg(clap::arg!(<TTY> ""))
+        .arg(clap::arg!(NO_CLEAR: -J --"no-clear" "Do not clear the screen before forking"))
+        .arg(clap::arg!(CONTAIN: -C --contain "Run contain_login instead of login"))
+        .get_matches();
 
-    let clear = !args.is_present("NO_CLEAR");
-
-    let contain = args.is_present("CONTAIN");
-
-    let vt = args.value_of("TTY").unwrap();
+    let clear = !args.get_flag("NO_CLEAR");
+    let contain = args.get_flag("CONTAIN");
+    let vt = args.get_one::<String>("TTY").unwrap();
 
     let buf: String;
     let vt_path = if vt.parse::<usize>().is_ok() {
