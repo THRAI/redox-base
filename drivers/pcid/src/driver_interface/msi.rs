@@ -1,12 +1,12 @@
 use std::fmt;
 use std::ptr::NonNull;
 
-use crate::driver_interface::PciBar;
-use crate::PciFunctionHandle;
-
 use common::io::{Io, Mmio};
 use common::MemoryType;
 use serde::{Deserialize, Serialize};
+
+use crate::driver_interface::PciBar;
+use crate::PciFunctionHandle;
 
 /// The address and data to use for MSI and MSI-X.
 ///

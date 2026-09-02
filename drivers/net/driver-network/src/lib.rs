@@ -7,10 +7,8 @@ use redox_scheme::{CallerCtx, Response, SignalBehavior, Socket};
 use scheme_utils::{
     resource_scheme, FpathWriter, ReadinessBased, ResourceOpenResult, ResourceSync,
 };
-use syscall::{
-    schemev2::NewFdFlags, Error, EventFlags, Result, Stat, EACCES, EAGAIN, EINVAL, EWOULDBLOCK,
-    MODE_FILE,
-};
+use syscall::schemev2::NewFdFlags;
+use syscall::{Error, EventFlags, Result, Stat, EACCES, EAGAIN, EINVAL, EWOULDBLOCK, MODE_FILE};
 
 pub trait NetworkAdapter {
     /// The [MAC address](https://en.wikipedia.org/wiki/MAC_address) of this

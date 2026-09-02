@@ -1,17 +1,16 @@
+use std::fs::File;
+use std::io::{Read, Write};
+use std::os::unix::io::{FromRawFd, RawFd};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, sleep};
+use std::time::Duration;
+
 use common::io::Io as _;
 use driver_block::{Disk, DiskScheme, ExecutorTrait, FuturesExecutor};
 use event::{EventFlags, RawEventQueue};
 use libredox::flag;
 use log::{error, info};
 use pcid_interface::PciFunctionHandle;
-use std::{
-    fs::File,
-    io::{Read, Write},
-    os::unix::io::{FromRawFd, RawFd},
-    sync::{Arc, Mutex},
-    thread::{self, sleep},
-    time::Duration,
-};
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use crate::ide::{AtaCommand, AtaDisk, Channel};

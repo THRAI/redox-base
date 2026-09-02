@@ -1,14 +1,14 @@
+use std::sync::Arc;
+
 use common::io::{Io, MmioPtr, WriteOnly};
 use common::timeout::Timeout;
 use embedded_hal::prelude::*;
-use std::sync::Arc;
 use syscall::error::{Error, Result, EIO};
 
+use super::{GpioPort, MmioRegion};
 use crate::device::aux::Aux;
 use crate::device::power::PowerWells;
 use crate::device::{CallbackGuard, Gmbus};
-
-use super::{GpioPort, MmioRegion};
 
 // IHD-OS-TGL-Vol 2c-12.21 DDI_AUX_CTL
 pub const DDI_AUX_CTL_BUSY: u32 = 1 << 31;

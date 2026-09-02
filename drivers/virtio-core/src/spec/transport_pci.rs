@@ -21,9 +21,10 @@
 //! OASIS IPR Policy, must be followed) or as required to translate it into languages
 //! other than English.
 
+use static_assertions::const_assert_eq;
+
 use super::DeviceStatusFlags;
 use crate::utils::VolatileCell;
-use static_assertions::const_assert_eq;
 
 /// [4.1.4 Virtio Structure PCI Capabilities](https://docs.oasis-open.org/virtio/virtio/v1.2/cs01/virtio-v1.2-cs01.html#x1-1240004)
 #[derive(Debug, Copy, Clone)]

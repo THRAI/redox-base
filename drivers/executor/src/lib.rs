@@ -2,10 +2,6 @@
 
 mod task;
 
-use task::*;
-
-pub use task::vtable;
-
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
@@ -22,6 +18,8 @@ use std::task::{Context, Poll, RawWakerVTable};
 
 use event::{EventFlags, RawEventQueue};
 use intrusive_collections::{LinkedList, LinkedListLink, UnsafeRef, intrusive_adapter};
+pub use task::vtable;
+use task::*;
 
 pub async fn yield_now() {
     struct YieldNow {

@@ -1,13 +1,12 @@
 use std::convert::{TryFrom, TryInto};
 use std::fs::{DirEntry, File, OpenOptions};
-use std::io::{prelude::*, SeekFrom};
-use std::path::{Path, PathBuf};
-
+use std::io::prelude::*;
+use std::io::SeekFrom;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, FileTypeExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
-
 use redox_initfs::types as initfs;
 
 const KIBIBYTE: u64 = 1024;

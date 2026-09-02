@@ -1,15 +1,12 @@
 use std::{thread, time};
 
 use common::io::{Io, Pio, ReadOnly, WriteOnly};
-
 use redox_scheme::scheme::SchemeSync;
-use redox_scheme::CallerCtx;
-use redox_scheme::OpenResult;
+use redox_scheme::{CallerCtx, OpenResult};
 use scheme_utils::{FpathWriter, HandleMap};
+use spin::Mutex;
 use syscall::error::{Error, Result, EACCES, EBADF, ENODEV};
 use syscall::schemev2::NewFdFlags;
-
-use spin::Mutex;
 
 const NUM_SUB_BUFFS: usize = 32;
 const SUB_BUFF_SIZE: usize = 2048;

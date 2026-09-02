@@ -1,16 +1,15 @@
 //#![deny(warnings)]
 
-use common::MemoryType;
-use event::{user_data, EventQueue};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::{iter, mem};
 
-use common::io::{Io, Mmio};
-use pcid_interface::PciFunctionHandle;
-
 use common::dma::Dma;
+use common::io::{Io, Mmio};
+use common::MemoryType;
+use event::{user_data, EventQueue};
+use pcid_interface::PciFunctionHandle;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod bga;

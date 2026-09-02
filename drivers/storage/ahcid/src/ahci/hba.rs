@@ -1,4 +1,3 @@
-use log::{debug, error, info, trace};
 use std::mem::size_of;
 use std::ops::DerefMut;
 use std::time::Duration;
@@ -7,6 +6,7 @@ use std::{ptr, u32};
 use common::dma::Dma;
 use common::io::{Io, Mmio};
 use common::timeout::Timeout;
+use log::{debug, error, info, trace};
 use syscall::error::{Error, Result, EIO};
 
 use super::fis::{FisRegH2D, FisType};

@@ -1,8 +1,10 @@
-use super::context::StreamContextType;
-use crate::usb;
+use std::{fmt, mem};
+
 use common::io::{Io, Mmio};
 use log::trace;
-use std::{fmt, mem};
+
+use super::context::StreamContextType;
+use crate::usb;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

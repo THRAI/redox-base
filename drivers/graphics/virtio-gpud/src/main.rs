@@ -26,7 +26,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use driver_graphics::GraphicsAdapter;
 use event::{user_data, EventQueue};
 use pcid_interface::PciFunctionHandle;
-
 use virtio_core::utils::VolatileCell;
 
 mod scheme;

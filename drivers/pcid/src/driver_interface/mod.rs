@@ -3,19 +3,19 @@ use std::io::prelude::*;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 use std::path::Path;
 use std::ptr::{self, NonNull};
-use std::{env, io};
-use std::{fmt, process};
+use std::{env, fmt, io, process};
 
 use common::MemoryType;
 use daemon::Daemon;
 use libredox::call::MmapArgs;
 use libredox::flag::{MAP_SHARED, PROT_READ, PROT_WRITE};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-
-pub use bar::PciBar;
-pub use cap::VendorSpecificCapability;
-pub use id::FullDeviceId;
 pub use pci_types::PciAddress;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+
+pub use self::bar::PciBar;
+pub use self::cap::VendorSpecificCapability;
+pub use self::id::FullDeviceId;
 
 mod bar;
 pub mod cap;

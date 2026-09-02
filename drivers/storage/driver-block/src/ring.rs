@@ -1,11 +1,10 @@
 use std::cmp;
+use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::fmt::Write;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::pin::{pin, Pin};
 use std::rc::Rc;
-
-use std::collections::BTreeMap;
-use std::convert::TryFrom;
 use std::sync::{Mutex, RwLock};
 
 use common::dma::Dma;
@@ -32,9 +31,8 @@ use syscall::{
 };
 use zerocopy::TryFromBytes;
 
-use crate::{EventSource, PhysAddr};
-
 use super::Disk;
+use crate::{EventSource, PhysAddr};
 
 struct RingEventSource<'a, Ev: EventSource>(Mutex<Pin<&'a mut Ev>>);
 

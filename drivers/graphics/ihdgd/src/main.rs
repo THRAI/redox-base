@@ -1,10 +1,10 @@
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+
 use driver_graphics::GraphicsScheme;
 use event::{user_data, EventQueue};
-use pcid_interface::{irq_helpers::pci_allocate_interrupt_vector, PciFunctionHandle};
-use std::{
-    io::{Read, Write},
-    os::fd::AsRawFd,
-};
+use pcid_interface::irq_helpers::pci_allocate_interrupt_vector;
+use pcid_interface::PciFunctionHandle;
 
 mod device;
 use self::device::Device;

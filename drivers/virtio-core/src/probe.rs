@@ -1,9 +1,8 @@
-use common::MemoryType;
-use pcid_interface::{
-    irq_helpers::{InterruptVector, Msix},
-    PciFunctionHandle,
-};
 use std::sync::{Arc, Mutex};
+
+use common::MemoryType;
+use pcid_interface::irq_helpers::{InterruptVector, Msix};
+use pcid_interface::PciFunctionHandle;
 
 use crate::spec::*;
 use crate::transport::{Error, Queue, StandardTransport, Transport};

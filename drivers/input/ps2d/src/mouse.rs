@@ -1,5 +1,6 @@
-use crate::controller::Ps2;
 use std::time::Duration;
+
+use crate::controller::Ps2;
 
 pub const RESET_RETRIES: usize = 10;
 pub const RESET_TIMEOUT: Duration = Duration::from_millis(1000);

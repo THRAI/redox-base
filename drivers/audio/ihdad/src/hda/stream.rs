@@ -1,8 +1,9 @@
-use common::dma::Dma;
-use common::io::{Io, Mmio};
 use std::cmp::min;
 use std::ptr::copy_nonoverlapping;
 use std::result;
+
+use common::dma::Dma;
+use common::io::{Io, Mmio};
 use syscall::error::{Error, Result, EIO};
 use syscall::PAGE_SIZE;
 

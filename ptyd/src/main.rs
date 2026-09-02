@@ -1,7 +1,7 @@
 use event::{user_data, EventFlags, EventQueue};
 use libredox::{flag, Fd};
-
-use redox_scheme::{scheme::register_sync_scheme, Response, SignalBehavior, Socket};
+use redox_scheme::scheme::register_sync_scheme;
+use redox_scheme::{Response, SignalBehavior, Socket};
 use scheme_utils::ReadinessBased;
 use syscall::data::TimeSpec;
 
@@ -19,7 +19,7 @@ mod subterm;
 mod termios;
 mod winsize;
 
-use scheme::{Handle, PtyScheme};
+use crate::scheme::{Handle, PtyScheme};
 
 fn main() {
     daemon::Daemon::new(daemon);

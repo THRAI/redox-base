@@ -1,7 +1,9 @@
 use redox_scheme::scheme::SchemeSync;
 use redox_scheme::{CallerCtx, OpenResult};
 use scheme_utils::FpathWriter;
-use syscall::{error::*, schemev2::NewFdFlags, MODE_CHR};
+use syscall::error::*;
+use syscall::schemev2::NewFdFlags;
+use syscall::MODE_CHR;
 
 use crate::Ty;
 

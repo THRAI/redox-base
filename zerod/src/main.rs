@@ -1,7 +1,7 @@
 use redox_scheme::Socket;
-
-use scheme::ZeroScheme;
 use scheme_utils::Blocking;
+
+use crate::scheme::ZeroScheme;
 
 mod scheme;
 

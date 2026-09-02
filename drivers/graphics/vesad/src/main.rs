@@ -1,10 +1,11 @@
 extern crate orbclient;
 extern crate syscall;
 
-use driver_graphics::GraphicsScheme;
-use event::{user_data, EventQueue};
 use std::collections::HashMap;
 use std::env;
+
+use driver_graphics::GraphicsScheme;
+use event::{user_data, EventQueue};
 
 use crate::scheme::{FbAdapter, FrameBuffer};
 

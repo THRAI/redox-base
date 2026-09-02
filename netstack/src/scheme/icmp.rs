@@ -1,3 +1,5 @@
+use std::{mem, str};
+
 use scheme_utils::FpathWriter;
 use smoltcp::iface::SocketHandle;
 use smoltcp::socket::icmp::{
@@ -5,10 +7,7 @@ use smoltcp::socket::icmp::{
     PacketMetadata as IcmpPacketMetadata, Socket as IcmpSocket,
 };
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, IpAddress, IpListenEndpoint};
-use std::mem;
-use std::str;
-use syscall;
-use syscall::{Error as SyscallError, Result as SyscallResult};
+use syscall::{self, Error as SyscallError, Result as SyscallResult};
 
 use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile};
 use super::{SchemeWrapper, Smolnetd, SocketSet};

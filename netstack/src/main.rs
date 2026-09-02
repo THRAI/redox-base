@@ -6,10 +6,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use event::{EventFlags, EventQueue};
 use libredox::flag::{O_NONBLOCK, O_RDWR};
 use libredox::Fd;
-
 use redox_scheme::Socket;
-use scheme::Smolnetd;
 use smoltcp::wire::EthernetAddress;
+
+use crate::scheme::Smolnetd;
 
 mod buffer_pool;
 mod error;

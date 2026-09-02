@@ -1,10 +1,13 @@
-use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult, Response, SignalBehavior, Socket};
+use std::cmp;
+use std::collections::{BTreeMap, VecDeque};
+
+use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult, Response, SignalBehavior, Socket};
 use scheme_utils::FpathWriter;
-use std::{
-    cmp,
-    collections::{BTreeMap, VecDeque},
-};
-use syscall::{error::*, flag::*, schemev2::NewFdFlags, Error};
+use syscall::error::*;
+use syscall::flag::*;
+use syscall::schemev2::NewFdFlags;
+use syscall::Error;
 
 #[derive(Debug, Default)]
 pub struct Client {

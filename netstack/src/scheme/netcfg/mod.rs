@@ -2,32 +2,30 @@
 mod nodes;
 mod notifier;
 
-use redox_scheme::{
-    scheme::{register_scheme_inner, SchemeSync},
-    CallerCtx, OpenResult, Socket,
-};
-use scheme_utils::{Blocking, HandleMap};
-use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::mem;
 use std::ops::ControlFlow;
 use std::rc::Rc;
-use std::str;
 use std::str::FromStr;
-use syscall;
+use std::{mem, str};
+
+use redox_scheme::scheme::{register_scheme_inner, SchemeSync};
+use redox_scheme::{CallerCtx, OpenResult, Socket};
+use scheme_utils::{Blocking, HandleMap};
+use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
 use syscall::data::Stat;
 use syscall::flag::{MODE_DIR, MODE_FILE};
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error as SyscallError, EventFlags as SyscallEventFlags, Result as SyscallResult};
-
-use crate::error::{Error, Result};
-use crate::link::DeviceList;
-use crate::router::route_table::{RouteTable, Rule};
+use syscall::{
+    self, Error as SyscallError, EventFlags as SyscallEventFlags, Result as SyscallResult,
+};
 
 use self::nodes::*;
 use self::notifier::*;
 use super::{post_fevent, Interface};
+use crate::error::{Error, Result};
+use crate::link::DeviceList;
+use crate::router::route_table::{RouteTable, Rule};
 
 const WRITE_BUFFER_MAX_SIZE: usize = 0xffff;
 

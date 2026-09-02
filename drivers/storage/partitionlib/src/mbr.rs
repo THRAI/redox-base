@@ -1,5 +1,6 @@
-use scroll::{Pread, Pwrite};
 use std::io::{self, Read, Seek};
+
+use scroll::{Pread, Pwrite};
 
 #[derive(Clone, Copy, Debug, Pread, Pwrite)]
 pub(crate) struct Entry {

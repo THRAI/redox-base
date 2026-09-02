@@ -1,6 +1,7 @@
-use super::opcodes::Opcode;
 use std::convert::TryInto;
 use std::{fmt, mem, slice};
+
+use super::opcodes::Opcode;
 
 #[repr(C, packed)]
 pub struct Inquiry {

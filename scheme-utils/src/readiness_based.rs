@@ -2,12 +2,10 @@ use std::collections::{HashMap, VecDeque};
 use std::ops::{ControlFlow, Deref};
 
 use libredox::error::Error as LError;
-
-use syscall::Result;
-use syscall::error::{self as errno, ECANCELED, EIO, EOPNOTSUPP, Error};
-
 use redox_scheme::scheme::{Op, SchemeResponse, SchemeState, SchemeSync};
 use redox_scheme::{CallerCtx, Id, Request, RequestKind, Response, SignalBehavior, Socket};
+use syscall::Result;
+use syscall::error::{self as errno, ECANCELED, EIO, EOPNOTSUPP, Error};
 
 pub struct ReadinessBased<S> {
     // TODO: VecDeque for both when it implements spare_capacity

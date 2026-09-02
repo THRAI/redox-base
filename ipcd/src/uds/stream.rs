@@ -1,22 +1,22 @@
 //! uds scheme for handling Unix Domain Socket stream communication
 
+use std::cell::RefCell;
+use std::collections::{BTreeSet, VecDeque};
+use std::rc::Rc;
+use std::{cmp, mem, slice};
+
 use libc::{ucred, AF_UNIX};
 use rand::prelude::*;
 use redox_scheme::{CallerCtx, OpenResult, RecvFdRequest, SendFdRequest};
-use std::{
-    cell::RefCell,
-    cmp,
-    collections::{BTreeSet, VecDeque},
-    mem,
-    rc::Rc,
-    slice,
-};
-use syscall::{error::*, flag::*, schemev2::NewFdFlags, Error};
+use syscall::error::*;
+use syscall::flag::*;
+use syscall::schemev2::NewFdFlags;
+use syscall::Error;
 
+use super::scheme::{MsgFlags, UdsScheme};
 use super::{
-    get_uid_gid_from_pid, path_buf_to_str, read_msghdr_info, read_num,
-    scheme::{MsgFlags, UdsScheme},
-    AncillaryData, Credential, DataPacket, MsgWriter, MIN_RECV_MSG_LEN,
+    get_uid_gid_from_pid, path_buf_to_str, read_msghdr_info, read_num, AncillaryData, Credential,
+    DataPacket, MsgWriter, MIN_RECV_MSG_LEN,
 };
 
 pub type UdsStreamScheme<'sock> = UdsScheme<'sock, Socket>;

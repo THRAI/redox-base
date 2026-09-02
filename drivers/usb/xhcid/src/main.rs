@@ -37,8 +37,8 @@ use pcid_interface::irq_helpers::{
     allocate_first_msi_interrupt_on_bsp, allocate_single_interrupt_vector_for_msi,
 };
 use pcid_interface::{PciFeature, PciFeatureInfo, PciFunctionHandle};
-
-use redox_scheme::{scheme::register_sync_scheme, Socket};
+use redox_scheme::scheme::register_sync_scheme;
+use redox_scheme::Socket;
 use scheme_utils::Blocking;
 
 use crate::xhci::{InterruptMethod, Xhci};

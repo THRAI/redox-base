@@ -1,16 +1,14 @@
-use crate::link::ethernet::EthernetLink;
-use crate::link::LinkDevice;
-use crate::link::{loopback::LoopbackDevice, DeviceList};
-use crate::router::route_table::{RouteTable, Rule};
-use crate::router::Router;
-use crate::scheme::smoltcp::iface::SocketSet as SmoltcpSocketSet;
-use crate::scheme::socket::{Handle, SchemeSocket, SocketScheme};
-use libredox::flag;
-use libredox::Fd;
-use redox_scheme::{
-    scheme::{IntoTag, Op, SchemeResponse, SchemeState, SchemeSync},
-    CallerCtx, RequestKind, Response, SignalBehavior, Socket,
-};
+use std::cell::RefCell;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::mem::size_of;
+use std::os::fd::{FromRawFd, RawFd};
+use std::rc::Rc;
+use std::str::FromStr;
+
+use libredox::{flag, Fd};
+use redox_scheme::scheme::{IntoTag, Op, SchemeResponse, SchemeState, SchemeSync};
+use redox_scheme::{CallerCtx, RequestKind, Response, SignalBehavior, Socket};
 use smoltcp;
 use smoltcp::iface::{Config, Interface as SmoltcpInterface};
 use smoltcp::phy::Tracer;
@@ -19,16 +17,8 @@ use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address,
 };
-use std::cell::RefCell;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::mem::size_of;
-use std::os::fd::{FromRawFd, RawFd};
-use std::rc::Rc;
-use std::str::FromStr;
-use syscall;
 use syscall::data::TimeSpec;
-use syscall::Error as SyscallError;
+use syscall::{self, Error as SyscallError};
 
 use self::icmp::IcmpScheme;
 use self::ip::IpScheme;
@@ -36,6 +26,13 @@ use self::netcfg::NetCfgScheme;
 use self::tcp::TcpScheme;
 use self::udp::UdpScheme;
 use crate::error::{Error, Result};
+use crate::link::ethernet::EthernetLink;
+use crate::link::loopback::LoopbackDevice;
+use crate::link::{DeviceList, LinkDevice};
+use crate::router::route_table::{RouteTable, Rule};
+use crate::router::Router;
+use crate::scheme::smoltcp::iface::SocketSet as SmoltcpSocketSet;
+use crate::scheme::socket::{Handle, SchemeSocket, SocketScheme};
 
 mod icmp;
 mod ip;

@@ -1,13 +1,16 @@
-use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult};
+use std::cmp;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+
+use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult};
 use scheme_utils::{FpathWriter, HandleMap};
-use std::{
-    cmp,
-    collections::{btree_map::Entry, BTreeMap},
-    rc::Rc,
-};
+use syscall::data::Stat;
+use syscall::error::*;
+use syscall::schemev2::NewFdFlags;
 use syscall::{
-    data::Stat, error::*, schemev2::NewFdFlags, Error, Map, MapFlags, MremapFlags, Result,
-    MAP_PRIVATE, PAGE_SIZE, PROT_READ, PROT_WRITE,
+    Error, Map, MapFlags, MremapFlags, Result, MAP_PRIVATE, PAGE_SIZE, PROT_READ, PROT_WRITE,
 };
 
 enum Handle {

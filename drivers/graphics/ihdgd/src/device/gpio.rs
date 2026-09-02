@@ -4,9 +4,8 @@ use std::time::Duration;
 use common::io::{Io, MmioPtr};
 use embedded_hal::digital::v2 as digital;
 
-use crate::device::HalTimer;
-
 use super::MmioRegion;
+use crate::device::HalTimer;
 
 const GPIO_DIR_MASK: u32 = 1 << 0;
 const GPIO_DIR_OUT: u32 = 1 << 1;

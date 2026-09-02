@@ -5,14 +5,13 @@ use std::iter;
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 
-use parking_lot::{Mutex, ReentrantMutex, RwLock};
-use pcid_interface::irq_helpers::InterruptVector;
-
+use common::dma::Dma;
 use common::io::{Io, Mmio};
 use common::timeout::Timeout;
+use parking_lot::{Mutex, ReentrantMutex, RwLock};
+use pcid_interface::irq_helpers::InterruptVector;
+use pcid_interface::PciFunctionHandle;
 use syscall::error::{Error, Result, EIO};
-
-use common::dma::Dma;
 
 pub mod cmd;
 pub mod executor;
@@ -21,8 +20,6 @@ pub mod queues;
 
 use self::executor::NvmeExecutor;
 pub use self::queues::{NvmeCmd, NvmeCmdQueue, NvmeComp, NvmeCompQueue};
-
-use pcid_interface::PciFunctionHandle;
 
 #[repr(C, packed)]
 pub struct NvmeRegs {

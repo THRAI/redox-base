@@ -4,10 +4,8 @@ use std::convert::TryInto;
 use std::ptr;
 
 use byteorder::{BigEndian, ByteOrder};
-
-use syscall::error::{Error, Result, EBADF};
-
 use common::dma::Dma;
+use syscall::error::{Error, Result, EBADF};
 
 use super::hba::{HbaCmdHeader, HbaCmdTable, HbaPort};
 use super::Disk;

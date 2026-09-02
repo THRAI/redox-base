@@ -1,13 +1,14 @@
 use std::fs::File;
 use std::future::Future;
 use std::io::prelude::*;
+use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task;
 
-use std::os::unix::io::AsRawFd;
-
+use common::io::Io as _;
 use crossbeam_channel::{Receiver, Sender};
+use event::RawEventQueue;
 use log::{debug, error, info, trace, warn};
 
 use super::doorbell::Doorbell;
@@ -17,8 +18,6 @@ use super::trb::{Trb, TrbCompletionCode, TrbType};
 use super::{EndpNum, PortId, Xhci};
 use crate::xhci::device_enumerator::DeviceEnumerationRequest;
 use crate::xhci::port::PortFlags;
-use common::io::Io as _;
-use event::RawEventQueue;
 
 /// Short-term states (as in, they are removed when the waker is consumed, but probably pushed back
 /// by the future unless it completed).

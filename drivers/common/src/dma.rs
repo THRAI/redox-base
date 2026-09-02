@@ -4,7 +4,8 @@ use std::ptr;
 use std::sync::LazyLock;
 
 use libredox::call::MmapArgs;
-use libredox::{error::Result, flag, Fd};
+use libredox::error::Result;
+use libredox::{flag, Fd};
 use syscall::PAGE_SIZE;
 
 use crate::{memory_root_fd, MemoryType, VirtaddrTranslationHandle};

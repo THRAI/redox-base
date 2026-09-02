@@ -1,4 +1,6 @@
-use std::{fs::File, io, os::unix::io::AsRawFd, slice};
+use std::fs::File;
+use std::os::unix::io::AsRawFd;
+use std::{io, slice};
 
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)

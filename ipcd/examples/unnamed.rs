@@ -1,8 +1,7 @@
-use std::{
-    fs::File,
-    io::{self, prelude::*},
-    os::unix::io::{AsRawFd, FromRawFd, RawFd},
-};
+use std::fs::File;
+use std::io;
+use std::io::prelude::*;
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)

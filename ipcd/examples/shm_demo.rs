@@ -1,4 +1,7 @@
-use std::{fs::File, io, mem, os::unix::io::AsRawFd, thread, time::Duration};
+use std::fs::File;
+use std::os::unix::io::AsRawFd;
+use std::time::Duration;
+use std::{io, mem, thread};
 
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)

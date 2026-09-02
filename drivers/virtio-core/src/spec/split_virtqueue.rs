@@ -23,8 +23,9 @@
 
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 
-use crate::utils::{IncompleteArrayField, VolatileCell};
 use static_assertions::const_assert_eq;
+
+use crate::utils::{IncompleteArrayField, VolatileCell};
 
 /// [2.7.5 The Virtqueue Descriptor table](https://docs.oasis-open.org/virtio/virtio/v1.2/cs01/virtio-v1.2-cs01.html#x1-430005)
 #[repr(C, align(16))]

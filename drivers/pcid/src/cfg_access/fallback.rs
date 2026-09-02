@@ -4,7 +4,6 @@ use std::sync::Mutex;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use common::io::{Io as _, Pio};
-
 use log::info;
 use pci_types::{ConfigRegionAccess, PciAddress};
 

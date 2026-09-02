@@ -1,6 +1,9 @@
+use std::sync::RwLock;
+use std::thread;
+use std::time::Duration;
+
 use common::io::{Io, Mmio};
 use driver_block::Disk;
-use std::{sync::RwLock, thread, time::Duration};
 use syscall::{Error, Result, EINVAL};
 
 #[cfg(target_arch = "aarch64")]

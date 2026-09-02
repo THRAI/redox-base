@@ -5,14 +5,12 @@ use std::sync::{Arc, Mutex};
 use std::{process, thread};
 
 use anyhow::Context;
+use daemon::SchemeDaemon;
 use ioslice::IoSlice;
-use libredox::flag;
-use libredox::{error::Result, Fd};
-
+use libredox::error::Result;
+use libredox::{flag, Fd};
 use redox_scheme::Socket;
 use scheme_utils::ReadinessBased;
-
-use daemon::SchemeDaemon;
 
 use self::scheme::{AudioChunk, AudioScheme, AudioSchemeInner};
 

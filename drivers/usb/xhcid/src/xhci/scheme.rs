@@ -23,23 +23,20 @@ use std::sync::atomic;
 use std::{cmp, fmt, io, mem, str};
 
 use common::dma::Dma;
+use common::io::Io;
 use futures::executor::block_on;
 use log::{debug, error, info, trace, warn};
 use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult};
+use regex::Regex;
 use scheme_utils::FpathWriter;
 use smallvec::SmallVec;
-
-use common::io::Io;
-use redox_scheme::{CallerCtx, OpenResult};
 use syscall::schemev2::NewFdFlags;
 use syscall::{
     Error, Result, Stat, EACCES, EBADF, EBADFD, EBADMSG, EINVAL, EIO, EISDIR, ENOENT, ENOSYS,
     ENOTDIR, EOPNOTSUPP, EPROTO, ESPIPE, MODE_CHR, MODE_DIR, MODE_FILE, O_DIRECTORY, O_RDWR,
     O_STAT, O_WRONLY, SEEK_CUR, SEEK_END, SEEK_SET,
 };
-
-use super::{port, usb};
-use super::{EndpNum, EndpointState, PortId, Xhci};
 
 use super::context::{
     SlotState, StreamContextArray, StreamContextType, CONTEXT_32, CONTEXT_64,
@@ -50,9 +47,8 @@ use super::irq_reactor::{EventDoorbell, RingId};
 use super::ring::Ring;
 use super::trb::{TransferKind, Trb, TrbCompletionCode, TrbType};
 use super::usb::endpoint::EndpointTy;
-
+use super::{port, usb, EndpNum, EndpointState, PortId, Xhci};
 use crate::driver_interface::*;
-use regex::Regex;
 
 lazy_static! {
     static ref REGEX_PORT_CONFIGURE: Regex = Regex::new(r"^port([\d\.]+)/configure$")
@@ -2853,8 +2849,9 @@ pub fn handle_transfer_event_trb(name: &str, event_trb: &Trb, transfer_trb: &Trb
         Err(Error::new(EIO))
     }
 }
-use lazy_static::lazy_static;
 use std::ops::{Add, Div, Rem};
+
+use lazy_static::lazy_static;
 
 pub fn div_round_up<T>(a: T, b: T) -> T
 where

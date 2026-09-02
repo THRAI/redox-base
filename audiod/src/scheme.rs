@@ -1,13 +1,11 @@
-use redox_scheme::{CallerCtx, OpenResult};
-use scheme_utils::HandleMap;
-use std::{
-    collections::VecDeque,
-    str,
-    sync::{Arc, Mutex},
-};
-use syscall::error::{Error, Result, EACCES, EBADF, EINVAL, ENOENT, EWOULDBLOCK};
+use std::collections::VecDeque;
+use std::str;
+use std::sync::{Arc, Mutex};
 
 use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult};
+use scheme_utils::HandleMap;
+use syscall::error::{Error, Result, EACCES, EBADF, EINVAL, ENOENT, EWOULDBLOCK};
 use syscall::schemev2::NewFdFlags;
 
 // The strict buffer size of the audiohw: driver

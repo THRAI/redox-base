@@ -2,33 +2,27 @@
 
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::str;
 use std::task::Poll;
-use std::thread;
 use std::time::Duration;
+use std::{str, thread};
 
 use common::dma::Dma;
 use common::io::{Io, Mmio};
 use common::timeout::Timeout;
 use redox_scheme::scheme::SchemeSync;
-use redox_scheme::CallerCtx;
-use redox_scheme::OpenResult;
+use redox_scheme::{CallerCtx, OpenResult};
 use scheme_utils::{FpathWriter, HandleMap};
+use spin::Mutex;
 use syscall::error::{
     Error, Result, EACCES, EBADF, EEXIST, EIO, ENODEV, ENOENT, ENOTDIR, EWOULDBLOCK,
 };
-
-use spin::Mutex;
 use syscall::schemev2::NewFdFlags;
 
 use super::common::*;
-use super::BitsPerSample;
-use super::BufferDescriptorListEntry;
-use super::CommandBuffer;
-use super::HDANode;
-use super::OutputStream;
-use super::StreamBuffer;
-use super::StreamDescriptorRegs;
+use super::{
+    BitsPerSample, BufferDescriptorListEntry, CommandBuffer, HDANode, OutputStream, StreamBuffer,
+    StreamDescriptorRegs,
+};
 
 // GCTL - Global Control
 const CRST: u32 = 1 << 0; // 1 bit

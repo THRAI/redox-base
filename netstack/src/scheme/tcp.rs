@@ -1,15 +1,15 @@
+use std::str;
+
+use libredox::flag;
 use scheme_utils::FpathWriter;
 use smoltcp::iface::SocketHandle;
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer};
 use smoltcp::wire::{IpEndpoint, IpListenEndpoint};
-use std::str;
-use syscall;
-use syscall::{Error as SyscallError, Result as SyscallResult};
+use syscall::{self, Error as SyscallError, Result as SyscallResult};
 
 use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile};
 use super::{parse_endpoint, SchemeWrapper, SocketSet};
 use crate::port_set::PortSet;
-use libredox::flag;
 
 const SO_SNDBUF: usize = 7;
 const SO_RCVBUF: usize = 8;

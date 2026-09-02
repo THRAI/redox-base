@@ -3,11 +3,17 @@ use std::os::unix::io::AsRawFd;
 use std::{mem, str};
 
 use event::{EventFlags, RawEventQueue};
-use libredox::flag;
+use indexmap::IndexMap;
 use libredox::protocol::FsCall;
-use libredox::Fd;
+use libredox::{flag, Fd};
 use redox_path::RedoxPath;
+use redox_rings::op::{
+    FsOpCqe, FsOpKind, FsOpSqe, RingCallVerb, RingSetupFlags, RingSetupParams, RING_MAX_CQ_ENTRIES,
+    RING_MAX_SQ_ENTRIES,
+};
 use redox_rings::sync::{BlockingConsumer, BlockingProducer};
+use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult, SendFdRequest, Socket};
 use scheme_utils::{FpathWriter, HandleMap};
 use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
 use syscall::error::{
@@ -20,22 +26,12 @@ use syscall::flag::{
 };
 use syscall::schemev2::NewFdFlags;
 use syscall::{
-    Error, FmoveFdFlags, FobtainFdFlags, Result, Stat, StatVfs, StdFsCallMeta, TimeSpec,
+    Error, FmoveFdFlags, FobtainFdFlags, Result, Stat, StatVfs, StdFsCallMeta, TimeSpec, MODE_DIR,
+    MODE_FILE, MODE_PERM, MODE_TYPE,
 };
-use syscall::{MODE_DIR, MODE_FILE, MODE_PERM, MODE_TYPE};
-
-use indexmap::IndexMap;
-
-use redox_scheme::scheme::SchemeSync;
-use redox_scheme::{CallerCtx, OpenResult, SendFdRequest, Socket};
 use zerocopy::TryFromBytes;
 
 use crate::filesystem::{self, File, FileData, Filesystem, Inode};
-
-use redox_rings::op::{
-    FsOpCqe, FsOpKind, FsOpSqe, RingCallVerb, RingSetupFlags, RingSetupParams, RING_MAX_CQ_ENTRIES,
-    RING_MAX_SQ_ENTRIES,
-};
 
 pub struct Shm {
     ptr: *mut u8,

@@ -1,15 +1,12 @@
-use std::{
-    convert::TryInto,
-    sync::{Arc, Mutex},
-    thread,
-    time::{Duration, Instant},
-};
-
-use driver_block::Disk;
-use syscall::error::{Error, Result, EIO};
+use std::convert::TryInto;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use common::dma::Dma;
 use common::io::{Io, Pio, ReadOnly, WriteOnly};
+use driver_block::Disk;
+use syscall::error::{Error, Result, EIO};
 
 const TIMEOUT: Duration = Duration::new(5, 0);
 

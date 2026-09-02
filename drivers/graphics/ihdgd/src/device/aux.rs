@@ -1,4 +1,5 @@
-use common::{io::Io, timeout::Timeout};
+use common::io::Io;
+use common::timeout::Timeout;
 use embedded_hal::blocking::i2c::{self, Operation, SevenBitAddress, Transactional};
 
 use super::ddi::*;

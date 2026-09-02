@@ -1,7 +1,6 @@
+use common::dma::Dma;
 use common::io::{Io, Mmio};
 use syscall::error::Result;
-
-use common::dma::Dma;
 
 use super::ring::Ring;
 use super::trb::Trb;

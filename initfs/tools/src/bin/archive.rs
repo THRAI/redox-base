@@ -2,7 +2,6 @@ use std::path::Path;
 
 use anyhow::Result;
 use clap::{Arg, Command};
-
 use redox_initfs_tools::{self as archive, Args, DEFAULT_MAX_SIZE};
 
 fn main() -> Result<()> {

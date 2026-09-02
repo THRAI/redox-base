@@ -1,9 +1,8 @@
 use std::convert::TryInto;
 use std::ptr;
 
-use syscall::error::Result;
-
 use common::dma::Dma;
+use syscall::error::Result;
 
 use super::hba::{HbaCmdHeader, HbaCmdTable, HbaPort};
 use super::Disk;

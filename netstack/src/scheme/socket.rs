@@ -3,19 +3,16 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
-use std::mem;
-use std::ops::Deref;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::str;
+use std::{mem, str};
 
 use libredox::flag::CLOCK_MONOTONIC;
 use libredox::protocol::SocketCall;
-use redox_scheme::{
-    scheme::{register_scheme_inner, Op, SchemeSync},
-    CallerCtx, OpenResult, Socket,
-};
+use redox_scheme::scheme::{register_scheme_inner, Op, SchemeSync};
+use redox_scheme::{CallerCtx, OpenResult, Socket};
 use scheme_utils::HandleMap;
+use smoltcp::socket::AnySocket;
 use syscall::data::TimeSpec;
 use syscall::flag::{EVENT_READ, EVENT_WRITE};
 use syscall::schemev2::NewFdFlags;
@@ -24,14 +21,11 @@ use syscall::{
     EOPNOTSUPP,
 };
 
-use super::Interface;
+use super::{Interface, SocketSet};
 use crate::router::route_table::RouteTable;
 use crate::scheme::smoltcp::iface::SocketHandle;
 use crate::scheme::Router;
 use crate::Smolnetd;
-use smoltcp::socket::AnySocket;
-
-use super::SocketSet;
 
 const SO_RCVBUF: usize = 8;
 const SO_SNDBUF: usize = 7;

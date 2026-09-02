@@ -4,7 +4,9 @@ mod acpi;
 mod devicetree;
 mod legacy;
 
-pub use self::{acpi::AcpiBackend, devicetree::DeviceTreeBackend, legacy::LegacyBackend};
+pub use self::acpi::AcpiBackend;
+pub use self::devicetree::DeviceTreeBackend;
+pub use self::legacy::LegacyBackend;
 
 pub trait Backend {
     fn new() -> Result<Self, Box<dyn Error>>

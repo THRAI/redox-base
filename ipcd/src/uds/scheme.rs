@@ -1,13 +1,19 @@
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+
 use libredox::protocol::SocketCall;
 use rand::rngs::SmallRng;
+use redox_scheme::scheme::SchemeSync;
 use redox_scheme::{
-    scheme::SchemeSync, CallerCtx, OpenResult, RecvFdRequest, Response, SendFdRequest,
-    SignalBehavior, Socket as SchemeSocket,
+    CallerCtx, OpenResult, RecvFdRequest, Response, SendFdRequest, SignalBehavior,
+    Socket as SchemeSocket,
 };
 use scheme_utils::FpathWriter;
-use std::collections::BTreeMap;
-use std::{cell::RefCell, rc::Rc};
-use syscall::{error::*, flag::*, schemev2::NewFdFlags, Error, Stat};
+use syscall::error::*;
+use syscall::flag::*;
+use syscall::schemev2::NewFdFlags;
+use syscall::{Error, Stat};
 
 use crate::uds::create_token_generator;
 

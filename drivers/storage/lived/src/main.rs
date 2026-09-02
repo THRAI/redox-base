@@ -4,18 +4,14 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-
 use std::os::fd::AsRawFd;
 
-use driver_block::{Disk, DiskScheme};
-use driver_block::{ExecutorTrait, TrivialExecutor};
+use anyhow::{anyhow, Context};
+use driver_block::{Disk, DiskScheme, ExecutorTrait, TrivialExecutor};
 use libredox::call::MmapArgs;
 use libredox::flag;
-
 use syscall::error::*;
 use syscall::PAGE_SIZE;
-
-use anyhow::{anyhow, Context};
 
 struct LiveDisk {
     original: &'static [u8],

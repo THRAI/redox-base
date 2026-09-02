@@ -9,9 +9,8 @@ use common::MemoryType;
 use driver_block::{Disk, PhysAddr, RingDiskScheme};
 use pcid_interface::{irq_helpers, PciFunctionHandle};
 
-use crate::nvme::NvmeNamespace;
-
 use self::nvme::Nvme;
+use crate::nvme::NvmeNamespace;
 
 mod nvme;
 
