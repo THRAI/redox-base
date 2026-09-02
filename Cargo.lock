@@ -3062,7 +3062,6 @@ dependencies = [
  "crossbeam-channel",
  "daemon",
  "futures",
- "lazy_static",
  "libredox",
  "log",
  "pcid",
