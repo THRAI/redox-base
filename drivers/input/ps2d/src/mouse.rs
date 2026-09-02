@@ -191,7 +191,6 @@ impl MouseState {
     }
 
     fn identify_touchpad(&mut self, ps2: &mut Ps2) -> MouseResult {
-        let _cmd = TouchpadCommand::Identify as u8;
         match MouseTx::new(
             &[
                 // Ensure command alignment

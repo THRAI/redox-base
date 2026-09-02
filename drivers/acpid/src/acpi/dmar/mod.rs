@@ -1,7 +1,7 @@
 //! DMA Remapping Table -- `DMAR`. This is Intel's implementation of IOMMU functionality, known as
 //! VT-d.
 //!
-//! Too understand what all of these structs mean, refer to the "Intel(R) Virtualization
+//! To understand what all of these structs mean, refer to the "Intel(R) Virtualization
 //! Technology for Directed I/O" specification.
 
 // TODO: Move this code to a separate driver as well?
@@ -460,7 +460,7 @@ impl<'sdt> Iterator for DmarRawIter<'sdt> {
                 return None;
             }
         };
-        let _len_bytes = match self.bytes.get(2..4) {
+        let len_bytes = match self.bytes.get(2..4) {
             Some(bytes) => bytes,
             None => {
                 log::warn!("DMAR table ended between two entries.");
@@ -471,7 +471,7 @@ impl<'sdt> Iterator for DmarRawIter<'sdt> {
 
         let type_bytes = <[u8; 2]>::try_from(type_bytes)
             .expect("expected a 2-byte slice to be convertible to [u8; 2]");
-        let len_bytes = <[u8; 2]>::try_from(type_bytes)
+        let len_bytes = <[u8; 2]>::try_from(len_bytes)
             .expect("expected a 2-byte slice to be convertible to [u8; 2]");
 
         let ty = u16::from_ne_bytes(type_bytes);

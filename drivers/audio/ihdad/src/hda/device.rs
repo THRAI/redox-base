@@ -639,7 +639,7 @@ impl IntelHDA {
 
     */
 
-    pub fn dump_codec(&self, _codec: u8) -> String {
+    pub fn dump_codec(&self, codec: u8) -> String {
         let mut string = String::new();
 
         for (_, widget) in self.widget_map.iter() {

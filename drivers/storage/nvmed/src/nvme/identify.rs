@@ -201,13 +201,13 @@ impl Nvme {
         let data: Dma<IdentifyNamespaceData> = unsafe { Dma::zeroed().unwrap().assume_init() };
 
         log::debug!("Attempting to identify namespace {nsid}");
-        let _comp = self
+        let comp = self
             .submit_and_complete_admin_command(|cid| {
                 NvmeCmd::identify_namespace(cid, data.physical(), nsid)
             })
             .await;
 
-        log::debug!("Dumping identify namespace");
+        log::debug!("Dumping identify namespace {:?}", comp);
 
         let size = data.size_in_blocks();
         let capacity = data.capacity_in_blocks();

@@ -98,7 +98,7 @@ pub const FEATURE_ENDPOINT_HALT: u16 = 0;
 impl<'a> BulkOnlyTransport<'a> {
     pub fn init(
         handle: &'a XhciClientHandle,
-        _config_desc: &ConfDesc,
+        config_desc: &ConfDesc,
         if_desc: &IfDesc,
     ) -> Result<Self, ProtocolError> {
         let endpoints = &if_desc.endpoints;
