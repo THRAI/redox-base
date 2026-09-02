@@ -39,7 +39,7 @@ pub struct Descriptor {
     next: AtomicU16,
 }
 
-const_assert_eq!(core::mem::size_of::<Descriptor>(), 16);
+const_assert_eq!(size_of::<Descriptor>(), 16);
 
 bitflags::bitflags! {
     #[derive(Debug, Copy, Clone)]
@@ -94,7 +94,7 @@ pub struct AvailableRing {
     pub elements: IncompleteArrayField<AvailableRingElement>,
 }
 
-const_assert_eq!(core::mem::size_of::<AvailableRing>(), 4);
+const_assert_eq!(size_of::<AvailableRing>(), 4);
 
 #[repr(C)]
 pub struct AvailableRingElement {
@@ -107,14 +107,14 @@ impl AvailableRingElement {
     }
 }
 
-const_assert_eq!(core::mem::size_of::<AvailableRingElement>(), 2);
+const_assert_eq!(size_of::<AvailableRingElement>(), 2);
 
 #[repr(C)]
 pub struct AvailableRingExtra {
     pub avail_event: VolatileCell<u16>, // Only if `VIRTIO_F_EVENT_IDX`
 }
 
-const_assert_eq!(core::mem::size_of::<AvailableRingExtra>(), 2);
+const_assert_eq!(size_of::<AvailableRingExtra>(), 2);
 
 // ======== Used Ring ========
 
@@ -126,7 +126,7 @@ pub struct UsedRing {
     pub elements: IncompleteArrayField<UsedRingElement>,
 }
 
-const_assert_eq!(core::mem::size_of::<UsedRing>(), 4);
+const_assert_eq!(size_of::<UsedRing>(), 4);
 
 #[repr(C)]
 pub struct UsedRingElement {
@@ -134,7 +134,7 @@ pub struct UsedRingElement {
     pub written: VolatileCell<u32>,
 }
 
-const_assert_eq!(core::mem::size_of::<UsedRingElement>(), 8);
+const_assert_eq!(size_of::<UsedRingElement>(), 8);
 
 #[repr(C)]
 pub struct UsedRingExtra {
@@ -152,7 +152,7 @@ impl Buffer {
     pub fn new<T>(val: &common::dma::Dma<T>) -> Self {
         Self {
             buffer: val.physical(),
-            size: core::mem::size_of::<T>(),
+            size: size_of::<T>(),
             flags: DescriptorFlags::empty(),
         }
     }
@@ -160,7 +160,7 @@ impl Buffer {
     pub fn new_unsized<T>(val: &common::dma::Dma<[T]>) -> Self {
         Self {
             buffer: val.physical(),
-            size: core::mem::size_of::<T>() * val.len(),
+            size: size_of::<T>() * val.len(),
             flags: DescriptorFlags::empty(),
         }
     }

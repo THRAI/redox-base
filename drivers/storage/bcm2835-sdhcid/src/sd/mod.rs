@@ -754,7 +754,7 @@ impl Disk for SdHostCtrl {
             println!("buffer.len {} should be aligned to {}", buffer.len(), 512);
             return Err(Error::new(EINVAL));
         }
-        let u32_len = buffer.len() / core::mem::size_of::<u32>();
+        let u32_len = buffer.len() / size_of::<u32>();
         let num = buffer.len() / 512;
         let u8_ptr = buffer.as_mut_ptr();
         let ret = unsafe {
@@ -773,7 +773,7 @@ impl Disk for SdHostCtrl {
             println!("buffer.len {} should be aligned to {}", buffer.len(), 512);
             return Err(Error::new(EINVAL));
         }
-        let u32_len = buffer.len() / core::mem::size_of::<u32>();
+        let u32_len = buffer.len() / size_of::<u32>();
         let num = buffer.len() / 512;
         let u8_ptr = buffer.as_ptr();
         let ret = unsafe {

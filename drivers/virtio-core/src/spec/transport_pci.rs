@@ -46,7 +46,7 @@ pub struct PciCapability {
 
 // The size of `PciCapability` is 13 bytes since the generic
 // PCI fields are *not* included.
-const_assert_eq!(core::mem::size_of::<PciCapability>(), 13);
+const_assert_eq!(size_of::<PciCapability>(), 13);
 
 #[derive(Debug, Copy, Clone)]
 #[repr(u8)]
@@ -67,7 +67,7 @@ pub enum CfgType {
     Vendor = 9,
 }
 
-const_assert_eq!(core::mem::size_of::<CfgType>(), 1);
+const_assert_eq!(size_of::<CfgType>(), 1);
 
 #[derive(Debug)]
 #[repr(C)]
@@ -155,7 +155,7 @@ pub struct CommonCfg {
 
 //TODO: why does this fail on x86?
 #[cfg(not(target_arch = "x86"))]
-const_assert_eq!(core::mem::size_of::<CommonCfg>(), 64);
+const_assert_eq!(size_of::<CommonCfg>(), 64);
 
 #[derive(Debug, Copy, Clone)]
 #[repr(C, packed)]
@@ -171,7 +171,7 @@ impl PciCapabilityNotify {
     }
 }
 
-const_assert_eq!(core::mem::size_of::<PciCapabilityNotify>(), 17);
+const_assert_eq!(size_of::<PciCapabilityNotify>(), 17);
 
 /// Vector value used to disable MSI for queue
 pub const VIRTIO_MSI_NO_VECTOR: u16 = 0xffff;

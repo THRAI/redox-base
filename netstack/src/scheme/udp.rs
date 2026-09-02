@@ -311,7 +311,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         if !socket_file.read_enabled {
             Ok(0)
         } else if self.can_recv(&socket_file.data) {
-            let usize_length = core::mem::size_of::<usize>();
+            let usize_length = size_of::<usize>();
             let prepared_name_len = usize::from_le_bytes(
                 how[0..usize_length]
                     .try_into()

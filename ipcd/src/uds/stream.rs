@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
 use std::rc::Rc;
-use std::{cmp, mem, slice};
+use std::{cmp, slice};
 
 use libc::{ucred, AF_UNIX};
 use rand::prelude::*;
@@ -646,7 +646,7 @@ impl super::scheme::Socket for Socket {
                 write_value(unsafe {
                     slice::from_raw_parts(
                         &remote.ucred as *const ucred as *const u8,
-                        mem::size_of::<ucred>(),
+                        size_of::<ucred>(),
                     )
                 })
             }

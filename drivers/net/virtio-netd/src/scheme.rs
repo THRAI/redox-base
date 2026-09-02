@@ -51,7 +51,7 @@ impl VirtioNet {
 
     /// Returns the number of bytes read. Returns `0` if the operation would block.
     fn try_recv(&mut self, target: &mut [u8]) -> usize {
-        let header_size = core::mem::size_of::<VirtHeader>();
+        let header_size = size_of::<VirtHeader>();
 
         if self.recv_head == self.rx.used.head_index() {
             // The read would block.

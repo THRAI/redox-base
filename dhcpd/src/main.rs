@@ -184,10 +184,7 @@ fn dhcp(iface: &str, verbose: bool) -> Result<(), String> {
         }
 
         let discover_data = unsafe {
-            std::slice::from_raw_parts(
-                (&discover as *const Dhcp) as *const u8,
-                std::mem::size_of::<Dhcp>(),
-            )
+            std::slice::from_raw_parts((&discover as *const Dhcp) as *const u8, size_of::<Dhcp>())
         };
 
         let _sent = try_fmt!(socket.send(discover_data), "failed to send discover");
@@ -423,10 +420,7 @@ fn dhcp(iface: &str, verbose: bool) -> Result<(), String> {
         }
 
         let request_data = unsafe {
-            std::slice::from_raw_parts(
-                (&request as *const Dhcp) as *const u8,
-                std::mem::size_of::<Dhcp>(),
-            )
+            std::slice::from_raw_parts((&request as *const Dhcp) as *const u8, size_of::<Dhcp>())
         };
 
         let _sent = try_fmt!(socket.send(request_data), "failed to send request");

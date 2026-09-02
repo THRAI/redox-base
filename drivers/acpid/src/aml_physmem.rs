@@ -1,6 +1,5 @@
 use std::collections::hash_map::Entry;
 use std::fmt::LowerHex;
-use std::mem::size_of;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 

@@ -1,7 +1,6 @@
 #![feature(once_cell_try)]
 
 use std::convert::TryFrom;
-use std::mem;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -61,9 +60,9 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         b"RSDT" => {
             thirty_two_bit = sdt
                 .data()
-                .chunks(mem::size_of::<u32>())
+                .chunks(size_of::<u32>())
                 // TODO: With const generics, the compiler has some way of doing this for static sizes.
-                .map(|chunk| <[u8; mem::size_of::<u32>()]>::try_from(chunk).unwrap())
+                .map(|chunk| <[u8; size_of::<u32>()]>::try_from(chunk).unwrap())
                 .map(|chunk| u32::from_le_bytes(chunk))
                 .map(u64::from);
 
@@ -72,8 +71,8 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         b"XSDT" => {
             sixty_four_bit = sdt
                 .data()
-                .chunks(mem::size_of::<u64>())
-                .map(|chunk| <[u8; mem::size_of::<u64>()]>::try_from(chunk).unwrap())
+                .chunks(size_of::<u64>())
+                .map(|chunk| <[u8; size_of::<u64>()]>::try_from(chunk).unwrap())
                 .map(|chunk| u64::from_le_bytes(chunk));
 
             &mut sixty_four_bit as &mut dyn Iterator<Item = u64>

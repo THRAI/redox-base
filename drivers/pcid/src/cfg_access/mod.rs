@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use std::{fs, io, mem};
+use std::{fs, io};
 
 use common::{MemoryType, PhysBorrowed, Prot};
 use fdt::Fdt;
@@ -190,10 +190,10 @@ impl Mcfg {
     }
 
     fn parse<'a>(bytes: &'a [u8]) -> Option<(&'a Mcfg, PcieAllocs<'a>)> {
-        if bytes.len() < mem::size_of::<Mcfg>() {
+        if bytes.len() < size_of::<Mcfg>() {
             return None;
         }
-        let (header_bytes, allocs_bytes) = bytes.split_at(mem::size_of::<Mcfg>());
+        let (header_bytes, allocs_bytes) = bytes.split_at(size_of::<Mcfg>());
 
         let mcfg =
             plain::from_bytes::<Mcfg>(header_bytes).expect("packed -> align 1, checked size");
@@ -203,8 +203,7 @@ impl Mcfg {
         }
         // TODO: Allow invalid bytes not divisible by PcieAlloc?
 
-        let allocs_len =
-            allocs_bytes.len() / mem::size_of::<PcieAlloc>() * mem::size_of::<PcieAlloc>();
+        let allocs_len = allocs_bytes.len() / size_of::<PcieAlloc>() * size_of::<PcieAlloc>();
 
         let allocs = plain::slice_from_bytes::<PcieAlloc>(&allocs_bytes[..allocs_len])
             .expect("packed -> align 1, checked size");

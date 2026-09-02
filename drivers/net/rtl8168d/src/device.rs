@@ -158,7 +158,7 @@ impl NetworkAdapter for Rtl8168 {
 
 impl Rtl8168 {
     pub unsafe fn new(base: usize) -> Result<Self> {
-        assert_eq!(mem::size_of::<Regs>(), 256);
+        assert_eq!(size_of::<Regs>(), 256);
 
         let regs = &mut *(base as *mut Regs);
         assert_eq!(&regs.tnpds as *const _ as usize - base, 0x20);

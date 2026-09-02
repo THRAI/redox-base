@@ -20,7 +20,7 @@ use std::convert::TryFrom;
 use std::io::prelude::*;
 use std::ops::{Add, Deref, Div, Rem};
 use std::sync::{atomic, LazyLock};
-use std::{cmp, fmt, io, mem, str};
+use std::{cmp, fmt, io, str};
 
 use common::dma::Dma;
 use common::io::Io;
@@ -445,7 +445,7 @@ impl<'a, T> fmt::Debug for DmaSliceDbg<'a, T> {
         f.debug_struct("Dma")
             .field("phys_ptr", &(dma.physical() as *const u8))
             .field("virt_ptr", &(dma.deref().as_ptr() as *const u8))
-            .field("length", &(dma.len() * mem::size_of::<T>()))
+            .field("length", &(dma.len() * size_of::<T>()))
             .finish()
     }
 }
@@ -1362,7 +1362,7 @@ impl<const N: usize> Xhci<N> {
                     div_round_up(
                         dma_buf.as_ref().map(|buf| buf.len()).unwrap_or(0),
                         max_transfer_size as usize,
-                    ) * mem::size_of::<Trb>(),
+                    ) * size_of::<Trb>(),
                 )
                 .ok()
                 .unwrap_or(0x1F),
@@ -1512,7 +1512,7 @@ impl<const N: usize> Xhci<N> {
                 desc
             );
 
-            let extra_length = desc.total_length as usize - mem::size_of_val(&desc);
+            let extra_length = desc.total_length as usize - size_of_val(&desc);
             let data = &data[..extra_length];
 
             let mut i = 0;

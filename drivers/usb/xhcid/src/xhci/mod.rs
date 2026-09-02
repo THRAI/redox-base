@@ -14,7 +14,7 @@ use std::convert::TryFrom;
 use std::fs::{self, File};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
-use std::{mem, process, slice, thread};
+use std::{process, slice, thread};
 
 use chashmap::CHashMap;
 use common::dma::Dma;
@@ -109,7 +109,7 @@ impl<const N: usize> Xhci<N> {
             debug!("EHB is already set!");
             self.force_clear_interrupt(0);
         }
-        let len = mem::size_of::<T>();
+        let len = size_of::<T>();
         log::debug!(
             "get_desc_raw port {} slot {} kind {:?} value {} index {} len {}",
             port,
@@ -455,7 +455,7 @@ impl<const N: usize> Xhci<N> {
 
         // Create the command ring with 4096 / 16 (TRB size) entries, so that it uses all of the
         // DMA allocation (which is at least a 4k page).
-        let entries_per_page = PAGE_SIZE / mem::size_of::<Trb>();
+        let entries_per_page = PAGE_SIZE / size_of::<Trb>();
         let cmd = Ring::new::<N>(cap.ac64(), entries_per_page, true)?;
 
         let (irq_reactor_sender, irq_reactor_receiver) = crossbeam_channel::unbounded();

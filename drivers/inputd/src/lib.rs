@@ -1,9 +1,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::mem::{self, size_of};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
-use std::slice;
+use std::{mem, slice};
 
 use libredox::flag::{O_CLOEXEC, O_NONBLOCK, O_RDWR};
 use libredox::Fd;
@@ -186,7 +185,7 @@ impl ProducerHandle {
 
     pub fn write_event(&mut self, event: orbclient::Event) -> io::Result<()> {
         let amount = self.0.write(&event)?;
-        assert!(amount == core::mem::size_of::<orbclient::Event>());
+        assert!(amount == size_of::<orbclient::Event>());
         Ok(())
     }
 }

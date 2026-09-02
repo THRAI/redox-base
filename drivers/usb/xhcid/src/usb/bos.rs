@@ -177,6 +177,6 @@ pub fn bos_capability_descs<'a>(
     desc: BosDescriptor,
     data: &'a [u8],
 ) -> impl Iterator<Item = BosAnyDevDesc> + 'a {
-    BosAnyDevDescIter::from(&data[..desc.total_len as usize - std::mem::size_of_val(&desc)])
+    BosAnyDevDescIter::from(&data[..desc.total_len as usize - size_of_val(&desc)])
         .take(desc.cap_count as usize)
 }

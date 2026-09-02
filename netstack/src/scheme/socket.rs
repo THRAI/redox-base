@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::{mem, str};
+use std::str;
 
 use libredox::flag::CLOCK_MONOTONIC;
 use libredox::protocol::SocketCall;
@@ -369,7 +369,7 @@ where
                     }
                 };
 
-                if buf.len() < mem::size_of::<TimeSpec>() {
+                if buf.len() < size_of::<TimeSpec>() {
                     Ok(0)
                 } else {
                     let count = timespec.deref().read(buf).map_err(|err| {
@@ -395,7 +395,7 @@ where
         match setting {
             Setting::ReadTimeout | Setting::WriteTimeout => {
                 let (timeout, count) = {
-                    if buf.len() < mem::size_of::<TimeSpec>() {
+                    if buf.len() < size_of::<TimeSpec>() {
                         (None, 0)
                     } else {
                         let mut timespec = TimeSpec::default();

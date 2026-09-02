@@ -7,8 +7,8 @@
 // TODO: Move this code to a separate driver as well?
 
 use std::convert::TryFrom;
+use std::fmt;
 use std::ops::Deref;
-use std::{fmt, mem};
 
 use common::io::Io as _;
 use num_derive::FromPrimitive;
@@ -35,7 +35,7 @@ pub struct Dmar(Sdt);
 
 impl Dmar {
     fn remmapping_structs_area(&self) -> &[u8] {
-        &self.0.as_slice()[mem::size_of::<DmarStruct>()..]
+        &self.0.as_slice()[size_of::<DmarStruct>()..]
     }
 }
 
@@ -93,11 +93,11 @@ impl Dmar {
             sdt.signature, *b"DMAR",
             "signature already checked against `DMAR`"
         );
-        if sdt.length() < mem::size_of::<DmarStruct>() {
+        if sdt.length() < size_of::<DmarStruct>() {
             log::error!(
                 "The DMAR table was too small ({} B < {} B).",
                 sdt.length(),
-                mem::size_of::<Dmar>()
+                size_of::<Dmar>()
             );
             return None;
         }
@@ -145,7 +145,7 @@ impl DeviceScope {
     pub fn try_new(raw: &[u8]) -> Option<Self> {
         // TODO: Check ty.
 
-        let header_bytes = match raw.get(..mem::size_of::<DeviceScopeHeader>()) {
+        let header_bytes = match raw.get(..size_of::<DeviceScopeHeader>()) {
             Some(bytes) => bytes,
             None => return None,
         };
@@ -182,7 +182,7 @@ impl Deref for DeviceScope {
 }
 impl DeviceScope {
     pub fn path(&self) -> &[u8] {
-        &self.0[mem::size_of::<DeviceScopeHeader>()..]
+        &self.0[size_of::<DeviceScopeHeader>()..]
     }
 }
 
@@ -190,14 +190,14 @@ pub struct DmarDrhd(Box<[u8]>);
 
 impl DmarDrhd {
     pub fn try_new(raw: &[u8]) -> Option<Self> {
-        if raw.len() < mem::size_of::<DmarDrhdHeader>() {
+        if raw.len() < size_of::<DmarDrhdHeader>() {
             return None;
         }
 
         Some(Self(raw.into()))
     }
     pub fn device_scope_area(&self) -> &[u8] {
-        &self.0[mem::size_of::<DmarDrhdHeader>()..]
+        &self.0[size_of::<DmarDrhdHeader>()..]
     }
     pub fn map(&self) -> DrhdPage {
         let base = usize::try_from(self.base).expect("expected u64 to fit within usize");
@@ -209,7 +209,7 @@ impl Deref for DmarDrhd {
     type Target = DmarDrhdHeader;
 
     fn deref(&self) -> &Self::Target {
-        plain::from_bytes::<DmarDrhdHeader>(&self.0[..mem::size_of::<DmarDrhdHeader>()])
+        plain::from_bytes::<DmarDrhdHeader>(&self.0[..size_of::<DmarDrhdHeader>()])
             .expect("length is already checked, and alignment 1 (#[repr(packed)] should suffice")
     }
 }
@@ -240,7 +240,7 @@ pub struct DmarRmrr(Box<[u8]>);
 
 impl DmarRmrr {
     pub fn try_new(raw: &[u8]) -> Option<Self> {
-        if raw.len() < mem::size_of::<DmarRmrrHeader>() {
+        if raw.len() < size_of::<DmarRmrrHeader>() {
             return None;
         }
 
@@ -251,7 +251,7 @@ impl Deref for DmarRmrr {
     type Target = DmarRmrrHeader;
 
     fn deref(&self) -> &Self::Target {
-        plain::from_bytes(&self.0[..mem::size_of::<DmarRmrrHeader>()])
+        plain::from_bytes(&self.0[..size_of::<DmarRmrrHeader>()])
             .expect("length already checked, and with #[repr(packed)] alignment should be okay")
     }
 }
@@ -281,7 +281,7 @@ pub struct DmarAtsr(Box<[u8]>);
 
 impl DmarAtsr {
     pub fn try_new(raw: &[u8]) -> Option<Self> {
-        if raw.len() < mem::size_of::<DmarAtsrHeader>() {
+        if raw.len() < size_of::<DmarAtsrHeader>() {
             return None;
         }
 
@@ -292,7 +292,7 @@ impl Deref for DmarAtsr {
     type Target = DmarAtsrHeader;
 
     fn deref(&self) -> &Self::Target {
-        plain::from_bytes(&self.0[..mem::size_of::<DmarAtsrHeader>()])
+        plain::from_bytes(&self.0[..size_of::<DmarAtsrHeader>()])
             .expect("length already checked, and with #[repr(packed)] alignment should be okay")
     }
 }
@@ -319,7 +319,7 @@ pub struct DmarRhsa {
 unsafe impl plain::Plain for DmarRhsa {}
 impl DmarRhsa {
     pub fn try_new(raw: &[u8]) -> Option<Self> {
-        let bytes = raw.get(..mem::size_of::<DmarRhsa>())?;
+        let bytes = raw.get(..size_of::<DmarRhsa>())?;
 
         let this = plain::from_bytes(bytes)
             .expect("length is already checked, and alignment 1 should suffice (#[repr(packed)])");
@@ -345,7 +345,7 @@ pub struct DmarAndd(Box<[u8]>);
 
 impl DmarAndd {
     pub fn try_new(raw: &[u8]) -> Option<Self> {
-        if raw.len() < mem::size_of::<DmarAnddHeader>() {
+        if raw.len() < size_of::<DmarAnddHeader>() {
             return None;
         }
 
@@ -356,7 +356,7 @@ impl Deref for DmarAndd {
     type Target = DmarAnddHeader;
 
     fn deref(&self) -> &Self::Target {
-        plain::from_bytes(&self.0[..mem::size_of::<DmarAnddHeader>()])
+        plain::from_bytes(&self.0[..size_of::<DmarAnddHeader>()])
             .expect("length already checked, and with #[repr(packed)] alignment should be okay")
     }
 }
@@ -387,7 +387,7 @@ pub struct DmarSatc(Box<[u8]>);
 
 impl DmarSatc {
     pub fn try_new(raw: &[u8]) -> Option<Self> {
-        if raw.len() < mem::size_of::<DmarSatcHeader>() {
+        if raw.len() < size_of::<DmarSatcHeader>() {
             return None;
         }
 
@@ -399,7 +399,7 @@ impl Deref for DmarSatc {
     type Target = DmarSatcHeader;
 
     fn deref(&self) -> &Self::Target {
-        plain::from_bytes(&self.0[..mem::size_of::<DmarSatcHeader>()])
+        plain::from_bytes(&self.0[..size_of::<DmarSatcHeader>()])
             .expect("length already checked, and with #[repr(packed)] alignment should be okay")
     }
 }

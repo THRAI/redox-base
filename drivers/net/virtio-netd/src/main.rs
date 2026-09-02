@@ -2,7 +2,6 @@ mod scheme;
 
 use std::fs::File;
 use std::io::{Read, Write};
-use std::mem;
 
 use driver_network::NetworkScheme;
 use pcid_interface::PciFunctionHandle;
@@ -23,7 +22,7 @@ pub struct VirtHeader {
     pub num_buffers: u16,
 }
 
-static_assertions::const_assert_eq!(core::mem::size_of::<VirtHeader>(), 12);
+static_assertions::const_assert_eq!(size_of::<VirtHeader>(), 12);
 
 const MAX_BUFFER_LEN: usize = 65535;
 fn main() {
@@ -125,7 +124,7 @@ fn daemon(
     scheme.tick()?;
 
     loop {
-        event_queue.read(&mut [0; mem::size_of::<syscall::Event>()])?; // Wait for event
+        event_queue.read(&mut [0; size_of::<syscall::Event>()])?; // Wait for event
         scheme.tick()?;
     }
 }

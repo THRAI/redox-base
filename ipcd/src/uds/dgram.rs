@@ -1,9 +1,9 @@
 //! uds scheme for handling Unix Domain Socket datagram communication
 
 use std::cell::RefCell;
+use std::cmp;
 use std::collections::{BTreeSet, VecDeque};
 use std::rc::Rc;
-use std::{cmp, mem};
 
 use libc::{AF_UNIX, SO_DOMAIN, SO_PASSCRED};
 use rand::Rng;
@@ -292,7 +292,7 @@ impl super::scheme::Socket for Socket {
         match option {
             SO_DOMAIN => {
                 payload.fill(0);
-                if payload.len() < mem::size_of::<i32>() {
+                if payload.len() < size_of::<i32>() {
                     eprintln!(
                         "handle_getsockopt(id: {}): SO_DOMAIN payload buffer is too small. len: {}",
                         id,

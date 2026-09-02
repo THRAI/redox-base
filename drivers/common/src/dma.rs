@@ -1,4 +1,4 @@
-use std::mem::{self, size_of, MaybeUninit};
+use std::mem::{self, MaybeUninit};
 use std::ops::{Deref, DerefMut};
 use std::ptr;
 use std::sync::LazyLock;
