@@ -1,16 +1,15 @@
 use std::error::Error;
+use std::ffi::CStr;
 use std::fs::File;
 use std::io::{self, ErrorKind, Read, Stderr, Write};
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::process::{Child, Command, Stdio};
-use std::ptr::slice_from_raw_parts;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::process::{Child, Command};
 use std::str;
 use std::time::{Duration, Instant};
 
 use event::{EventFlags, RawEventQueue};
-use libc::{grantpt, ptsname, strlen, unlockpt};
-use libredox::errno::EAGAIN;
-use libredox::{call as redox, flag};
+use libc::{EAGAIN, O_NONBLOCK, grantpt, ptsname, unlockpt};
 
 const _MAN_PAGE: &'static str = /* @MANSTART{getty} */
     r#"
@@ -56,39 +55,43 @@ fn fail<'a>(s: &'a str, stderr: &mut io::Stderr) -> ! {
 
 pub fn handle(
     event_queue: &mut RawEventQueue,
-    tty_fd: RawFd,
-    master_fd: RawFd,
+    tty: &mut File,
+    master: &mut File,
     process: &mut Child,
 ) {
     // tty_fd => Display
     // master_fd => PTY
 
-    let handle_event = |event_id: usize| {
+    let tty_fd = tty.as_raw_fd();
+    let master_fd = master.as_raw_fd();
+
+    let mut handle_event = |event_id: usize| {
         if event_id as RawFd == tty_fd {
             let mut packet = [0; 4096];
             loop {
-                let count = match redox::read(tty_fd as usize, &mut packet) {
+                let count = match tty.read(&mut packet) {
                     Ok(0) => return,
                     Ok(count) => count,
-                    Err(ref err) if err.errno() == EAGAIN => break,
+                    Err(ref err) if err.raw_os_error() == Some(EAGAIN) => break,
                     Err(_) => panic!("getty: failed to read from TTY"),
                 };
-                redox::write(master_fd as usize, &packet[..count])
+                master
+                    .write_all(&packet[..count])
                     .expect("getty: failed to write master PTY");
             }
         } else if event_id as RawFd == master_fd {
             let mut packet = [0; 4096];
             loop {
-                let count = match redox::read(master_fd as usize, &mut packet) {
+                let count = match master.read(&mut packet) {
                     Ok(0) => return,
                     Ok(count) => count,
-                    Err(ref err) if err.errno() == EAGAIN => break,
+                    Err(ref err) if err.raw_os_error() == Some(EAGAIN) => break,
                     Err(_) => panic!("getty: failed to read from master TTY"),
                 };
-                redox::write(tty_fd as usize, &packet[1..count])
+                tty.write_all(&packet[1..count])
                     .expect("getty: failed to write to TTY");
                 if packet[0] & 1 == 1 {
-                    let _ = redox::fsync(tty_fd as usize);
+                    let _ = tty.sync_all();
                 }
             }
         }
@@ -120,33 +123,36 @@ pub fn handle(
     process.wait().expect("getty: failed to wait on login");
 }
 
-pub fn getpty(columns: u16, lines: u16) -> (RawFd, String) {
-    let master = redox::open(
-        "/scheme/pty/ptmx",
-        flag::O_CLOEXEC | flag::O_RDWR | flag::O_CREAT | flag::O_NONBLOCK,
-        0,
-    )
-    .expect("getty: failed to create PTY");
+pub fn getpty(columns: u16, lines: u16) -> (File, String) {
+    let master = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .custom_flags(O_NONBLOCK)
+        .open("/scheme/pty/ptmx")
+        .expect("getty: failed to create PTY");
 
-    if let Ok(winsize_fd) = redox::dup(master, b"winsize") {
-        let _ = redox::write(
+    #[cfg(target_os = "redox")]
+    if let Ok(winsize_fd) = libredox::call::dup(master.as_raw_fd() as usize, b"winsize") {
+        let _ = libredox::call::write(
             winsize_fd,
             &redox_termios::Winsize {
                 ws_row: lines,
                 ws_col: columns,
             },
         );
-        let _ = redox::close(winsize_fd);
+        let _ = libredox::call::close(winsize_fd);
     }
-    let _ = unsafe { grantpt(master as RawFd) };
-    let _ = unsafe { unlockpt(master as RawFd) };
+    let _ = unsafe { grantpt(master.as_raw_fd()) };
+    let _ = unsafe { unlockpt(master.as_raw_fd()) };
 
-    let name = unsafe { ptsname(master as RawFd) };
-    let count = unsafe { strlen(name) };
-    let buf = unsafe { &*slice_from_raw_parts(name.cast(), count) };
-    (master as RawFd, unsafe {
-        String::from_utf8_unchecked(Vec::from(&buf[..count]))
-    })
+    let name = unsafe { CStr::from_ptr(ptsname(master.as_raw_fd())) };
+    (
+        master,
+        name.to_str()
+            .expect("ptsname returned non-UTF-8")
+            .to_owned(),
+    )
 }
 
 // termion cursor_pos prone to error and does not work on nonblocking files
@@ -208,31 +214,37 @@ fn tty_columns_lines(tty: &mut File) -> Result<(u16, u16), Box<dyn Error>> {
 
 fn daemon(tty: &mut File, clear: bool, contain: bool, stderr: &mut Stderr) {
     let (columns, lines) = tty_columns_lines(tty).unwrap_or((DEFAULT_COLS, DEFAULT_LINES));
-    let tty_fd = tty.as_raw_fd();
 
-    let (master_fd, pty) = getpty(columns, lines);
+    let (mut master, pty) = getpty(columns, lines);
 
+    // FIXME maybe switch to mio?
     let mut event_queue = event::RawEventQueue::new().expect("getty: failed to open event queue");
 
     event_queue
-        .subscribe(tty_fd as usize, 0, EventFlags::READ)
+        .subscribe(tty.as_raw_fd() as usize, 0, EventFlags::READ)
         .expect("getty: failed to fevent TTY");
 
     event_queue
-        .subscribe(master_fd as usize, 0, EventFlags::READ)
+        .subscribe(master.as_raw_fd() as usize, 0, EventFlags::READ)
         .expect("getty: failed to fevent master PTY");
 
     loop {
         if clear {
-            let _ = redox::write(tty_fd as usize, b"\x1Bc");
+            let _ = tty.write_all(b"\x1Bc");
         }
-        let _ = redox::fsync(tty_fd as usize);
+        let _ = tty.sync_all();
 
-        let slave_stdin = redox::open(&pty, flag::O_CLOEXEC | flag::O_RDONLY, 0)
+        let slave_stdin = File::options()
+            .read(true)
+            .open(&pty)
             .expect("getty: failed to open slave stdin");
-        let slave_stdout = redox::open(&pty, flag::O_CLOEXEC | flag::O_WRONLY, 0)
+        let slave_stdout = File::options()
+            .write(true)
+            .open(&pty)
             .expect("getty: failed to open slave stdout");
-        let slave_stderr = redox::open(&pty, flag::O_CLOEXEC | flag::O_WRONLY, 0)
+        let slave_stderr = File::options()
+            .write(true)
+            .open(&pty)
             .expect("getty: failed to open slave stderr");
 
         let mut command = if contain {
@@ -240,18 +252,16 @@ fn daemon(tty: &mut File, clear: bool, contain: bool, stderr: &mut Stderr) {
         } else {
             Command::new("login")
         };
-        unsafe {
-            command
-                .stdin(Stdio::from_raw_fd(slave_stdin as RawFd))
-                .stdout(Stdio::from_raw_fd(slave_stdout as RawFd))
-                .stderr(Stdio::from_raw_fd(slave_stderr as RawFd))
-                .env("TERM", "xterm-256color")
-                .env("TTY", &pty);
-        }
+        command
+            .stdin(slave_stdin)
+            .stdout(slave_stdout)
+            .stderr(slave_stderr)
+            .env("TERM", "xterm-256color")
+            .env("TTY", &pty);
 
         match command.spawn() {
             Ok(mut process) => {
-                handle(&mut event_queue, tty_fd, master_fd, &mut process);
+                handle(&mut event_queue, tty, &mut master, &mut process);
             }
             Err(err) => fail(&format!("getty: failed to execute login: {}", err), stderr),
         }
@@ -281,12 +291,13 @@ pub fn main() {
         vt
     };
 
-    let mut tty = match redox::open(
-        &vt_path,
-        flag::O_CLOEXEC | flag::O_RDWR | flag::O_NONBLOCK,
-        0,
-    ) {
-        Ok(fd) => unsafe { File::from_raw_fd(fd as RawFd) },
+    let mut tty = match File::options()
+        .read(true)
+        .write(true)
+        .custom_flags(O_NONBLOCK)
+        .open(&vt_path)
+    {
+        Ok(tty) => tty,
         Err(err) => fail(
             &format!("getty: failed to open TTY {}: {}", vt_path, err),
             &mut stderr,
