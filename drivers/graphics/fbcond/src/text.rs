@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use console_draw::alacritty_terminal::term;
 use orbclient::{Event, EventOption};
 use syscall::error::*;
 
@@ -16,7 +17,7 @@ impl TextScreen {
     pub fn new(display: Display, font: Option<console_draw::ConsoleFont>) -> TextScreen {
         TextScreen {
             display,
-            inner: console_draw::TextScreen::new(font),
+            inner: console_draw::TextScreen::new(font, term::Config::default()),
             ctrl: false,
             input: VecDeque::new(),
         }

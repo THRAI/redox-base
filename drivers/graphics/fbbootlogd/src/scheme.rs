@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
-use std::{cmp, io};
+use std::io;
 
-use console_draw::{Damage, TextScreen, V2DisplayMap};
+use console_draw::alacritty_terminal::grid::Scroll;
+use console_draw::alacritty_terminal::term;
+use console_draw::{TextScreen, V2DisplayMap};
 use drm::buffer::Buffer;
 use drm::control::Device;
 use graphics_ipc::V2GraphicsHandle;
@@ -26,21 +28,18 @@ pub struct FbbootlogSchemeData {
     pub input_handle: ConsumerHandle,
     display_map: Option<V2DisplayMap>,
     text_screen: console_draw::TextScreen,
-    text_buffer: console_draw::TextBuffer,
-    is_scrollback: bool,
-    scrollback_offset: usize,
     shift: bool,
 }
 
 impl FbbootlogSchemeData {
     pub fn new() -> Self {
+        let mut config = term::Config::default();
+        config.scrolling_history = 1000;
+
         let mut scheme_data = Self {
             input_handle: ConsumerHandle::bootlog_vt().expect("fbbootlogd: Failed to open vt"),
             display_map: None,
-            text_screen: console_draw::TextScreen::new(None),
-            text_buffer: console_draw::TextBuffer::new(1000),
-            is_scrollback: false,
-            scrollback_offset: 1000,
+            text_screen: console_draw::TextScreen::new(None, config),
             shift: false,
         };
 
@@ -80,76 +79,37 @@ impl FbbootlogSchemeData {
                 match key_event.scancode {
                     0x48 => {
                         // Up
-                        if self.scrollback_offset >= 1 {
-                            self.scrollback_offset -= 1;
-                        }
+                        self.text_screen.scroll_display(Scroll::Delta(1));
                     }
                     0x49 => {
                         // Page up
-                        if self.scrollback_offset >= 10 {
-                            self.scrollback_offset -= 10;
-                        } else {
-                            self.scrollback_offset = 0;
-                        }
+                        self.text_screen.scroll_display(Scroll::PageUp);
                     }
                     0x50 => {
                         // Down
-                        self.scrollback_offset += 1;
+                        self.text_screen.scroll_display(Scroll::Delta(-1));
                     }
                     0x51 => {
                         // Page down
-                        self.scrollback_offset += 10;
+                        self.text_screen.scroll_display(Scroll::PageDown);
                     }
                     0x47 => {
                         // Home
-                        self.scrollback_offset = 0;
+                        self.text_screen.scroll_display(Scroll::Bottom);
                     }
                     0x4F => {
                         // End
-                        self.scrollback_offset = self.text_buffer.lines_max;
+                        self.text_screen.scroll_display(Scroll::Top);
                     }
                     _ => return,
                 }
             }
             _ => return,
         }
-        self.handle_scrollback_render();
-    }
-
-    fn handle_scrollback_render(&mut self) {
-        let Some(map) = &mut self.display_map else {
-            return;
-        };
-        let buffer_len = self.text_buffer.lines.len();
-        // for both extra space on wrapping text and a scrollback indicator
-        let spare_lines = 3;
-        self.is_scrollback = true;
-        self.scrollback_offset = cmp::min(
-            self.scrollback_offset,
-            buffer_len - map.buffer.buffer().size().1 as usize / 16 + spare_lines,
-        );
-        let mut i = self.scrollback_offset;
-        self.text_screen
-            .write(map, b"\x1B[1;1H\x1B[2J", &mut VecDeque::new());
-
-        let mut total_damage = Damage::NONE;
-        while i < buffer_len {
-            let mut damage =
-                self.text_screen
-                    .write(map, &self.text_buffer.lines[i][..], &mut VecDeque::new());
-            i += 1;
-            let yd = (damage.y + damage.height) as usize;
-            if i == buffer_len || yd + spare_lines * 16 > map.buffer.buffer().size().1 as usize {
-                // render until end of screen
-                damage.height = map.buffer.buffer().size().1 - damage.y;
-                total_damage = total_damage.merge(damage);
-                self.is_scrollback = i < buffer_len;
-                break;
-            } else {
-                total_damage = total_damage.merge(damage);
-            }
+        if let Some(map) = &mut self.display_map {
+            let damage = self.text_screen.write(map, &[], &mut VecDeque::new());
+            map.dirty_fb(damage).unwrap();
         }
-        map.dirty_fb(total_damage).unwrap();
     }
 
     fn handle_resize(map: &mut V2DisplayMap, text_screen: &mut TextScreen) {
@@ -231,14 +191,11 @@ impl ResourceSync for Log {
     ) -> Result<usize> {
         if let Some(map) = &mut scheme_data.display_map {
             FbbootlogSchemeData::handle_resize(map, &mut scheme_data.text_screen);
-            scheme_data.text_buffer.write(buf);
 
-            if !scheme_data.is_scrollback {
-                let damage = scheme_data
-                    .text_screen
-                    .write(map, buf, &mut VecDeque::new());
-                map.dirty_fb(damage).unwrap();
-            }
+            let damage = scheme_data
+                .text_screen
+                .write(map, buf, &mut VecDeque::new());
+            map.dirty_fb(damage).unwrap();
         }
 
         Ok(buf.len())

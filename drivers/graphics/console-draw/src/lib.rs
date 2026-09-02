@@ -1,12 +1,25 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::convert::TryFrom;
+use std::rc::Rc;
 use std::{cmp, io, mem, ptr};
 
+use alacritty_terminal::event::{Event, EventListener};
+use alacritty_terminal::grid::{Dimensions, Indexed, Scroll};
+use alacritty_terminal::index::Point;
+use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::term::test::TermSize;
+use alacritty_terminal::term::{self, point_to_viewport, viewport_to_point, TermDamage};
+use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
+use alacritty_terminal::{vte, Term};
 use drm::buffer::{Buffer, DrmFourcc};
 use drm::control::{connector, crtc, framebuffer, ClipRect, Device, Mode};
 use graphics_ipc::{CpuBackedBuffer, V2GraphicsHandle};
 
 use orbclient::FONT;
+
+pub use alacritty_terminal;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Damage {
@@ -189,108 +202,157 @@ impl ConsoleFont {
     }
 }
 
+// Need an Rc here because Term doesn't allow access to the inner event listener
+struct TextScreenListener(Rc<RefCell<Vec<u8>>>);
+
+impl EventListener for TextScreenListener {
+    fn send_event(&self, event: Event) {
+        match event {
+            Event::PtyWrite(text) => self.0.borrow_mut().extend_from_slice(text.as_bytes()),
+            //Event::ColorRequest(_, _) => todo!(),
+            _ => {}
+        }
+    }
+}
+
 pub struct TextScreen {
-    console: ransid::Console,
+    vte_parser: vte::ansi::Processor,
+    term: Term<TextScreenListener>,
+    colors: Colors,
     font: ConsoleFont,
+    term_input: Rc<RefCell<Vec<u8>>>,
 }
 
 impl TextScreen {
-    pub fn new(font: Option<ConsoleFont>) -> TextScreen {
+    pub fn new(font: Option<ConsoleFont>, config: term::Config) -> TextScreen {
+        // Color palette derived from ransid crate
+        let rgb = |r, g, b| Rgb { r, g, b };
+        let mut colors = Colors::default();
+        for value in 0u8..=255 {
+            colors[usize::from(value)] = Some(match value {
+                0 => rgb(0x00, 0x00, 0x00),
+                1 => rgb(0x80, 0x00, 0x00),
+                2 => rgb(0x00, 0x80, 0x00),
+                3 => rgb(0x80, 0x80, 0x00),
+                4 => rgb(0x00, 0x00, 0x80),
+                5 => rgb(0x80, 0x00, 0x80),
+                6 => rgb(0x00, 0x80, 0x80),
+                7 => rgb(0xc0, 0xc0, 0xc0),
+                8 => rgb(0x80, 0x80, 0x80),
+                9 => rgb(0xff, 0x00, 0x00),
+                10 => rgb(0x00, 0xff, 0x00),
+                11 => rgb(0xff, 0xff, 0x00),
+                12 => rgb(0x00, 0x00, 0xff),
+                13 => rgb(0xff, 0x00, 0xff),
+                14 => rgb(0x00, 0xff, 0xff),
+                15 => rgb(0xff, 0xff, 0xff),
+                16..=231 => {
+                    let convert = |value: u8| -> u8 {
+                        match value {
+                            0 => 0,
+                            _ => value * 0x28 + 0x28,
+                        }
+                    };
+                    let r = convert((value - 16) / 36 % 6);
+                    let g = convert((value - 16) / 6 % 6);
+                    let b = convert((value - 16) % 6);
+                    rgb(r, g, b)
+                }
+                232..=255 => {
+                    let gray = (value - 232) * 10 + 8;
+                    rgb(gray, gray, gray)
+                }
+            });
+        }
+        colors[NamedColor::Foreground] = colors[NamedColor::White];
+        colors[NamedColor::Background] = colors[NamedColor::Black];
+        colors[NamedColor::Cursor] = Some(Rgb { r: 0, g: 0, b: 0 });
+        colors[NamedColor::DimBlack] = colors[NamedColor::Black];
+        colors[NamedColor::DimRed] = colors[NamedColor::Red];
+        colors[NamedColor::DimGreen] = colors[NamedColor::Green];
+        colors[NamedColor::DimYellow] = colors[NamedColor::Yellow];
+        colors[NamedColor::DimBlue] = colors[NamedColor::Blue];
+        colors[NamedColor::DimMagenta] = colors[NamedColor::Magenta];
+        colors[NamedColor::DimCyan] = colors[NamedColor::Cyan];
+        colors[NamedColor::DimWhite] = colors[NamedColor::White];
+        colors[NamedColor::BrightForeground] = colors[NamedColor::BrightWhite];
+        colors[NamedColor::DimForeground] = colors[NamedColor::DimWhite];
+
+        let term_input = Rc::new(RefCell::new(Vec::new()));
+
         TextScreen {
-            // Width and height will be filled in on the next write to the console
-            console: ransid::Console::new(0, 0),
+            vte_parser: vte::ansi::Processor::new(),
+            colors,
+            term: Term::new(
+                config,
+                // Width and height will be filled in on the next write to the console
+                &TermSize::new(1, 1),
+                TextScreenListener(term_input.clone()),
+            ),
             font: font.unwrap_or_else(|| ConsoleFont::new(FONT.to_vec(), 8, 16)),
+            term_input,
         }
     }
 
-    /// Draw a rectangle
-    fn rect(map: &mut DisplayMap, x: usize, y: usize, w: usize, h: usize, color: u32) {
-        let start_y = cmp::min(map.height, y);
-        let end_y = cmp::min(map.height, y + h);
-
-        let start_x = cmp::min(map.width, x);
-        let len = cmp::min(map.width, x + w) - start_x;
-
-        let mut offscreen_ptr = map.offscreen as *mut u8 as usize;
-
-        let stride = map.width * 4;
-
-        let offset = y * stride + start_x * 4;
-        offscreen_ptr += offset;
-
-        let mut rows = end_y - start_y;
-        while rows > 0 {
-            for i in 0..len {
-                unsafe {
-                    *(offscreen_ptr as *mut u32).add(i) = color;
-                }
-            }
-            offscreen_ptr += stride;
-            rows -= 1;
-        }
+    pub fn scroll_display(&mut self, scroll: Scroll) {
+        self.term.scroll_display(scroll);
     }
 
-    /// Invert a rectangle
-    fn invert(map: &mut DisplayMap, x: usize, y: usize, w: usize, h: usize) {
-        let start_y = cmp::min(map.height, y);
-        let end_y = cmp::min(map.height, y + h);
+    fn lookup_color(term_colors: &Colors, default_colors: &Colors, color: Color) -> u32 {
+        let rgb = match color {
+            Color::Named(name) => term_colors[name].unwrap_or(default_colors[name].unwrap()),
+            Color::Spec(rgb) => rgb,
+            Color::Indexed(index) => term_colors[usize::from(index)]
+                .unwrap_or(default_colors[usize::from(index)].unwrap()),
+        };
 
-        let start_x = cmp::min(map.width, x);
-        let len = cmp::min(map.width, x + w) - start_x;
-
-        let mut offscreen_ptr = map.offscreen as *mut u8 as usize;
-
-        let stride = map.width * 4;
-
-        let offset = y * stride + start_x * 4;
-        offscreen_ptr += offset;
-
-        let mut rows = end_y - start_y;
-        while rows > 0 {
-            let mut row_ptr = offscreen_ptr;
-            let mut cols = len;
-            while cols > 0 {
-                unsafe {
-                    let color = *(row_ptr as *mut u32);
-                    *(row_ptr as *mut u32) = !color;
-                }
-                row_ptr += 4;
-                cols -= 1;
-            }
-            offscreen_ptr += stride;
-            rows -= 1;
-        }
+        0xFF000000 | u32::from(rgb.r) << 16 | u32::from(rgb.g) << 8 | u32::from(rgb.b)
     }
 
-    /// Draw a character
-    fn char(
+    fn draw_cell(
         map: &mut DisplayMap,
-        x: usize,
-        y: usize,
-        character: char,
         font: &ConsoleFont,
-        color: u32,
-        _bold: bool,
-        _italic: bool,
-    ) {
+        term_colors: &Colors,
+        default_colors: &Colors,
+        display_offset: usize,
+        cell: Indexed<&Cell>,
+    ) -> Option<Point<usize>> {
+        let Some(point) = point_to_viewport(display_offset, cell.point) else {
+            return None;
+        };
+
+        let x = point.column.0 * font.width;
+        let y = point.line * font.height;
+
+        let mut bg_color = Self::lookup_color(term_colors, default_colors, cell.bg);
+        let mut fg_color = Self::lookup_color(term_colors, default_colors, cell.fg);
+        if cell.flags.contains(Flags::INVERSE) {
+            mem::swap(&mut bg_color, &mut fg_color);
+        }
+
+        let _bold = cell.flags.contains(Flags::BOLD);
+        let _italic = cell.flags.contains(Flags::ITALIC);
+
         if x + font.width <= map.width && y + font.height <= map.height {
             let mut dst = map.offscreen as *mut u8 as usize + (y * map.width + x) * 4;
 
-            let font_i = font.height * (character as usize);
+            let font_i = font.height * (cell.c as usize);
             if font_i + font.height <= font.glyphs.len() {
                 for row in 0..font.height {
                     let row_data = font.glyphs[font_i + row];
                     for col in 0..font.width {
                         if (row_data >> (7 - col)) & 1 == 1 {
-                            unsafe {
-                                *((dst + col * 4) as *mut u32) = color;
-                            }
+                            unsafe { *((dst + col * 4) as *mut u32) = fg_color };
+                        } else {
+                            unsafe { *((dst + col * 4) as *mut u32) = bg_color };
                         }
                     }
                     dst += map.width * 4;
                 }
             }
         }
+
+        Some(point)
     }
 }
 
@@ -324,131 +386,34 @@ impl TextScreen {
             }
         };
 
-        self.console
-            .resize(map.width / self.font.width, map.height / self.font.height);
-        if self.console.state.x >= self.console.state.w {
-            self.console.state.x = self.console.state.w - 1;
-        }
-        if self.console.state.y >= self.console.state.h {
-            self.console.state.y = self.console.state.h - 1;
-        }
+        self.term.resize(TermSize::new(
+            map.width / self.font.width,
+            map.height / self.font.height,
+        ));
 
-        if self.console.state.cursor
-            && self.console.state.x < self.console.state.w
-            && self.console.state.y < self.console.state.h
         {
-            let x = self.console.state.x;
-            let y = self.console.state.y;
-            Self::invert(
+            let term_content = self.term.renderable_content();
+            let point = term_content.cursor.point;
+            let cell = &self.term.grid()[point];
+            if let Some(point) = Self::draw_cell(
                 map,
-                x * self.font.width,
-                y * self.font.height,
-                self.font.width,
-                self.font.height,
-            );
-            col_changed(x);
-            line_changed(y);
+                &self.font,
+                term_content.colors,
+                &self.colors,
+                term_content.display_offset,
+                Indexed { point, cell },
+            ) {
+                col_changed(point.column.0);
+                line_changed(point.line);
+            }
         }
 
-        self.console.write(buf, |event| match event {
-            ransid::Event::Char {
-                x,
-                y,
-                c,
-                color,
-                bold,
-                ..
-            } => {
-                Self::char(
-                    map,
-                    x * self.font.width,
-                    y * self.font.height,
-                    c,
-                    &self.font,
-                    color.as_rgb(),
-                    bold,
-                    false,
-                );
-                col_changed(x);
-                line_changed(y);
-            }
-            ransid::Event::Input { data } => input.extend(data),
-            ransid::Event::Rect { x, y, w, h, color } => {
-                Self::rect(
-                    map,
-                    x * self.font.width,
-                    y * self.font.height,
-                    w * self.font.width,
-                    h * self.font.height,
-                    color.as_rgb(),
-                );
-                for y2 in y..y + h {
-                    line_changed(y2);
-                }
-                for x2 in x..x + w {
-                    col_changed(x2);
-                }
-            }
-            ransid::Event::ScreenBuffer { .. } => (),
-            ransid::Event::Move {
-                from_x,
-                from_y,
-                to_x,
-                to_y,
-                w,
-                h,
-            } => {
-                let width = map.width;
-                let pixels = unsafe { &mut *map.offscreen };
+        self.vte_parser.advance(&mut self.term, buf);
+        self.vte_parser.stop_sync(&mut self.term); // FIXME
 
-                for raw_y in 0..h {
-                    let y = if from_y > to_y { raw_y } else { h - raw_y - 1 };
+        self.redraw(map, col_changed, line_changed);
 
-                    for pixel_y in 0..self.font.height {
-                        {
-                            let off_from = ((from_y + y) * self.font.height + pixel_y) * width
-                                + from_x * self.font.width;
-                            let off_to = ((to_y + y) * self.font.height + pixel_y) * width
-                                + to_x * self.font.width;
-                            let len = w * self.font.width;
-
-                            if off_from + len <= pixels.len() && off_to + len <= pixels.len() {
-                                unsafe {
-                                    let data_ptr = pixels.as_mut_ptr() as *mut u32;
-                                    ptr::copy(
-                                        data_ptr.offset(off_from as isize),
-                                        data_ptr.offset(off_to as isize),
-                                        len,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    for col in to_x..to_x + w {
-                        col_changed(col);
-                    }
-                    line_changed(to_y + y);
-                }
-            }
-            ransid::Event::Resize { .. } => (),
-            ransid::Event::Title { .. } => (),
-        });
-
-        if self.console.state.cursor
-            && self.console.state.x < self.console.state.w
-            && self.console.state.y < self.console.state.h
-        {
-            let x = self.console.state.x;
-            let y = self.console.state.y;
-            Self::invert(
-                map,
-                x * self.font.width,
-                y * self.font.height,
-                self.font.width,
-                self.font.height,
-            );
-            line_changed(y);
-        }
+        input.extend(self.term_input.borrow_mut().drain(..));
 
         let damage = Damage {
             x: u32::try_from(min_changed_x).unwrap() * self.font.width as u32,
@@ -462,23 +427,69 @@ impl TextScreen {
         damage
     }
 
-    pub fn resize(&mut self, map: &mut V2DisplayMap, mode: Mode) -> io::Result<()> {
-        // FIXME fold row when target is narrower and maybe unfold when it is wider
-        fn copy_row(
-            old_map: &mut DisplayMap,
-            new_map: &mut DisplayMap,
-            from_row: usize,
-            to_row: usize,
-        ) {
-            for x in 0..cmp::min(old_map.width, new_map.width) {
-                let old_idx = from_row * old_map.width + x;
-                let new_idx = to_row * new_map.width + x;
-                unsafe {
-                    (*new_map.offscreen)[new_idx] = (*old_map.offscreen)[old_idx];
+    fn redraw(
+        &mut self,
+        map: &mut DisplayMap,
+        mut col_changed: impl FnMut(usize),
+        mut line_changed: impl FnMut(usize),
+    ) {
+        let display_offset = self.term.grid().display_offset();
+        // FIXME handle column damage
+        let changed_lines = match self.term.damage() {
+            TermDamage::Full => (0..self.term.screen_lines()).collect::<Vec<_>>(),
+            TermDamage::Partial(term_damage_iterator) => term_damage_iterator
+                .map(|damage| damage.line)
+                .collect::<Vec<_>>(),
+        };
+
+        let term_content = self.term.renderable_content();
+        for line in changed_lines {
+            let last_column = self.term.grid().last_column();
+            for cell in self
+                .term
+                .grid()
+                .iter_from(viewport_to_point(
+                    display_offset,
+                    // For whatever reason iter_from skips the point you give it:
+                    // https://github.com/alacritty/alacritty/issues/9038
+                    Point::new(line - 1, last_column),
+                ))
+                .take(self.term.grid().columns())
+            {
+                if let Some(point) = Self::draw_cell(
+                    map,
+                    &self.font,
+                    term_content.colors,
+                    &self.colors,
+                    display_offset,
+                    cell,
+                ) {
+                    col_changed(point.column.0);
+                    line_changed(point.line);
                 }
             }
         }
 
+        {
+            let point = term_content.cursor.point;
+            let mut cell = self.term.grid()[point].clone();
+            cell.flags ^= Flags::INVERSE;
+            if let Some(point) = Self::draw_cell(
+                map,
+                &self.font,
+                term_content.colors,
+                &self.colors,
+                display_offset,
+                Indexed { point, cell: &cell },
+            ) {
+                col_changed(point.column.0);
+                line_changed(point.line);
+            }
+        }
+        self.term.reset_damage();
+    }
+
+    pub fn resize(&mut self, map: &mut V2DisplayMap, mode: Mode) -> io::Result<()> {
         let mut new_buffer = CpuBackedBuffer::new(
             &map.display_handle,
             (u32::from(mode.size().0), u32::from(mode.size().1)),
@@ -491,40 +502,14 @@ impl TextScreen {
 
         new_buffer.shadow_buf().fill(0);
 
+        let old_buffer = mem::replace(&mut map.buffer, new_buffer);
+        let old_fb = mem::replace(&mut map.fb, new_fb);
+
         {
-            let old_map = unsafe { &mut map.console_map() };
-
-            let new_size = new_buffer.buffer().size();
-            let new_shadow_buf = new_buffer.shadow_buf();
-            let new_map = &mut DisplayMap {
-                offscreen: ptr::slice_from_raw_parts_mut(
-                    new_shadow_buf.as_mut_ptr() as *mut u32,
-                    new_shadow_buf.len() / 4,
-                ),
-                width: new_size.0 as usize,
-                height: new_size.1 as usize,
-            };
-
-            if new_map.height >= old_map.height {
-                for row in 0..old_map.height {
-                    copy_row(old_map, new_map, row, row);
-                }
-            } else {
-                let deleted_rows = (old_map.height - new_map.height).div_ceil(self.font.height);
-                for row in 0..new_map.height {
-                    if row + (deleted_rows + 1) * self.font.height >= old_map.height {
-                        break;
-                    }
-                    copy_row(old_map, new_map, row + deleted_rows * self.font.height, row);
-                }
-                self.console.state.y = self.console.state.y.saturating_sub(deleted_rows);
-            }
+            let mut map = unsafe { map.console_map() };
+            self.redraw(&mut map, |_| {}, |_| {});
         }
 
-        let old_buffer = mem::replace(&mut map.buffer, new_buffer);
-        old_buffer.destroy(&map.display_handle)?;
-
-        let old_fb = mem::replace(&mut map.fb, new_fb);
         map.display_handle.set_crtc(
             map.crtc,
             Some(map.fb),
@@ -532,42 +517,10 @@ impl TextScreen {
             &[map.connector],
             Some(mode),
         )?;
+
+        old_buffer.destroy(&map.display_handle)?;
         let _ = map.display_handle.destroy_framebuffer(old_fb);
 
         Ok(())
-    }
-}
-
-pub struct TextBuffer {
-    pub lines: VecDeque<Vec<u8>>,
-    pub lines_max: usize,
-}
-
-impl TextBuffer {
-    pub fn new(max: usize) -> Self {
-        let mut lines = VecDeque::new();
-        lines.push_back(Vec::new());
-        Self {
-            lines,
-            lines_max: max,
-        }
-    }
-    pub fn write(&mut self, buf: &[u8]) {
-        if buf.is_empty() {
-            return;
-        }
-
-        for &byte in buf {
-            self.lines.back_mut().unwrap().push(byte);
-
-            if byte == b'\n' {
-                self.lines.push_back(Vec::new());
-            }
-        }
-
-        let max_len = self.lines_max;
-        while self.lines.len() > max_len {
-            self.lines.pop_front();
-        }
     }
 }

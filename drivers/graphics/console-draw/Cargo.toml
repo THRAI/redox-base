@@ -5,9 +5,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+alacritty_terminal = { version = "0.26.0", default-features = false }
 drm.workspace = true
 orbclient.workspace = true
-ransid.workspace = true
 psf-rs.workspace = true
 
 graphics-ipc = { path = "../graphics-ipc" }

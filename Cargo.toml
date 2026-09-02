@@ -91,7 +91,6 @@ psf-rs = "2.2.0"
 parking_lot = "0.12"
 pico-args = "0.5"
 plain = "0.2.3"
-ransid = "0.4"
 redox_event = "0.4.8"
 redox-ioctl = { git = "https://gitlab.redox-os.org/redox-os/relibc.git" }
 redox-log = { git = "https://gitlab.redox-os.org/redox-os/redox-log.git" }

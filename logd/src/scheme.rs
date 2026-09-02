@@ -120,6 +120,10 @@ impl LogSchemeData {
                     let _ = kernel_debug.flush();
                 }
 
+                // fbbootlogd requires \r\n
+                handle_buf.pop();
+                handle_buf.extend(b"\r\n");
+
                 output_tx
                     .send(OutputCmd::Log(mem::take(handle_buf)))
                     .unwrap();
