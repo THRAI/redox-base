@@ -8,7 +8,6 @@ edition = "2021"
 drm.workspace = true
 log.workspace = true
 orbclient.workspace = true
-ransid.workspace = true
 redox_event.workspace = true
 redox_syscall.workspace = true
 redox-scheme.workspace = true

@@ -1,4 +1,4 @@
-use console_draw::{TextScreen, V2DisplayMap};
+use console_draw::V2DisplayMap;
 use drm::buffer::Buffer;
 use drm::control::Device;
 use graphics_ipc::V2GraphicsHandle;
@@ -51,7 +51,7 @@ impl Display {
         }
     }
 
-    pub fn handle_resize(map: &mut V2DisplayMap, text_screen: &mut TextScreen) {
+    pub fn handle_resize(map: &mut V2DisplayMap) -> Option<drm::control::Mode> {
         let mode = match map
             .display_handle
             .get_connector(map.connector, false)
@@ -60,18 +60,14 @@ impl Display {
             Ok(mode) => mode,
             Err(err) => {
                 eprintln!("fbcond: failed to get display size: {}", err);
-                return;
+                return None;
             }
         };
 
         if (u32::from(mode.size().0), u32::from(mode.size().1)) != map.buffer.buffer().size() {
-            match text_screen.resize(map, mode) {
-                Ok(()) => eprintln!("fbcond: mapped display"),
-                Err(err) => {
-                    eprintln!("fbcond: failed to create or map framebuffer: {}", err);
-                    return;
-                }
-            }
+            return Some(mode);
         }
+
+        None
     }
 }

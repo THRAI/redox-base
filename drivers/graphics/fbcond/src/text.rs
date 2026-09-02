@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use console_draw::alacritty_terminal::term;
 use orbclient::{Event, EventOption};
 use syscall::error::*;
 
@@ -16,7 +17,7 @@ impl TextScreen {
     pub fn new(display: Display, font: Option<console_draw::ConsoleFont>) -> TextScreen {
         TextScreen {
             display,
-            inner: console_draw::TextScreen::new(font),
+            inner: console_draw::TextScreen::new(font, term::Config::default()),
             ctrl: false,
             input: VecDeque::new(),
         }
@@ -124,7 +125,14 @@ impl TextScreen {
 
     pub fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if let Some(map) = &mut self.display.map {
-            Display::handle_resize(map, &mut self.inner);
+            if let Some(new_mode) = Display::handle_resize(map) {
+                match self.inner.resize(map, new_mode) {
+                    Ok(()) => eprintln!("fbcond: mapped display"),
+                    Err(err) => {
+                        eprintln!("fbcond: failed to create or map framebuffer: {}", err);
+                    }
+                }
+            }
 
             let damage = self.inner.write(map, buf, &mut self.input);
             map.dirty_fb(damage).unwrap();
