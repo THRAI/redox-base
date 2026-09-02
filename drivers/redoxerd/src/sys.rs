@@ -51,15 +51,36 @@ mod imp {
 
 #[cfg(target_arch = "riscv64")]
 mod imp {
+    use fdt::Fdt;
+
+    #[cfg(target_os = "redox")]
+    fn get_dtb() -> Vec<u8> {
+        std::fs::read("/scheme/kernel.dtb").unwrap()
+    }
+
+    #[cfg(not(target_os = "redox"))]
+    fn get_dtb() -> Vec<u8> {
+        unimplemented!()
+    }
+
     use common::{physmap, MemoryType, Prot};
     use qemu_exit::QEMUExit;
 
-    // https://github.com/rust-embedded/qemu-exit/blob/main/tests/exit_13.rs
-    const TEST_BASE: usize = 0x10_0000;
-
     pub fn exit(success: bool) {
         common::init();
-        let addr = unsafe { physmap(TEST_BASE, 0x1000, Prot::RW, MemoryType::Uncacheable) }
+        let dtb_data = get_dtb();
+        if dtb_data.len() == 0 {
+            panic!("dtb is empty");
+        }
+
+        let fdt = Fdt::new(&dtb_data).unwrap();
+        let with = ["sifive,test1"];
+        let compat_node = fdt.find_compatible(&with).unwrap();
+        let reg = compat_node.reg().unwrap().next().unwrap();
+        let reg_size = reg.size.unwrap();
+        let reg_addr = reg.starting_address as usize;
+
+        let addr = unsafe { physmap(reg_addr, reg_size, Prot::RW, MemoryType::Uncacheable) }
             .expect("unable to physmap redoxer device");
         let q = qemu_exit::RISCV64::new(addr.addr() as u64);
         if success {

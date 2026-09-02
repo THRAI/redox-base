@@ -6,6 +6,7 @@ authors = ["Jeremy Soller <jackpot51@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+fdt.workspace = true
 anyhow.workspace = true
 libc.workspace = true
 libredox.workspace = true
