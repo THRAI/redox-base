@@ -11,11 +11,9 @@ use std::str;
 use std::time::{Duration, Instant};
 
 use event::{EventFlags, RawEventQueue};
-use extra::io::fail;
 use libc::{grantpt, ptsname, strlen, unlockpt};
-use libredox::call as redox;
 use libredox::errno::EAGAIN;
-use libredox::flag;
+use libredox::{call as redox, flag};
 
 const _MAN_PAGE: &'static str = /* @MANSTART{getty} */
     r#"
@@ -47,6 +45,17 @@ AUTHOR
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_LINES: u16 = 30;
+
+/// Print error message to standard error, and exit with code, _1_.
+fn fail<'a>(s: &'a str, stderr: &mut io::Stderr) -> ! {
+    let mut stderr = stderr.lock();
+
+    let _ = stderr.write(b"error: ");
+    let _ = stderr.write(s.as_bytes());
+    let _ = stderr.write(b"\n");
+    let _ = stderr.flush();
+    std::process::exit(1);
+}
 
 pub fn handle(
     event_queue: &mut RawEventQueue,

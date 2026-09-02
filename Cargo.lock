@@ -831,11 +831,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "extra"
-version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/libextra.git#cf213969493db8667052a591e32a1e26d43c4234"
-
-[[package]]
 name = "fake-simd"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1034,7 +1029,6 @@ name = "getty"
 version = "0.1.0"
 dependencies = [
  "clap 2.34.0",
- "extra",
  "libc",
  "libredox",
  "redox_event",
