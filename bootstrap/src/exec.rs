@@ -134,6 +134,7 @@ pub fn main() -> ! {
 
     let (scheme_creation_cap, auth, kernel_schemes, initfs_fd) = spawn(
         "initfs daemon",
+        "initfs",
         auth,
         &this_thr_fd,
         scheme_creation_cap,
@@ -162,6 +163,7 @@ pub fn main() -> ! {
 
     let (scheme_creation_cap, auth, kernel_schemes, proc_fd) = spawn(
         "process manager",
+        "procmgr",
         auth,
         &this_thr_fd,
         scheme_creation_cap,
@@ -182,6 +184,7 @@ pub fn main() -> ! {
         .expect("failed to dup scheme creation cap");
     let (_, _, _, initns_fd) = spawn(
         "init namespace manager",
+        "initnsmgr",
         auth,
         &this_thr_fd,
         scheme_creation_cap,
@@ -285,6 +288,7 @@ pub fn main() -> ! {
 
 pub(crate) fn spawn(
     name: &str,
+    short_name: &str,
     auth: FdGuard,
     this_thr_fd: &FdGuardUpper,
     scheme_creation_cap: FdGuard,
@@ -313,6 +317,7 @@ pub(crate) fn spawn(
     match fork_impl(&ForkArgs::Init {
         this_thr_fd,
         auth: &auth,
+        name: short_name,
     }) {
         Err(err) => {
             panic!("Failed to fork in order to start {name}: {err}");
