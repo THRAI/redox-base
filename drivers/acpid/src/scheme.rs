@@ -1,25 +1,22 @@
+use core::str;
+use std::convert::{TryFrom, TryInto};
+use std::str::FromStr;
+
 use acpi::aml::namespace::AmlName;
 use amlserde::AmlSerdeValue;
 use amlserde::aml_serde_name::to_aml_format;
-use core::str;
 use libredox::Fd;
 use parking_lot::RwLockReadGuard;
 use redox_scheme::scheme::SchemeSync;
 use redox_scheme::{CallerCtx, OpenResult, SendFdRequest, Socket};
 use ron::de::SpannedError;
 use scheme_utils::HandleMap;
-use std::convert::{TryFrom, TryInto};
-use std::str::FromStr;
-use syscall::FobtainFdFlags;
-use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
-use syscall::schemev2::NewFdFlags;
-
 use syscall::data::Stat;
-use syscall::error::{EACCES, EBADF, EBADFD, EINVAL, EIO, EISDIR, ENOENT, ENOTDIR};
-use syscall::error::{Error, Result};
-use syscall::flag::{MODE_DIR, MODE_FILE};
-use syscall::flag::{O_ACCMODE, O_DIRECTORY, O_RDONLY, O_STAT, O_SYMLINK};
-use syscall::{EOVERFLOW, EPERM};
+use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
+use syscall::error::{EACCES, EBADF, EBADFD, EINVAL, EIO, EISDIR, ENOENT, ENOTDIR, Error, Result};
+use syscall::flag::{MODE_DIR, MODE_FILE, O_ACCMODE, O_DIRECTORY, O_RDONLY, O_STAT, O_SYMLINK};
+use syscall::schemev2::NewFdFlags;
+use syscall::{EOVERFLOW, EPERM, FobtainFdFlags};
 
 use crate::acpi::{AcpiContext, AmlSymbols, SdtSignature};
 

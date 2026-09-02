@@ -5,7 +5,7 @@ use common::{MemoryType, PhysBorrowed, Prot};
 use fdt::Fdt;
 use pci_types::{ConfigRegionAccess, PciAddress};
 
-use fallback::Pci;
+use self::fallback::Pci;
 
 mod fallback;
 

@@ -11,7 +11,6 @@ use std::ops::Deref;
 use std::{fmt, mem};
 
 use common::io::Io as _;
-
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 

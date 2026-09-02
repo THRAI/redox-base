@@ -1,6 +1,8 @@
-use amlserde::{AmlSerde, AmlSerdeValue};
-use std::{error::Error, fs, process::Command};
+use std::error::Error;
+use std::fs;
+use std::process::Command;
 
+use amlserde::{AmlSerde, AmlSerdeValue};
 use libredox::Fd;
 use syscall::flag::{AcpiVerb, CallFlags};
 

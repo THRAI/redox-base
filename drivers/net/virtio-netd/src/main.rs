@@ -7,7 +7,7 @@ use std::mem;
 use driver_network::NetworkScheme;
 use pcid_interface::PciFunctionHandle;
 
-use scheme::VirtioNet;
+use crate::scheme::VirtioNet;
 
 pub const VIRTIO_NET_F_MAC: u32 = 5;
 

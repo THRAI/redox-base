@@ -1,12 +1,11 @@
+use std::convert::TryInto;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::time::Duration;
+
 use inputd::ProducerHandle;
 use log::{error, warn};
 use orbclient::{ButtonEvent, KeyEvent, MouseEvent, MouseRelativeEvent, ScrollEvent};
-use std::{
-    convert::TryInto,
-    fs::File,
-    io::{Read, Write},
-    time::Duration,
-};
 use syscall::TimeSpec;
 
 use crate::controller::Ps2;

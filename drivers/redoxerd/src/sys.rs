@@ -12,8 +12,7 @@ pub fn debug_char(b: u8) {
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod imp {
-    use syscall::Io;
-    use syscall::Pio;
+    use syscall::{Io, Pio};
 
     pub fn exit(success: bool) {
         if success {

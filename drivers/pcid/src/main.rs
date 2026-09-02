@@ -9,11 +9,11 @@ use pci_types::{
     Bar as TyBar, CommandRegister, EndpointHeader, HeaderType, PciAddress,
     PciHeader as TyPciHeader, PciPciBridgeHeader,
 };
+use pcid_interface::{FullDeviceId, LegacyInterruptLine, PciBar, PciFunction, PciRom};
 use redox_scheme::scheme::register_sync_scheme;
 use scheme_utils::Blocking;
 
 use crate::cfg_access::Pcie;
-use pcid_interface::{FullDeviceId, LegacyInterruptLine, PciBar, PciFunction, PciRom};
 
 mod cfg_access;
 mod driver_handler;

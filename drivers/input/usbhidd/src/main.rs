@@ -1,14 +1,13 @@
-use anyhow::{Context, Result};
-use std::{collections::HashMap, env, thread, time};
+use std::collections::HashMap;
+use std::{env, thread, time};
 
+use anyhow::{Context, Result};
 use inputd::ProducerHandle;
 use orbclient::KeyEvent as OrbKeyEvent;
-use rehid::{
-    hidreport::Report,
-    report_desc::{ReportTy, REPORT_DESC_TY},
-    report_handler::{ReportEvent, ReportHandler},
-    usage_tables::{GenericDesktopUsage, UsagePage},
-};
+use rehid::hidreport::Report;
+use rehid::report_desc::{ReportTy, REPORT_DESC_TY};
+use rehid::report_handler::{ReportEvent, ReportHandler};
+use rehid::usage_tables::{GenericDesktopUsage, UsagePage};
 use xhcid_interface::{
     ConfigureEndpointsReq, DevDesc, EndpDirection, EndpointTy, PortId, PortReqRecipient,
     XhciClientHandle,

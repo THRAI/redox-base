@@ -6,10 +6,9 @@ use console_draw::ConsoleFont;
 use event::{EventQueue, UserData};
 use redox_scheme::CallerCtx;
 use scheme_utils::{resource_scheme, FpathWriter, ResourceOpenResult, ResourceSync};
+use serde::Deserialize;
 use syscall::schemev2::NewFdFlags;
 use syscall::{Error, EventFlags, Result, EAGAIN, EBADF, ENOENT, O_NONBLOCK};
-
-use serde::Deserialize;
 
 use crate::display::Display;
 use crate::text::TextScreen;

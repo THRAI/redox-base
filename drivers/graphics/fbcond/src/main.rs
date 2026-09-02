@@ -1,9 +1,10 @@
+use std::env;
+
 use event::EventQueue;
 use inputd::ConsumerHandleEvent;
 use orbclient::Event;
 use redox_scheme::{Response, SignalBehavior, Socket};
 use scheme_utils::ReadinessBased;
-use std::env;
 use syscall::EVENT_READ;
 
 use crate::scheme::{FbconResource, FbconScheme, FbconSchemeData, SchemeRoot, VtIndex};

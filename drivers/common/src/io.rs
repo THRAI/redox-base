@@ -1,7 +1,5 @@
-use core::{
-    cmp::PartialEq,
-    ops::{BitAnd, BitOr, Not},
-};
+use core::cmp::PartialEq;
+use core::ops::{BitAnd, BitOr, Not};
 
 mod mmio;
 mod mmio_ptr;

@@ -5,12 +5,12 @@
 
 use std::convert::TryFrom;
 use std::fs::{self, File};
-use std::io::{self, prelude::*};
+use std::io::prelude::*;
+use std::io::{self};
 use std::num::NonZeroU8;
 
 use crate::msi::{MsiAddrAndData, MsixTableEntry};
 use crate::PciFunctionHandle;
-
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use crate::{
     msi::{x86 as x86_msix, MappedMsixRegs},

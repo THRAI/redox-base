@@ -1,7 +1,5 @@
-use common::{
-    io::{Io, MmioPtr},
-    timeout::Timeout,
-};
+use common::io::{Io, MmioPtr};
+use common::timeout::Timeout;
 use syscall::error::{Error, Result, EIO};
 
 use super::MmioRegion;

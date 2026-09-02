@@ -1,14 +1,11 @@
 mod ring;
 
-pub use ring::*;
-
 use std::cmp;
+use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::fmt::Write;
 use std::future::{Future, IntoFuture};
 use std::io::{self, Read, Seek, SeekFrom};
-
-use std::collections::BTreeMap;
-use std::convert::TryFrom;
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -23,6 +20,8 @@ use syscall::{
     Error, Result, Stat, EACCES, EAGAIN, EBADF, EINTR, EINVAL, EISDIR, ENOENT, ENOLCK, EOPNOTSUPP,
     EOVERFLOW, EWOULDBLOCK, MODE_DIR, MODE_FILE, O_DIRECTORY, O_STAT,
 };
+
+pub use crate::ring::*;
 
 /// Split the read operation into a series of block reads.
 /// `read_fn` will be called with a block number to be read, and a buffer to be filled.

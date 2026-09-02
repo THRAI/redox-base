@@ -1,13 +1,13 @@
-use common::MemoryType;
-use redox_scheme::scheme::register_sync_scheme;
-use redox_scheme::Socket;
-use scheme_utils::ReadinessBased;
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 
+use common::MemoryType;
 use event::{user_data, EventQueue};
 use pcid_interface::irq_helpers::pci_allocate_interrupt_vector;
 use pcid_interface::PciFunctionHandle;
+use redox_scheme::scheme::register_sync_scheme;
+use redox_scheme::Socket;
+use scheme_utils::ReadinessBased;
 
 pub mod hda;
 

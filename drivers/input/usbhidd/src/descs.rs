@@ -1,7 +1,8 @@
+use std::convert::TryInto;
+
 use anyhow::{anyhow, Result};
 use plain::Plain;
 use smallvec::SmallVec;
-use std::convert::TryInto;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default)]

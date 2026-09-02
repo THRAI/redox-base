@@ -1,27 +1,24 @@
-use acpi::aml::object::{Object, WrappedObject};
-use acpi::aml::op_region::{RegionHandler, RegionSpace};
-use rustc_hash::FxHashMap;
 use std::cell::{OnceCell, RefCell};
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::{fmt, mem};
-use syscall::PAGE_SIZE;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use common::io::{Io, Pio};
-
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use thiserror::Error;
-
-use acpi::{
-    AcpiTables,
-    aml::{AmlError, Interpreter, namespace::AmlName},
-    platform::AcpiPlatform,
-};
+use acpi::AcpiTables;
+use acpi::aml::namespace::AmlName;
+use acpi::aml::object::{Object, WrappedObject};
+use acpi::aml::op_region::{RegionHandler, RegionSpace};
+use acpi::aml::{AmlError, Interpreter};
+use acpi::platform::AcpiPlatform;
 use amlserde::aml_serde_name::aml_to_symbol;
 use amlserde::{AmlSerde, AmlSerdeValue};
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use common::io::{Io, Pio};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use rustc_hash::FxHashMap;
+use syscall::PAGE_SIZE;
+use thiserror::Error;
 
 #[cfg(target_arch = "x86_64")]
 pub mod dmar;

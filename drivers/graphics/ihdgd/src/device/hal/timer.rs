@@ -1,5 +1,6 @@
-use embedded_hal::timer;
 use std::time::{Duration, Instant};
+
+use embedded_hal::timer;
 use void::Void;
 
 pub struct HalTimer {

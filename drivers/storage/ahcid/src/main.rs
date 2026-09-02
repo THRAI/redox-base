@@ -6,9 +6,8 @@ use common::io::Io;
 use common::MemoryType;
 use driver_block::{DiskScheme, ExecutorTrait, FuturesExecutor};
 use event::{EventFlags, RawEventQueue};
-use pcid_interface::PciFunctionHandle;
-
 use log::{error, info};
+use pcid_interface::PciFunctionHandle;
 
 pub mod ahci;
 

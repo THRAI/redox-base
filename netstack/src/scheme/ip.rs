@@ -1,17 +1,16 @@
+use std::str;
+
 use scheme_utils::FpathWriter;
 use smoltcp::iface::SocketHandle;
 use smoltcp::socket::raw::{
     PacketBuffer as RawSocketBuffer, PacketMetadata as RawPacketMetadata, Socket as RawSocket,
 };
 use smoltcp::wire::{IpProtocol, IpVersion};
-use std::str;
-use syscall;
-use syscall::{Error as SyscallError, Result as SyscallResult};
-
-use crate::router::Router;
+use syscall::{self, Error as SyscallError, Result as SyscallResult};
 
 use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile};
 use super::{SchemeWrapper, Smolnetd, SocketSet};
+use crate::router::Router;
 
 pub type IpScheme = SchemeWrapper<RawSocket<'static>>;
 

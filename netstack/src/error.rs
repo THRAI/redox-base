@@ -1,7 +1,6 @@
-use std::convert;
-use std::fmt;
 use std::io::Error as IOError;
-use std::result;
+use std::{convert, fmt, result};
+
 use syscall::error::Error as SyscallError;
 
 #[derive(Debug)]

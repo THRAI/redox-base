@@ -2,11 +2,10 @@ use std::arch::asm;
 
 use rand_chacha::ChaCha20Rng;
 use rand_core::RngCore;
-
 #[cfg(target_arch = "x86_64")]
 use raw_cpuid::CpuId;
-
-use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult, Socket};
+use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult, Socket};
 use scheme_utils::{Blocking, FpathWriter, HandleMap};
 use syscall::data::Stat;
 use syscall::flag::{EventFlags, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_WRONLY};
@@ -14,6 +13,7 @@ use syscall::schemev2::NewFdFlags;
 use syscall::{Error, Result, EACCES, EBADF, EEXIST, ENOENT, EPERM, MODE_CHR};
 
 // Create an RNG Seed to create initial seed from the rdrand intel instruction
+#[rustfmt::skip]
 use rand_core::SeedableRng;
 use sha2::{Digest, Sha256};
 

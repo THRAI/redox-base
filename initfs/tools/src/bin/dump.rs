@@ -1,8 +1,8 @@
-use std::{ffi::OsStr, path::Path};
+use std::ffi::OsStr;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use clap::{Arg, Command};
-
 use redox_initfs::{InitFs, InodeKind};
 
 fn main() -> Result<()> {

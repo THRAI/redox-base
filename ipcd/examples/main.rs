@@ -1,10 +1,9 @@
-use std::{
-    fs::{File, OpenOptions},
-    io::{self, prelude::*},
-    os::unix::io::{AsRawFd, FromRawFd, RawFd},
-    thread,
-    time::Duration,
-};
+use std::fs::{File, OpenOptions};
+use std::io::prelude::*;
+use std::io::{self};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::thread;
+use std::time::Duration;
 
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)

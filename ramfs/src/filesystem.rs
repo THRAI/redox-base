@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
-use std::{fs, iter, time};
-
 use std::os::unix::io::AsRawFd;
+use std::{fs, iter, time};
 
 use indexmap::IndexMap;
 use libredox::Fd;

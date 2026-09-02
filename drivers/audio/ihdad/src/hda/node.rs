@@ -1,5 +1,6 @@
-use super::common::*;
 use std::{fmt, mem};
+
+use super::common::*;
 
 #[derive(Clone)]
 pub struct HDANode {

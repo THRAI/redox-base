@@ -4,11 +4,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
 use driver_block::DiskScheme;
-use static_assertions::const_assert_eq;
-
 use pcid_interface::*;
+use static_assertions::const_assert_eq;
 use virtio_core::spec::*;
-
 use virtio_core::transport::Transport;
 use virtio_core::utils::VolatileCell;
 

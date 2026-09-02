@@ -1,4 +1,5 @@
-use core::{mem::MaybeUninit, ptr};
+use core::mem::MaybeUninit;
+use core::ptr;
 
 use super::Io;
 

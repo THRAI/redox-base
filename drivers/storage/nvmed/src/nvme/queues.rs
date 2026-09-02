@@ -1,9 +1,9 @@
-use common::io::{Io, Mmio};
 use std::cell::UnsafeCell;
 use std::ptr;
-use syscall::Result;
 
 use common::dma::Dma;
+use common::io::{Io, Mmio};
+use syscall::Result;
 
 /// A submission queue entry.
 #[derive(Clone, Copy, Debug, Default)]

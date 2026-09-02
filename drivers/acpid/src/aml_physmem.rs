@@ -1,13 +1,15 @@
-use acpi::{Handle, PciAddress, PhysicalMapping, aml::AmlError};
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use common::io::{Io, Pio};
-use num_traits::PrimInt;
-use rustc_hash::FxHashMap;
 use std::collections::hash_map::Entry;
 use std::fmt::LowerHex;
 use std::mem::size_of;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
+
+use acpi::aml::AmlError;
+use acpi::{Handle, PciAddress, PhysicalMapping};
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use common::io::{Io, Pio};
+use num_traits::PrimInt;
+use rustc_hash::FxHashMap;
 use syscall::PAGE_SIZE;
 
 const PAGE_MASK: usize = !(PAGE_SIZE - 1);

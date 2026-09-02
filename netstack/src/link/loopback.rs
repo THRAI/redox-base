@@ -3,9 +3,8 @@ use std::rc::Rc;
 use smoltcp::storage::PacketMetadata;
 use smoltcp::time::Instant;
 
-use crate::scheme::Smolnetd;
-
 use super::LinkDevice;
+use crate::scheme::Smolnetd;
 
 pub type PacketBuffer = smoltcp::storage::PacketBuffer<'static, ()>;
 

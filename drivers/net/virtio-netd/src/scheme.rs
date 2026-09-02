@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
-use driver_network::NetworkAdapter;
-
 use common::dma::Dma;
-
+use driver_network::NetworkAdapter;
 use virtio_core::spec::{Buffer, ChainBuilder, DescriptorFlags};
 use virtio_core::transport::Queue;
 

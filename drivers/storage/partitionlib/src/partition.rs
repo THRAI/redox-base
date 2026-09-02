@@ -1,5 +1,6 @@
-pub use gpt::disk::LogicalBlockSize;
 use std::io::{self, Read, Seek};
+
+pub use gpt::disk::LogicalBlockSize;
 use uuid::Uuid;
 
 /// A union of the MBR and GPT partition entry

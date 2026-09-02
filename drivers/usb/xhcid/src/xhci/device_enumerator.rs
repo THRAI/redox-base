@@ -1,11 +1,13 @@
-use crate::xhci::port::PortFlags;
-use crate::xhci::{PortId, Xhci};
+use std::sync::Arc;
+use std::time::Duration;
+
 use common::io::Io;
 use crossbeam_channel;
 use log::{debug, info, warn};
-use std::sync::Arc;
-use std::time::Duration;
 use syscall::EAGAIN;
+
+use crate::xhci::port::PortFlags;
+use crate::xhci::{PortId, Xhci};
 
 pub struct DeviceEnumerationRequest {
     pub port_id: PortId,

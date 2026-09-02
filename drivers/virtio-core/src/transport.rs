@@ -1,12 +1,5 @@
-use crate::spec::*;
-use crate::utils::align;
-
-use common::dma::Dma;
-use event::RawEventQueue;
-
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU16, Ordering};
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::io::{Read, Write};
@@ -14,7 +7,12 @@ use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Poll, Waker};
 
+use common::dma::Dma;
+use event::RawEventQueue;
 use pcid_interface::irq_helpers::InterruptVector;
+
+use crate::spec::*;
+use crate::utils::align;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

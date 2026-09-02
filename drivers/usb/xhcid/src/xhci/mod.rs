@@ -14,20 +14,20 @@ use std::convert::TryFrom;
 use std::fs::{self, File};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
-
 use std::{mem, process, slice, thread};
+
+use chashmap::CHashMap;
+use common::dma::Dma;
+use common::io::Io;
+use common::timeout::Timeout;
+use crossbeam_channel::{Receiver, Sender};
+use log::{debug, error, info, trace, warn};
+use pcid_interface::PciFunctionHandle;
+use serde::Deserialize;
 use syscall::error::{Error, Result, EBADF, EBADMSG, EIO, ENOENT};
 use syscall::{EAGAIN, PAGE_SIZE};
 
-use chashmap::CHashMap;
-use common::{dma::Dma, io::Io, timeout::Timeout};
-use crossbeam_channel::{Receiver, Sender};
-use log::{debug, error, info, trace, warn};
-use serde::Deserialize;
-
 use crate::usb;
-
-use pcid_interface::PciFunctionHandle;
 
 mod capability;
 mod context;
@@ -57,10 +57,8 @@ use self::operational::*;
 use self::port::Port;
 use self::ring::Ring;
 use self::runtime::RuntimeRegs;
-use self::trb::{TransferKind, Trb, TrbCompletionCode};
-
 use self::scheme::EndpIfState;
-
+use self::trb::{TransferKind, Trb, TrbCompletionCode};
 pub use crate::driver_interface::PortId;
 use crate::driver_interface::*;
 use crate::xhci::device_enumerator::{DeviceEnumerationRequest, DeviceEnumerator};

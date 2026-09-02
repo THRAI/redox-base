@@ -1,11 +1,9 @@
 use std::convert::TryInto;
 use std::{cmp, mem, ptr, slice, thread, time};
 
-use driver_network::NetworkAdapter;
-
-use syscall::error::Result;
-
 use common::dma::Dma;
+use driver_network::NetworkAdapter;
+use syscall::error::Result;
 
 const CTRL: u32 = 0x00;
 const CTRL_LRST: u32 = 1 << 3;

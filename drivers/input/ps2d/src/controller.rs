@@ -2,20 +2,15 @@
 //! - https://wiki.osdev.org/I8042_PS/2_Controller
 //! - http://www.mcamafia.de/pdf/ibm_hitrc07.pdf
 
-use common::{
-    io::{Io, ReadOnly, WriteOnly},
-    timeout::Timeout,
-};
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use common::io::Pio;
+use std::fmt;
 
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 use common::io::Mmio;
-
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use common::io::Pio;
+use common::io::{Io, ReadOnly, WriteOnly};
+use common::timeout::Timeout;
 use log::{debug, error, trace, warn};
-
-use std::fmt;
 
 #[derive(Debug)]
 pub enum Error {

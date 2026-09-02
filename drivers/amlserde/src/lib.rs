@@ -1,24 +1,17 @@
-use acpi::{
-    aml::{
-        namespace::AmlName,
-        object::{
-            FieldAccessType, FieldFlags, FieldUnit, FieldUnitKind, FieldUpdateRule, MethodFlags,
-            Object, ReferenceKind, WrappedObject,
-        },
-        op_region::{OpRegion, RegionSpace},
-        Interpreter,
-    },
-    Handle, Handler,
+use std::ops::{Deref, Shl};
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use acpi::aml::namespace::AmlName;
+use acpi::aml::object::{
+    FieldAccessType, FieldFlags, FieldUnit, FieldUnitKind, FieldUpdateRule, MethodFlags, Object,
+    ReferenceKind, WrappedObject,
 };
+use acpi::aml::op_region::{OpRegion, RegionSpace};
+use acpi::aml::Interpreter;
+use acpi::{Handle, Handler};
 use serde::{Deserialize, Serialize};
-use std::{
-    ops::{Deref, Shl},
-    str::FromStr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AmlSerde {

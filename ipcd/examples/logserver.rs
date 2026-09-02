@@ -1,10 +1,9 @@
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{self, prelude::*},
-    os::unix::io::{AsRawFd, FromRawFd, RawFd},
-    str,
-};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::{self};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::str;
 
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)

@@ -1,16 +1,17 @@
-use std::{convert::TryInto, env, ops::ControlFlow};
+use std::convert::TryInto;
+use std::env;
+use std::ops::ControlFlow;
 
 mod filesystem;
 mod scheme;
 
 use event::{EventFlags, RawEventQueue};
+use redox_rings::op::FsOpCqe;
 use redox_rings::raw::RingPopError;
 use scheme_utils::Blocking;
 
-use crate::scheme::{Handle, RingState};
-use redox_rings::op::FsOpCqe;
-
 use self::scheme::Scheme;
+use crate::scheme::{Handle, RingState};
 
 fn main() {
     daemon::SchemeDaemon::new(daemon);

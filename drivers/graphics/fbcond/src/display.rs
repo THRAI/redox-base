@@ -1,9 +1,10 @@
+use std::io;
+
 use console_draw::V2DisplayMap;
 use drm::buffer::Buffer;
 use drm::control::Device;
 use graphics_ipc::V2GraphicsHandle;
 use inputd::ConsumerHandle;
-use std::io;
 
 pub struct Display {
     pub input_handle: ConsumerHandle,

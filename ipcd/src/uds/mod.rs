@@ -1,9 +1,12 @@
+use std::convert::TryInto;
+use std::fmt::Debug;
+use std::{cmp, mem};
+
 use libredox::protocol::ProcMeta;
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
-use std::fmt::Debug;
-use std::{cmp, convert::TryInto, mem};
-use syscall::{error::*, Error};
+use syscall::error::*;
+use syscall::Error;
 
 pub mod dgram;
 mod scheme;

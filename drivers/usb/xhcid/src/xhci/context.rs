@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
 
+use common::dma::Dma;
 use common::io::{Io, Mmio};
 use log::debug;
 use syscall::error::Result;
 use syscall::PAGE_SIZE;
-
-use common::dma::Dma;
 
 use super::ring::Ring;
 use super::Xhci;
@@ -215,8 +214,9 @@ impl ScratchpadBufferArray {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use core::mem;
+
+    use super::*;
 
     #[test]
     fn context_size() {

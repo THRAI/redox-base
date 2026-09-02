@@ -1,17 +1,12 @@
-use common::io::Pio;
+use common::dma::Dma;
+use common::io::{Io, Mmio, Pio};
 use redox_scheme::scheme::SchemeSync;
-use redox_scheme::CallerCtx;
-use redox_scheme::OpenResult;
+use redox_scheme::{CallerCtx, OpenResult};
 use scheme_utils::{FpathWriter, HandleMap};
+use spin::Mutex;
 use syscall::error::{Error, Result, EACCES, EBADF, EINVAL, ENOENT};
 use syscall::schemev2::NewFdFlags;
 use syscall::EWOULDBLOCK;
-
-use common::{
-    dma::Dma,
-    io::{Io, Mmio},
-};
-use spin::Mutex;
 
 const NUM_SUB_BUFFS: usize = 32;
 const SUB_BUFF_SIZE: usize = 2048;

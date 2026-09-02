@@ -2,12 +2,10 @@ use std::collections::VecDeque;
 use std::ops::{ControlFlow, Deref};
 
 use libredox::error::Error as LError;
-
-use syscall::Result;
-use syscall::error::{self as errno, Error};
-
 use redox_scheme::scheme::{SchemeState, SchemeSync};
 use redox_scheme::{Request, RequestKind, Response, SignalBehavior, Socket};
+use syscall::Result;
+use syscall::error::{self as errno, Error};
 
 pub struct Blocking<S> {
     // TODO: VecDeque for both when it implements spare_capacity

@@ -7,8 +7,8 @@ pub mod opcodes;
 use thiserror::Error;
 use xhcid_interface::DeviceReqData;
 
+use self::cmds::StandardInquiryData;
 use crate::protocol::{Protocol, ProtocolError, SendCommandStatus, SendCommandStatusKind};
-use cmds::StandardInquiryData;
 
 pub struct Scsi {
     command_buffer: [u8; 16],

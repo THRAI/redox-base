@@ -1,7 +1,5 @@
-use common::{
-    io::{Io, MmioPtr},
-    timeout::Timeout,
-};
+use common::io::{Io, MmioPtr};
+use common::timeout::Timeout;
 use embedded_hal::blocking::i2c::{self, Operation, SevenBitAddress, Transactional};
 
 use super::MmioRegion;

@@ -1,14 +1,15 @@
-use common::{
-    io::{Io, MmioPtr},
-    timeout::Timeout,
-};
+use std::collections::VecDeque;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::{fmt, mem};
+
+use common::io::{Io, MmioPtr};
+use common::timeout::Timeout;
 use driver_graphics::kms::connector::KmsConnectorStatus;
 use driver_graphics::kms::objects::{KmsFramebuffer, KmsObjects};
 use drm_fourcc::DrmFourcc;
 use pcid_interface::{PciFunction, PciFunctionHandle};
 use range_alloc::RangeAllocator;
-use std::sync::atomic::AtomicBool;
-use std::{collections::VecDeque, fmt, mem, sync::Arc};
 use syscall::error::{Error, Result, EIO, ENODEV, ERANGE};
 
 mod aux;

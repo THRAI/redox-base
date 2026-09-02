@@ -1,13 +1,9 @@
 use std::time::Duration;
 
-use acpi::aml::{
-    AmlError,
-    op_region::{OpRegion, RegionHandler, RegionSpace},
-};
-use common::{
-    io::{Io, Pio},
-    timeout::Timeout,
-};
+use acpi::aml::AmlError;
+use acpi::aml::op_region::{OpRegion, RegionHandler, RegionSpace};
+use common::io::{Io, Pio};
+use common::timeout::Timeout;
 use log::*;
 
 const EC_DATA: u16 = 0x62;

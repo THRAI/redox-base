@@ -1,14 +1,12 @@
-use std::{
-    cell::{Cell, RefCell, UnsafeCell},
-    future::Future,
-    marker::PhantomData,
-    mem::{self, ManuallyDrop},
-    ops::Deref,
-    pin::Pin,
-    ptr::NonNull,
-    rc::Rc,
-    task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
-};
+use std::cell::{Cell, RefCell, UnsafeCell};
+use std::future::Future;
+use std::marker::PhantomData;
+use std::mem::{self, ManuallyDrop};
+use std::ops::Deref;
+use std::pin::Pin;
+use std::ptr::NonNull;
+use std::rc::Rc;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use intrusive_collections::{LinkedList, LinkedListLink, UnsafeRef, intrusive_adapter};
 

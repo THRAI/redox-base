@@ -2,7 +2,6 @@ use std::fs;
 use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
-
 use pcid_interface::config::Config;
 use pcid_interface::PciFunctionHandle;
 

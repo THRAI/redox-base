@@ -19,13 +19,11 @@ use std::ops::ControlFlow;
 use std::os::fd::IntoRawFd;
 
 use inputd::{ControlEvent, VtEvent, VtEventKind};
-
 use libredox::errno::ESTALE;
 use libredox::Fd;
+use orbclient::{Event, EventOption};
 use redox_scheme::scheme::SchemeSync;
 use redox_scheme::{CallerCtx, OpenResult, Response, SignalBehavior, Socket};
-
-use orbclient::{Event, EventOption};
 use scheme_utils::{Blocking, FpathWriter, HandleMap};
 use syscall::schemev2::NewFdFlags;
 use syscall::{

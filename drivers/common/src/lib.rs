@@ -3,13 +3,13 @@
 //! This includes direct memory access via [dma], and Scatter-Gather List support via [sgl].  It also
 //! provides various memory management structures for use with drivers, and some logging support.
 
+use std::sync::OnceLock;
+
 use libredox::call::MmapArgs;
+use libredox::errno::EINVAL;
+use libredox::error::{Error, Result};
 use libredox::flag::{self, O_CLOEXEC, O_RDONLY, O_RDWR, O_WRONLY};
-use libredox::{
-    errno::EINVAL,
-    error::{Error, Result},
-    Fd,
-};
+use libredox::Fd;
 use syscall::{ProcSchemeVerb, PAGE_SIZE};
 
 /// The Direct Memory Access (DMA) API for drivers
@@ -23,8 +23,6 @@ pub mod sgl;
 pub mod timeout;
 
 pub use logger::{file_level, output_level, setup_logging};
-
-use std::sync::OnceLock;
 
 static MEMORY_ROOT_FD: OnceLock<libredox::Fd> = OnceLock::new();
 

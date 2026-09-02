@@ -1,5 +1,6 @@
-use common::io::{Io, Mmio, ReadOnly};
 use std::mem;
+
+use common::io::{Io, Mmio, ReadOnly};
 use syscall::error::{Error, Result, EIO};
 
 use super::MmioRegion;

@@ -1,10 +1,10 @@
+use std::{env, usize};
+
+use event::{user_data, EventQueue};
 use libredox::{flag, Fd};
 use redox_scheme::scheme::register_sync_scheme;
 use redox_scheme::Socket;
 use scheme_utils::ReadinessBased;
-use std::{env, usize};
-
-use event::{user_data, EventQueue};
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod device;

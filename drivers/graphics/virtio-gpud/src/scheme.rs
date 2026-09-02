@@ -1,7 +1,8 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use common::{dma::Dma, sgl};
+use common::dma::Dma;
+use common::sgl;
 use driver_graphics::kms::connector::{KmsConnectorDriver, KmsConnectorStatus};
 use driver_graphics::kms::objects::{
     KmsCrtc, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver, KmsPlaneState,
@@ -12,9 +13,7 @@ use drm_sys::{
     DRM_CAP_CURSOR_HEIGHT, DRM_CAP_CURSOR_WIDTH, DRM_CAP_DUMB_BUFFER, DRM_CAP_DUMB_PREFERRED_DEPTH,
     DRM_CAP_DUMB_PREFER_SHADOW, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT,
 };
-
 use syscall::{EINVAL, PAGE_SIZE};
-
 use virtio_core::spec::{Buffer, ChainBuilder, DescriptorFlags};
 use virtio_core::transport::{Error, Queue, Transport};
 

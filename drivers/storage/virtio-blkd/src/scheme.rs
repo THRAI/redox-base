@@ -4,9 +4,7 @@ use common::dma::Dma;
 use virtio_core::spec::{Buffer, ChainBuilder, DescriptorFlags};
 use virtio_core::transport::Queue;
 
-use crate::BlockDeviceConfig;
-use crate::BlockRequestTy;
-use crate::BlockVirtRequest;
+use crate::{BlockDeviceConfig, BlockRequestTy, BlockVirtRequest};
 
 trait BlkExtension {
     async fn read(&self, block: u64, target: &mut [u8]) -> usize;

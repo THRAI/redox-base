@@ -1,4 +1,5 @@
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
+use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use redox_initfs::{InitFs, InodeKind, InodeStruct};

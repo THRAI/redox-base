@@ -4,6 +4,7 @@ use std::convert::TryFrom;
 use std::rc::Rc;
 use std::{cmp, io, mem, ptr};
 
+pub use alacritty_terminal;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Indexed, Scroll};
 use alacritty_terminal::index::Point;
@@ -16,10 +17,7 @@ use alacritty_terminal::{vte, Term};
 use drm::buffer::{Buffer, DrmFourcc};
 use drm::control::{connector, crtc, framebuffer, ClipRect, Device, Mode};
 use graphics_ipc::{CpuBackedBuffer, V2GraphicsHandle};
-
 use orbclient::FONT;
-
-pub use alacritty_terminal;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Damage {
