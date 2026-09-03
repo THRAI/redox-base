@@ -105,18 +105,15 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             Ok(0)
         }),
         ipc::MODE_GET_CRTC => ipc::DrmModeCrtc::with(payload, |mut data| {
-            let crtc = objects
-                .get_crtc(KmsObjectId(data.crtc_id()))?
-                .lock()
-                .unwrap();
+            let crtc = objects.get_crtc(KmsObjectId(data.crtc_id()))?;
             // Don't touch set_connectors, that is only used by MODE_SET_CRTC
             data.set_fb_id(
                 objects
                     .get_plane(crtc.primary_plane)
                     .unwrap()
+                    .state
                     .lock()
                     .unwrap()
-                    .state
                     .fb_id
                     .unwrap_or(KmsObjectId::INVALID)
                     .0,
@@ -125,7 +122,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             data.set_x(0);
             data.set_y(0);
             data.set_gamma_size(crtc.gamma_size);
-            if let Some(mode) = crtc.state.mode {
+            if let Some(mode) = crtc.state.lock().unwrap().mode {
                 data.set_mode_valid(1);
                 data.set_mode(mode);
             } else {
@@ -156,11 +153,10 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
                 None
             };
 
-            let plane = objects.get_plane(crtc.lock().unwrap().primary_plane)?;
+            let plane = objects.get_plane(crtc.primary_plane)?;
             let vt_state = vts.get_mut(&handle.vt).unwrap();
-            let new_crtc_state = &mut vt_state.crtc_state[crtc.lock().unwrap().crtc_index as usize];
-            let new_plane_state =
-                &mut vt_state.plane_state[plane.lock().unwrap().plane_index as usize];
+            let new_crtc_state = &mut vt_state.crtc_state[crtc.crtc_index as usize];
+            let new_plane_state = &mut vt_state.plane_state[plane.plane_index as usize];
 
             new_crtc_state.mode = mode;
             let old_fb_id = new_plane_state.fb_id;
@@ -301,16 +297,14 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             let plane = objects.get_plane(plane_id)?;
 
             let crtc_id = KmsObjectId(data.crtc_id());
-            let crtc_index = objects.get_crtc(crtc_id)?.lock().unwrap().crtc_index;
+            let crtc_index = objects.get_crtc(crtc_id)?.crtc_index;
 
-            let plane_index = {
-                let plane = plane.lock().unwrap();
-                if plane.possible_crtcs & (1 << crtc_index) == 0 {
-                    return Err(Error::new(EINVAL));
-                }
-                plane.plane_index as usize
-            };
-            let new_state = &mut vts.get_mut(&handle.vt).unwrap().plane_state[plane_index];
+            if plane.possible_crtcs & (1 << crtc_index) == 0 {
+                return Err(Error::new(EINVAL));
+            }
+
+            let new_state =
+                &mut vts.get_mut(&handle.vt).unwrap().plane_state[plane.plane_index as usize];
             let fb_id = if data.fb_id() != 0 {
                 let fb_id = KmsObjectId(data.fb_id());
                 objects.get_framebuffer(fb_id)?;
@@ -357,13 +351,11 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             Ok(0)
         }),
         ipc::MODE_GET_PLANE => ipc::DrmModeGetPlane::with(payload, |mut data| {
-            let plane = objects
-                .get_plane(KmsObjectId(data.plane_id()))
-                .unwrap()
-                .lock()
-                .unwrap();
-            data.set_crtc_id(plane.state.crtc_id.map_or(0, |id| id.0));
-            data.set_fb_id(plane.state.fb_id.unwrap_or(KmsObjectId::INVALID).0);
+            let plane = objects.get_plane(KmsObjectId(data.plane_id())).unwrap();
+            let state = plane.state.lock().unwrap();
+
+            data.set_crtc_id(state.crtc_id.map_or(0, |id| id.0));
+            data.set_fb_id(state.fb_id.unwrap_or(KmsObjectId::INVALID).0);
             data.set_possible_crtcs(plane.possible_crtcs);
             data.set_format_type_ptr(&[DrmFourcc::Argb8888 as u32]);
             Ok(0)

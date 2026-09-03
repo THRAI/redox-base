@@ -21,7 +21,7 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
     ) -> KmsObjectId {
         let mut possible_crtcs = 0;
         for &crtc in crtcs {
-            possible_crtcs = 1 << self.get_crtc(crtc).unwrap().lock().unwrap().crtc_index;
+            possible_crtcs = 1 << self.get_crtc(crtc).unwrap().crtc_index;
         }
 
         let encoder_id = self.add(KmsEncoder {

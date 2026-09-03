@@ -85,37 +85,56 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
         &mut self,
         driver_data: T::Crtc,
         driver_data_state: <T::Crtc as KmsCrtcDriver>::State,
-        plane_data: T::Plane,
-        plane_data_state: <T::Plane as KmsPlaneDriver>::State,
+        primary_plane_data: T::Plane,
+        primary_plane_data_state: <T::Plane as KmsPlaneDriver>::State,
+        cursor_plane: Option<(T::Plane, <T::Plane as KmsPlaneDriver>::State)>,
     ) -> (KmsObjectId, KmsObjectId) {
         let primary_plane = self.add_plane(
             &[],
             KmsPlaneType::Primary,
             false,
-            plane_data,
-            plane_data_state,
+            primary_plane_data,
+            primary_plane_data_state,
         );
 
+        let cursor_plane = if let Some((cursor_plane_data, cursor_plane_data_state)) = cursor_plane
+        {
+            Some(self.add_plane(
+                &[],
+                KmsPlaneType::Cursor,
+                true,
+                cursor_plane_data,
+                cursor_plane_data_state,
+            ))
+        } else {
+            None
+        };
+
         let crtc_index = self.crtcs.len() as u32;
-        let id = self.add(Mutex::new(KmsCrtc {
+        let id = self.add(KmsCrtc {
             crtc_index,
             gamma_size: 0,
             properties: KmsCrtc::base_properties(),
             primary_plane,
-            cursor_plane: None,
-            state: KmsCrtcState {
+            cursor_plane,
+            state: Mutex::new(KmsCrtcState {
                 mode: None,
                 driver_data: driver_data_state,
-            },
+            }),
             driver_data,
-        }));
+        });
         self.crtcs.push(id);
 
-        self.get_plane(primary_plane)
-            .unwrap()
-            .lock()
-            .unwrap()
-            .possible_crtcs = 1 << crtc_index;
+        match self.objects.get_mut(&primary_plane).unwrap() {
+            KmsObject::Plane(data) => data.possible_crtcs = 1 << crtc_index,
+            _ => unreachable!(),
+        }
+        if let Some(cursor_plane) = cursor_plane {
+            match self.objects.get_mut(&cursor_plane).unwrap() {
+                KmsObject::Plane(data) => data.possible_crtcs = 1 << crtc_index,
+                _ => unreachable!(),
+            }
+        }
 
         (id, primary_plane)
     }
@@ -124,13 +143,13 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
         &self.crtcs
     }
 
-    pub fn crtcs(&self) -> impl Iterator<Item = &Mutex<KmsCrtc<T>>> + use<'_, T> {
+    pub fn crtcs(&self) -> impl Iterator<Item = &KmsCrtc<T>> + use<'_, T> {
         self.crtcs
             .iter()
-            .map(|&id| self.get::<Mutex<KmsCrtc<T>>>(id).unwrap())
+            .map(|&id| self.get::<KmsCrtc<T>>(id).unwrap())
     }
 
-    pub fn get_crtc(&self, id: KmsObjectId) -> Result<&Mutex<KmsCrtc<T>>> {
+    pub fn get_crtc(&self, id: KmsObjectId) -> Result<&KmsCrtc<T>> {
         self.get(id)
     }
 
@@ -148,15 +167,15 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
 
         let mut possible_crtcs = 0u32;
         for &crtc in crtcs {
-            possible_crtcs |= 1 << self.get_crtc(crtc).unwrap().lock().unwrap().crtc_index
+            possible_crtcs |= 1 << self.get_crtc(crtc).unwrap().crtc_index
         }
         let plane_index = self.planes.len() as u32;
-        let id = self.add(Mutex::new(KmsPlane {
+        let id = self.add(KmsPlane {
             plane_index,
             possible_crtcs,
             plane_type,
             properties: KmsPlane::base_properties(),
-            state: KmsPlaneState {
+            state: Mutex::new(KmsPlaneState {
                 fb_id: None,
                 crtc_id: None,
                 src_rect: KmsRect {
@@ -173,9 +192,9 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
                 },
                 hotspot: has_hotspot.then_some((0, 0)),
                 driver_data: driver_data_state,
-            },
+            }),
             driver_data,
-        }));
+        });
         self.planes.push(id);
 
         id
@@ -185,13 +204,13 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
         &self.planes
     }
 
-    pub fn planes(&self) -> impl Iterator<Item = &Mutex<KmsPlane<T>>> + use<'_, T> {
+    pub fn planes(&self) -> impl Iterator<Item = &KmsPlane<T>> + use<'_, T> {
         self.planes
             .iter()
-            .map(|&id| self.get::<Mutex<KmsPlane<T>>>(id).unwrap())
+            .map(|&id| self.get::<KmsPlane<T>>(id).unwrap())
     }
 
-    pub fn get_plane(&self, id: KmsObjectId) -> Result<&Mutex<KmsPlane<T>>> {
+    pub fn get_plane(&self, id: KmsObjectId) -> Result<&KmsPlane<T>> {
         self.get(id)
     }
 
@@ -286,11 +305,11 @@ macro_rules! define_object_kinds {
 }
 
 define_object_kinds! { <T>
-    Crtc(Mutex<KmsCrtc<T>>) = DRM_MODE_OBJECT_CRTC,
+    Crtc(KmsCrtc<T>) = DRM_MODE_OBJECT_CRTC,
     Connector(Mutex<KmsConnector<T>>) = DRM_MODE_OBJECT_CONNECTOR,
     Encoder(KmsEncoder) = DRM_MODE_OBJECT_ENCODER,
     Property(KmsProperty) = DRM_MODE_OBJECT_PROPERTY,
-    Plane(Mutex<KmsPlane<T>>) = DRM_MODE_OBJECT_PLANE,
+    Plane(KmsPlane<T>) = DRM_MODE_OBJECT_PLANE,
     Framebuffer(KmsFramebuffer<T>) = DRM_MODE_OBJECT_FB,
     Blob(KmsBlob) = DRM_MODE_OBJECT_BLOB,
 }
@@ -310,7 +329,7 @@ pub struct KmsCrtc<T: GraphicsAdapter> {
     pub properties: Vec<KmsPropertyData<Self>>,
     pub primary_plane: KmsObjectId,
     pub cursor_plane: Option<KmsObjectId>,
-    pub state: KmsCrtcState<T>,
+    pub state: Mutex<KmsCrtcState<T>>,
     pub driver_data: T::Crtc,
 }
 
@@ -331,7 +350,7 @@ impl<T: GraphicsAdapter> Clone for KmsCrtcState<T> {
 
 define_object_props!(object, KmsCrtc<T: GraphicsAdapter> {
     ACTIVE {
-        get => u64::from(object.state.mode.is_some()),
+        get => u64::from(object.state.lock().unwrap().mode.is_some()),
     }
 });
 
@@ -349,7 +368,7 @@ pub struct KmsPlane<T: GraphicsAdapter> {
     pub possible_crtcs: u32,
     pub plane_type: KmsPlaneType,
     pub properties: Vec<KmsPropertyData<Self>>,
-    pub state: KmsPlaneState<T>,
+    pub state: Mutex<KmsPlaneState<T>>,
     pub driver_data: T::Plane,
 }
 
@@ -381,34 +400,34 @@ define_object_props!(object, KmsPlane<T: GraphicsAdapter> {
         get => object.plane_type as u64,
     }
     FB_ID {
-        get => u64::from(object.state.fb_id.map_or(0, |id| id.0)),
+        get => u64::from(object.state.lock().unwrap().fb_id.map_or(0, |id| id.0)),
     }
     CRTC_ID {
-        get => u64::from(object.state.crtc_id.map_or(0, |id| id.0)),
+        get => u64::from(object.state.lock().unwrap().crtc_id.map_or(0, |id| id.0)),
     }
     CRTC_X {
-        get => u64::from(object.state.crtc_rect.x.cast_unsigned()),
+        get => u64::from(object.state.lock().unwrap().crtc_rect.x.cast_unsigned()),
     }
     CRTC_Y {
-        get => u64::from(object.state.crtc_rect.y.cast_unsigned()),
+        get => u64::from(object.state.lock().unwrap().crtc_rect.y.cast_unsigned()),
     }
     CRTC_W {
-        get => u64::from(object.state.crtc_rect.width),
+        get => u64::from(object.state.lock().unwrap().crtc_rect.width),
     }
     CRTC_H {
-        get => u64::from(object.state.crtc_rect.height),
+        get => u64::from(object.state.lock().unwrap().crtc_rect.height),
     }
     SRC_X {
-        get => u64::from(object.state.src_rect.x),
+        get => u64::from(object.state.lock().unwrap().src_rect.x),
     }
     SRC_Y {
-        get => u64::from(object.state.src_rect.y),
+        get => u64::from(object.state.lock().unwrap().src_rect.y),
     }
     SRC_W {
-        get => u64::from(object.state.src_rect.width),
+        get => u64::from(object.state.lock().unwrap().src_rect.width),
     }
     SRC_H {
-        get => u64::from(object.state.src_rect.height),
+        get => u64::from(object.state.lock().unwrap().src_rect.height),
     }
     // FIXME HOTSPOT_X and HOTSPOT_Y if supported by graphics card
 });
