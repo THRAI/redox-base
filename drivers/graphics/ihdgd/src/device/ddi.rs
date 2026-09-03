@@ -298,8 +298,8 @@ impl Ddi {
 
     pub fn voltage_swing_hdmi(
         &mut self,
-        _gttmm: &MmioRegion,
-        _timing: &edid::DetailedTiming,
+        gttmm: &MmioRegion,
+        timing: &edid::DetailedTiming,
     ) -> Result<()> {
         struct Setting {
             dw2_swing_sel: u32,

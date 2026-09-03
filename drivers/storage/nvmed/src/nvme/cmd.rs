@@ -115,6 +115,7 @@ impl NvmeCmd {
             cdw15: 0,
         }
     }
+    // TODO: this function is not used
     pub fn get_features(_cid: u16, ptr: usize, fid: u8) -> Self {
         Self {
             opcode: 0xA,
