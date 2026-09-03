@@ -286,7 +286,7 @@ pub fn main() {
 
     let buf: String;
     let vt_path = if vt.parse::<usize>().is_ok() {
-        buf = format!("/scheme/fbcon/{vt}");
+        buf = format!("/scheme/fbcon.{vt}");
         &*buf
     } else {
         vt

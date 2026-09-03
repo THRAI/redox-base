@@ -77,9 +77,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 
     let _ = daemon.ready_sync_scheme(handler.socket(), &mut scheme);
 
-    // This is not possible for now as fbbootlogd needs to open new displays at runtime for graphics
-    // driver handoff. In the future inputd may directly pass a handle to the display instead.
-    //libredox::call::setrens(0, 0).expect("fbbootlogd: failed to enter null namespace");
+    libredox::call::setns(0).expect("fbbootlogd: failed to enter null namespace");
 
     for event in event_queue {
         match event.expect("fbbootlogd: failed to get event").user_data {

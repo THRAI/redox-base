@@ -1,0 +1,7 @@
+[unit]
+description = "Framebuffer text console $INSTANCE"
+
+[service]
+cmd = "fbcond"
+args = ["$INSTANCE"]
+type = { scheme = "fbcon.$INSTANCE" }

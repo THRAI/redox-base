@@ -1,7 +1,7 @@
 [unit]
 description = "Initialize terminal $INSTANCE"
 requires_weak = [
-    "00_fbcond.service",
+    "fbcond@$INSTANCE.service",
     "00_ptyd.service",
 ]
 

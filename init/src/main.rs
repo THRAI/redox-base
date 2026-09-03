@@ -177,6 +177,10 @@ fn main() {
             }
         };
         for entry in entries {
+            if entry.file_name().unwrap().to_str().unwrap().contains('@') {
+                continue;
+            }
+
             scheduler.schedule_start_and_report_errors(
                 &mut unit_store,
                 UnitId(entry.file_name().unwrap().to_str().unwrap().to_owned()),

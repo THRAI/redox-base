@@ -1,26 +1,32 @@
 use std::env;
+use std::os::fd::AsRawFd;
 
-use event::EventQueue;
+use event::{user_data, EventQueue};
 use inputd::ConsumerHandleEvent;
 use orbclient::Event;
 use redox_scheme::{Response, SignalBehavior, Socket};
 use scheme_utils::ReadinessBased;
 use syscall::EVENT_READ;
 
-use crate::scheme::{FbconResource, FbconScheme, FbconSchemeData, SchemeRoot, VtIndex};
+use crate::display::Display;
+use crate::scheme::{FbconResource, FbconScheme, FbconSchemeData, SchemeRoot};
 
 mod display;
 mod scheme;
 mod text;
 
+user_data! {
+    enum Source {
+        Scheme,
+        Vt,
+    }
+}
+
 fn main() {
     daemon::SchemeDaemon::new(daemon);
 }
 fn daemon(daemon: daemon::SchemeDaemon) -> ! {
-    let vt_ids = env::args()
-        .skip(1)
-        .map(|arg| arg.parse().expect("invalid vt number"))
-        .collect::<Vec<_>>();
+    let vt_id = env::args().skip(1).next().unwrap();
 
     common::setup_logging(
         "graphics",
@@ -29,37 +35,41 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
         common::output_level(),
         common::file_level(),
     );
-    let mut event_queue = EventQueue::new().expect("fbcond: failed to create event queue");
 
-    // FIXME listen for resize events from inputd and handle them
+    let event_queue = EventQueue::new().expect("fbcond: failed to create event queue");
 
     let socket = Socket::nonblock().expect("fbcond: failed to create fbcon scheme");
     event_queue
         .subscribe(
             socket.inner().raw(),
-            VtIndex::SCHEMA_SENTINEL,
+            Source::Scheme,
             event::EventFlags::READ,
         )
         .expect("fbcond: failed to subscribe to scheme events");
 
+    let display = Display::open_new_vt().expect("Failed to open display for vt");
+    event_queue
+        .subscribe(
+            display.input_handle.event_handle().as_raw_fd() as usize,
+            Source::Vt,
+            event::EventFlags::READ,
+        )
+        .expect("Failed to subscribe to input events for vt");
+
     let mut scheme = FbconScheme::new(
-        "fbcon".to_owned(),
-        FbconSchemeData::new(&vt_ids, &mut event_queue),
+        format!("fbcon.{vt_id}"),
+        FbconSchemeData::new(display),
         FbconResource::SchemeRoot(SchemeRoot),
     );
     let mut readiness = ReadinessBased::new(Box::new(socket), 16);
 
     let _ = daemon.ready_sync_scheme(readiness.socket(), &mut scheme);
 
-    // This is not possible for now as fbcond needs to open new displays at runtime for graphics
-    // driver handoff. In the future inputd may directly pass a handle to the display instead.
-    // libredox::call::setrens(0, 0).expect("fbcond: failed to enter null namespace");
+    libredox::call::setns(0).expect("fbcond: failed to enter null namespace");
 
     // Handle all events that could have happened before registering with the event queue.
-    handle_event(&mut scheme, &mut readiness, VtIndex::SCHEMA_SENTINEL);
-    for vt_i in scheme.scheme_data().vts.keys().copied().collect::<Vec<_>>() {
-        handle_event(&mut scheme, &mut readiness, vt_i);
-    }
+    handle_event(&mut scheme, &mut readiness, Source::Scheme);
+    handle_event(&mut scheme, &mut readiness, Source::Vt);
 
     for event in event_queue {
         let event = event.expect("fbcond: failed to read event from event queue");
@@ -72,16 +82,16 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 fn handle_event(
     scheme: &mut FbconScheme,
     readiness: &mut ReadinessBased<Box<Socket>>,
-    event: VtIndex,
+    event: Source,
 ) {
     match event {
-        VtIndex::SCHEMA_SENTINEL => {
+        Source::Scheme => {
             readiness
                 .read_and_process_requests(scheme)
                 .expect("fbcond: failed to read from socket");
         }
-        vt_i => {
-            let vt = scheme.scheme_data_mut().vts.get_mut(&vt_i).unwrap();
+        Source::Vt => {
+            let vt = &mut scheme.scheme_data_mut().console;
 
             let mut events = [Event::new(); 16];
             loop {
@@ -122,12 +132,7 @@ fn handle_event(
             continue;
         }
 
-        let can_read = scheme_data
-            .vts
-            .get(&handle.vt_i)
-            .map_or(false, |console| console.can_read());
-
-        if can_read {
+        if scheme_data.console.can_read() {
             if !handle.notified_read {
                 handle.notified_read = true;
                 let response = Response::post_fevent(*handle_id, EVENT_READ.bits());
