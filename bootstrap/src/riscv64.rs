@@ -1,5 +1,8 @@
 use core::mem;
-use syscall::{data::Map, flag::MapFlags, number::SYS_FMAP};
+
+use syscall::data::Map;
+use syscall::flag::MapFlags;
+use syscall::number::SYS_FMAP;
 
 const STACK_SIZE: usize = 64 * 1024; // 64 KiB
 pub const USERMODE_END: usize = 1 << 38; // Assuming Sv39

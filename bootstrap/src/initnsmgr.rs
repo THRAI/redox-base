@@ -5,19 +5,20 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
 use core::mem;
+
 use hashbrown::HashMap;
 use libredox::protocol::{NsDup, NsPermissions};
 use log::{error, warn};
-use redox_path::RedoxPath;
-use redox_path::RedoxScheme;
+use redox_path::{RedoxPath, RedoxScheme};
 use redox_rt::proc::{FdGuard, FdGuardUpper};
+use redox_scheme::scheme::{SchemeState, SchemeSync};
 use redox_scheme::{
     CallerCtx, OpenResult, RequestKind, Response, SendFdRequest, SignalBehavior, Socket,
-    scheme::{SchemeState, SchemeSync},
 };
-use syscall::Stat;
 use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
-use syscall::{CallFlags, FobtainFdFlags, error::*, schemev2::NewFdFlags};
+use syscall::error::*;
+use syscall::schemev2::NewFdFlags;
+use syscall::{CallFlags, FobtainFdFlags, Stat};
 
 #[derive(Debug, Clone)]
 struct Namespace {
@@ -187,7 +188,7 @@ impl<'sock> NamespaceScheme<'sock> {
             }
             _ => {
                 error!("Unknown special reference: {}", reference.as_ref());
-                return Err(Error::new(EINVAL));
+                Err(Error::new(EINVAL))
             }
         }
     }
@@ -213,9 +214,8 @@ impl<'sock> NamespaceScheme<'sock> {
 
     fn fork_namespace(&mut self, namespace: Rc<RefCell<Namespace>>, names: &[u8]) -> Result<usize> {
         let new_id = self.next_id;
-        let new_namespace = namespace.borrow().fork(names).map_err(|e| {
+        let new_namespace = namespace.borrow().fork(names).inspect_err(|&e| {
             error!("Failed to fork namespace {}: {}", new_id, e);
-            e
         })?;
         self.add_namespace(
             new_id,
@@ -570,13 +570,10 @@ pub fn run(
     drop(sync_pipe);
 
     log::info!("bootstrap: namespace scheme start!");
-    loop {
-        let Some(req) = socket
-            .next_request(SignalBehavior::Restart)
-            .expect("bootstrap: failed to read scheme request from kernel")
-        else {
-            break;
-        };
+    while let Some(req) = socket
+        .next_request(SignalBehavior::Restart)
+        .expect("bootstrap: failed to read scheme request from kernel")
+    {
         match req.kind() {
             RequestKind::Call(req) => {
                 let resp = req.handle_sync(&mut scheme, &mut state);
