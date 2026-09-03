@@ -2070,6 +2070,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "common",
+ "fdt 0.1.5",
  "libc",
  "libredox",
  "qemu-exit",
