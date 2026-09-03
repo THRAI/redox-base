@@ -1,0 +1,11 @@
+[unit]
+description = "Initialize terminal $INSTANCE"
+requires_weak = [
+    "00_fbcond.service",
+    "00_ptyd.service",
+]
+
+[service]
+cmd = "getty"
+args = ["$INSTANCE"]
+type = "oneshot_async"
