@@ -156,11 +156,13 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
                 None
             };
 
-            let primary_plane_id = crtc.lock().unwrap().primary_plane;
-            let plane = objects.get_plane(primary_plane_id)?;
-            let mut new_crtc_state = crtc.lock().unwrap().state.clone();
+            let plane = objects.get_plane(crtc.lock().unwrap().primary_plane)?;
+            let vt_state = vts.get_mut(&handle.vt).unwrap();
+            let new_crtc_state = &mut vt_state.crtc_state[crtc.lock().unwrap().crtc_index as usize];
+            let new_plane_state =
+                &mut vt_state.plane_state[plane.lock().unwrap().plane_index as usize];
+
             new_crtc_state.mode = mode;
-            let mut new_plane_state = plane.lock().unwrap().state.clone();
             let old_fb_id = new_plane_state.fb_id;
             new_plane_state.fb_id = fb_id;
             new_plane_state.crtc_id = Some(crtc_id);
@@ -186,12 +188,6 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
                         .crtc_id = crtc_id
                 }
             }
-            crtc.lock().unwrap().state = new_crtc_state.clone();
-            plane.lock().unwrap().state = new_plane_state.clone();
-            vts.get_mut(&handle.vt).unwrap().crtc_state[crtc.lock().unwrap().crtc_index as usize] =
-                new_crtc_state;
-            vts.get_mut(&handle.vt).unwrap().plane_state
-                [plane.lock().unwrap().plane_index as usize] = new_plane_state;
 
             if let Some(old_fb_id) = old_fb_id {
                 if !VtState::fb_has_any_use(vts, old_fb_id) {
@@ -307,13 +303,14 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             let crtc_id = KmsObjectId(data.crtc_id());
             let crtc_index = objects.get_crtc(crtc_id)?.lock().unwrap().crtc_index;
 
-            let mut new_state = {
+            let plane_index = {
                 let plane = plane.lock().unwrap();
                 if plane.possible_crtcs & (1 << crtc_index) == 0 {
                     return Err(Error::new(EINVAL));
                 }
-                plane.state.clone()
+                plane.plane_index as usize
             };
+            let new_state = &mut vts.get_mut(&handle.vt).unwrap().plane_state[plane_index];
             let fb_id = if data.fb_id() != 0 {
                 let fb_id = KmsObjectId(data.fb_id());
                 objects.get_framebuffer(fb_id)?;
@@ -350,8 +347,6 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
                     },
                 )?;
             }
-            vts.get_mut(&handle.vt).unwrap().plane_state
-                [plane.lock().unwrap().plane_index as usize] = new_state;
 
             if let Some(old_fb_id) = old_fb_id {
                 if !VtState::fb_has_any_use(vts, old_fb_id) {
