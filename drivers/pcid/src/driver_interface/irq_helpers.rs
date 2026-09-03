@@ -34,7 +34,7 @@ pub fn read_bsp_apic_id() -> io::Result<usize> {
         panic!(
             "`/scheme/irq` scheme responded with {} bytes, expected {}",
             bytes_read,
-            std::mem::size_of::<usize>()
+            size_of::<usize>()
         );
     })
     .or(Err(io::Error::new(

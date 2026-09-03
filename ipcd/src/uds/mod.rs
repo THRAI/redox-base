@@ -1,6 +1,6 @@
+use std::cmp;
 use std::convert::TryInto;
 use std::fmt::Debug;
-use std::{cmp, mem};
 
 use libredox::protocol::ProcMeta;
 use rand::rngs::SmallRng;
@@ -16,14 +16,14 @@ pub mod stream;
 const SCM_CREDENTIALS: i32 = 2;
 
 const MAX_DGRAM_MSG_LEN: usize = 65536;
-const MIN_RECV_MSG_LEN: usize = mem::size_of::<usize>() * 2; // name_len, payload_len,
+const MIN_RECV_MSG_LEN: usize = size_of::<usize>() * 2; // name_len, payload_len,
 const CMSG_HEADER_LEN_IN_STREAM: usize = CMSG_LEVEL_SIZE + CMSG_TYPE_SIZE + CMSG_DATA_LEN_SIZE;
-const CMSG_LEVEL_SIZE: usize = mem::size_of::<i32>();
-const CMSG_TYPE_SIZE: usize = mem::size_of::<i32>();
-const CMSG_DATA_LEN_SIZE: usize = mem::size_of::<usize>();
-const PID_SIZE: usize = mem::size_of::<i32>();
-const UID_SIZE: usize = mem::size_of::<i32>();
-const GID_SIZE: usize = mem::size_of::<i32>();
+const CMSG_LEVEL_SIZE: usize = size_of::<i32>();
+const CMSG_TYPE_SIZE: usize = size_of::<i32>();
+const CMSG_DATA_LEN_SIZE: usize = size_of::<usize>();
+const PID_SIZE: usize = size_of::<i32>();
+const UID_SIZE: usize = size_of::<i32>();
+const GID_SIZE: usize = size_of::<i32>();
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Credential {
@@ -67,10 +67,10 @@ impl AncillaryDataHeader {
 
         // cmsg entry format: [level(i32)][type(i32)][data_len(usize)][data]
         let cmsg_level = read_num::<i32>(&stream[cursor..])?;
-        cursor += mem::size_of::<i32>();
+        cursor += size_of::<i32>();
 
         let cmsg_type = read_num::<i32>(&stream[cursor..])?;
-        cursor += mem::size_of::<i32>();
+        cursor += size_of::<i32>();
 
         let cmsg_data_len = read_num::<usize>(&stream[cursor..])?;
 
@@ -108,7 +108,7 @@ impl DataPacket {
     fn from_stream(stream: &[u8], name: Option<String>, cred: Credential) -> Result<Self> {
         let mut cursor: usize = 0;
         let payload_len = read_num::<usize>(&stream[cursor..])?;
-        cursor += mem::size_of::<usize>();
+        cursor += size_of::<usize>();
         let payload = stream
             .get(cursor..cursor + payload_len)
             .ok_or_else(|| {
@@ -159,7 +159,7 @@ macro_rules! num_from_bytes_impl {
         $(
             impl NumFromBytes for $t {
                 fn from_le_bytes_slice(buffer: &[u8]) -> Result<Self, Error> {
-                    let size = mem::size_of::<Self>();
+                    let size = size_of::<Self>();
                     let buffer_slice = buffer.get(..size).and_then(|s| s.try_into().ok());
 
                     if let Some(slice) = buffer_slice {
@@ -187,7 +187,7 @@ where
 }
 
 fn get_uid_gid_from_pid(cap_fd: usize, target_pid: usize) -> Result<(u32, u32, u32)> {
-    let mut buffer = [0u8; mem::size_of::<ProcMeta>()];
+    let mut buffer = [0u8; size_of::<ProcMeta>()];
     let _ = libredox::call::get_proc_credentials(cap_fd, target_pid, &mut buffer).map_err(|e| {
         eprintln!(
             "Failed to get process credentials for pid {}: {:?}",
@@ -197,15 +197,15 @@ fn get_uid_gid_from_pid(cap_fd: usize, target_pid: usize) -> Result<(u32, u32, u
     })?;
     let mut cursor = 0;
     let pid = read_num::<u32>(&buffer[cursor..])?;
-    cursor += mem::size_of::<u32>() * 3;
+    cursor += size_of::<u32>() * 3;
     let uid = read_num::<u32>(&buffer[cursor..])?;
-    cursor += mem::size_of::<u32>() * 3;
+    cursor += size_of::<u32>() * 3;
     let gid = read_num::<u32>(&buffer[cursor..])?;
     Ok((pid, uid, gid))
 }
 
 fn read_msghdr_info(stream: &mut [u8]) -> Result<(usize, usize, usize)> {
-    if stream.len() < mem::size_of::<usize>() * 3 {
+    if stream.len() < size_of::<usize>() * 3 {
         eprintln!(
             "get_msghdr_info: stream buffer is too small to read headers. len: {}",
             stream.len()
@@ -214,13 +214,13 @@ fn read_msghdr_info(stream: &mut [u8]) -> Result<(usize, usize, usize)> {
     }
     let mut cursor: usize = 0;
     let prepared_name_len = read_num::<usize>(&stream[cursor..])?;
-    cursor += mem::size_of::<usize>();
+    cursor += size_of::<usize>();
     let prepared_whole_iov_size = read_num::<usize>(&stream[cursor..])?;
-    cursor += mem::size_of::<usize>();
+    cursor += size_of::<usize>();
     let prepared_msg_controllen = read_num::<usize>(&stream[cursor..])?;
-    cursor += mem::size_of::<usize>();
+    cursor += size_of::<usize>();
     // Clear the stream buffer
-    stream[..cursor].copy_from_slice(&[0u8; mem::size_of::<usize>() * 3]);
+    stream[..cursor].copy_from_slice(&[0u8; size_of::<usize>() * 3]);
     Ok((
         prepared_name_len,
         prepared_whole_iov_size,
@@ -250,7 +250,7 @@ impl<'a> MsgWriter<'a> {
         name_buf_size: usize,
         name_write_fn: impl FnOnce(&String, &mut [u8]) -> Result<usize>,
     ) -> Result<()> {
-        if self.buffer.len() < self.written_len + mem::size_of::<usize>() {
+        if self.buffer.len() < self.written_len + size_of::<usize>() {
             eprintln!("MsgWriter::write_name: Buffer too small to write name length. written_len: {}, buffer_len: {}", self.written_len, self.buffer.len());
             self.written_len = self.buffer.len();
             return Ok(());
@@ -258,22 +258,22 @@ impl<'a> MsgWriter<'a> {
         if let Some(name) = name {
             let copy_len = cmp::min(
                 name_buf_size,
-                self.buffer.len() - self.written_len - mem::size_of::<usize>(),
+                self.buffer.len() - self.written_len - size_of::<usize>(),
             );
             if name_buf_size > 0 && copy_len < name.len() {
                 eprintln!("MsgWriter::write_name: Name will be truncated. Full length: {}, buffer available: {}", name.len(), copy_len);
             }
             let name_len = name_write_fn(
                 &name,
-                &mut self.buffer[self.written_len + mem::size_of::<usize>()
-                    ..self.written_len + mem::size_of::<usize>() + copy_len],
+                &mut self.buffer[self.written_len + size_of::<usize>()
+                    ..self.written_len + size_of::<usize>() + copy_len],
             )?;
-            self.buffer[self.written_len..self.written_len + mem::size_of::<usize>()]
+            self.buffer[self.written_len..self.written_len + size_of::<usize>()]
                 .copy_from_slice(&name_len.to_le_bytes());
-            self.written_len += mem::size_of::<usize>() + name_len;
+            self.written_len += size_of::<usize>() + name_len;
             Ok(())
         } else {
-            self.written_len += mem::size_of::<usize>();
+            self.written_len += size_of::<usize>();
             Ok(())
         }
     }
@@ -281,14 +281,14 @@ impl<'a> MsgWriter<'a> {
     fn write_payload(&mut self, payload: &[u8], full_len: usize, iov_size: usize) -> Result<usize> {
         let Some(payload_len_buffer) = self
             .buffer
-            .get_mut(self.written_len..self.written_len + mem::size_of::<usize>())
+            .get_mut(self.written_len..self.written_len + size_of::<usize>())
         else {
             eprintln!("MsgWriter::write_payload: Buffer too small to write payload length. written_len: {}, buffer_len: {}", self.written_len, self.buffer.len());
             self.written_len = self.buffer.len();
             return Ok(0);
         };
         payload_len_buffer.copy_from_slice(&full_len.to_le_bytes());
-        self.written_len += mem::size_of::<usize>();
+        self.written_len += size_of::<usize>();
 
         let copy_len = cmp::min(iov_size, full_len);
         if copy_len < full_len {

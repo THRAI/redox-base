@@ -214,15 +214,13 @@ impl ScratchpadBufferArray {
 
 #[cfg(test)]
 mod test {
-    use core::mem;
-
     use super::*;
 
     #[test]
     fn context_size() {
-        assert_eq!(mem::size_of::<SlotContext<CONTEXT_32>>(), 32);
-        assert_eq!(mem::size_of::<SlotContext<CONTEXT_64>>(), 64);
-        assert_eq!(mem::size_of::<EndpointContext<CONTEXT_32>>(), 32);
-        assert_eq!(mem::size_of::<EndpointContext<CONTEXT_64>>(), 64);
+        assert_eq!(size_of::<SlotContext<CONTEXT_32>>(), 32);
+        assert_eq!(size_of::<SlotContext<CONTEXT_64>>(), 64);
+        assert_eq!(size_of::<EndpointContext<CONTEXT_32>>(), 32);
+        assert_eq!(size_of::<EndpointContext<CONTEXT_64>>(), 64);
     }
 }

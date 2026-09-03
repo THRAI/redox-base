@@ -1,9 +1,9 @@
 use std::cell::{OnceCell, RefCell};
 use std::convert::{TryFrom, TryInto};
+use std::fmt;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::{fmt, mem};
 
 use acpi::AcpiTables;
 use acpi::aml::namespace::AmlName;
@@ -160,15 +160,15 @@ impl Sdt {
         // Begin by reading and validating the header first. The SDT header is always 36 bytes
         // long, and can thus span either one or two page table frames.
         let needs_extra_page = (PAGE_SIZE - physaddr_page_offset)
-            .checked_sub(mem::size_of::<SdtHeader>())
+            .checked_sub(size_of::<SdtHeader>())
             .is_none();
         let page_table_count = 1 + if needs_extra_page { 1 } else { 0 };
 
         let pages = PhysmapGuard::map(physaddr_start_page, page_table_count)?;
-        assert!(pages.len() >= mem::size_of::<SdtHeader>());
+        assert!(pages.len() >= size_of::<SdtHeader>());
         let sdt_mem = &pages[physaddr_page_offset..];
 
-        let sdt = plain::from_bytes::<SdtHeader>(&sdt_mem[..mem::size_of::<SdtHeader>()])
+        let sdt = plain::from_bytes::<SdtHeader>(&sdt_mem[..size_of::<SdtHeader>()])
             .expect("either alignment is wrong, or the length is too short, both of which are already checked for");
 
         let total_length = sdt.length();
@@ -214,7 +214,7 @@ impl Deref for Sdt {
 
 impl Sdt {
     pub fn data(&self) -> &[u8] {
-        &self.0[mem::size_of::<SdtHeader>()..]
+        &self.0[size_of::<SdtHeader>()..]
     }
 }
 
@@ -737,7 +737,7 @@ pub struct Fadt(Sdt);
 
 impl Fadt {
     pub fn acpi_2_struct(&self) -> Option<&FadtAcpi2Struct> {
-        let bytes = &self.0.0[mem::size_of::<FadtStruct>()..];
+        let bytes = &self.0.0[size_of::<FadtStruct>()..];
 
         match plain::from_bytes::<FadtAcpi2Struct>(bytes) {
             Ok(fadt2) => Some(fadt2),
@@ -760,7 +760,7 @@ impl Deref for Fadt {
 
 impl Fadt {
     pub fn new(sdt: Sdt) -> Option<Fadt> {
-        if sdt.signature != *b"FACP" || sdt.length() < mem::size_of::<Fadt>() {
+        if sdt.signature != *b"FACP" || sdt.length() < size_of::<Fadt>() {
             return None;
         }
         Some(Fadt(sdt))

@@ -1,5 +1,3 @@
-use std::mem;
-
 use common::io::{Io, Mmio, ReadOnly};
 use syscall::error::{Error, Result, EIO};
 
@@ -202,16 +200,16 @@ impl Bios {
 
         let mut block_addr = bdb_addr + bdb_header.header_size.read() as usize;
         let block_end = bdb_addr + bdb_header.bdb_size.read() as usize;
-        while block_addr + mem::size_of::<BdbBlock>() <= block_end {
+        while block_addr + size_of::<BdbBlock>() <= block_end {
             let block = unsafe { &*(block_addr as *const BdbBlock) };
             //TODO: mipi sequence v3 has different size field
             let id = block.id.read();
             let size = block.size.read() as usize;
-            block_addr += mem::size_of::<BdbBlock>();
+            block_addr += size_of::<BdbBlock>();
             if block_addr + size <= block_end {
                 match id {
                     2 => {
-                        if size >= mem::size_of::<BdbGeneralDefinitions>() {
+                        if size >= size_of::<BdbGeneralDefinitions>() {
                             let gen_defs =
                                 unsafe { &*(block_addr as *const BdbGeneralDefinitions) };
                             gen_defs.dump();

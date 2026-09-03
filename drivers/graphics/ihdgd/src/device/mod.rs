@@ -148,7 +148,7 @@ impl MmioRegion {
     unsafe fn mmio(&self, offset: usize) -> Result<MmioPtr<u32>> {
         // Any errors here will return ERANGE
         let err = Error::new(ERANGE);
-        if offset.checked_add(mem::size_of::<u32>()).ok_or(err)? > self.size {
+        if offset.checked_add(size_of::<u32>()).ok_or(err)? > self.size {
             return Err(err);
         }
         let addr = self.virt.checked_add(offset).ok_or(err)?;

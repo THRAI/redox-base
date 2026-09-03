@@ -228,7 +228,7 @@ fn allocate_and_write_link(state: &mut State, link: &Path) -> Result<WriteResult
 
 fn allocate_and_write_dir(state: &mut State, dir: &[Entry]) -> Result<WriteResult> {
     let entry_size =
-        u16::try_from(std::mem::size_of::<initfs::DirEntry>()).context("entry size too large")?;
+        u16::try_from(size_of::<initfs::DirEntry>()).context("entry size too large")?;
     let entry_count = u16::try_from(dir.len()).context("too many subdirectories")?;
 
     let entry_table_length = u32::from(entry_count)
@@ -297,7 +297,7 @@ fn allocate_and_write_dir(state: &mut State, dir: &[Entry]) -> Result<WriteResul
             (offset, name_len)
         };
         {
-            let mut direntry_buf = [0_u8; std::mem::size_of::<initfs::DirEntry>()];
+            let mut direntry_buf = [0_u8; size_of::<initfs::DirEntry>()];
 
             let direntry = plain::from_mut_bytes::<initfs::DirEntry>(&mut direntry_buf)
                 .expect("expected dir entry struct to have alignment 1, and buffer size to match");
@@ -371,7 +371,7 @@ impl InodeTable {
 fn write_inode_table(state: &mut State) -> Result<initfs::Offset> {
     log::debug!("there are {} inodes", state.inode_table.count());
 
-    let inode_size: u32 = std::mem::size_of::<initfs::InodeHeader>()
+    let inode_size: u32 = size_of::<initfs::InodeHeader>()
         .try_into()
         .expect("inode header length cannot fit within u32");
 
@@ -387,7 +387,7 @@ fn write_inode_table(state: &mut State) -> Result<initfs::Offset> {
 
     for (i, inode) in state.inode_table.entries.iter().enumerate() {
         // TODO: Use main buffer and write in bulk.
-        let mut inode_buf = [0_u8; std::mem::size_of::<initfs::InodeHeader>()];
+        let mut inode_buf = [0_u8; size_of::<initfs::InodeHeader>()];
 
         let inode_hdr = plain::from_mut_bytes::<initfs::InodeHeader>(&mut inode_buf)
             .expect("expected inode struct to have alignment 1, and buffer size to match");
@@ -532,7 +532,7 @@ pub fn build_initfs(
     let inode_table_offset = write_inode_table(&mut state)?;
 
     {
-        let mut header_bytes = [0_u8; std::mem::size_of::<initfs::Header>()];
+        let mut header_bytes = [0_u8; size_of::<initfs::Header>()];
         let header = plain::from_mut_bytes(&mut header_bytes)
             .expect("expected header size to be sufficient and alignment to be 1");
 

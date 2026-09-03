@@ -369,7 +369,7 @@ impl Intel8259x {
         );
         self.write_reg(
             IXGBE_RDLEN(i),
-            (self.receive_ring.len() * mem::size_of::<ixgbe_adv_rx_desc>()) as u32,
+            (self.receive_ring.len() * size_of::<ixgbe_adv_rx_desc>()) as u32,
         );
 
         // set ring to empty at start
@@ -418,7 +418,7 @@ impl Intel8259x {
         );
         self.write_reg(
             IXGBE_TDLEN(i),
-            (self.transmit_ring.len() * mem::size_of::<ixgbe_adv_tx_desc>()) as u32,
+            (self.transmit_ring.len() * size_of::<ixgbe_adv_tx_desc>()) as u32,
         );
 
         // descriptor writeback magic values, important to get good performance and low PCIe overhead

@@ -2,8 +2,8 @@
 
 use std::fs::File;
 use std::io::{Read, Write};
+use std::iter;
 use std::os::unix::io::AsRawFd;
-use std::{iter, mem};
 
 use common::dma::Dma;
 use common::io::{Io, Mmio};
@@ -61,7 +61,7 @@ impl VboxGetMouse {
     fn new() -> syscall::Result<Dma<Self>> {
         let mut packet = unsafe { Dma::<Self>::zeroed()?.assume_init() };
 
-        packet.header.size.write(mem::size_of::<Self>() as u32);
+        packet.header.size.write(size_of::<Self>() as u32);
         packet.header.version.write(VBOX_REQUEST_HEADER_VERSION);
         packet.header.request.write(Self::request());
 
@@ -86,7 +86,7 @@ impl VboxSetMouse {
     fn new() -> syscall::Result<Dma<Self>> {
         let mut packet = unsafe { Dma::<Self>::zeroed()?.assume_init() };
 
-        packet.header.size.write(mem::size_of::<Self>() as u32);
+        packet.header.size.write(size_of::<Self>() as u32);
         packet.header.version.write(VBOX_REQUEST_HEADER_VERSION);
         packet.header.request.write(Self::request());
 
@@ -109,7 +109,7 @@ impl VboxAckEvents {
     fn new() -> syscall::Result<Dma<Self>> {
         let mut packet = unsafe { Dma::<Self>::zeroed()?.assume_init() };
 
-        packet.header.size.write(mem::size_of::<Self>() as u32);
+        packet.header.size.write(size_of::<Self>() as u32);
         packet.header.version.write(VBOX_REQUEST_HEADER_VERSION);
         packet.header.request.write(Self::request());
 
@@ -132,7 +132,7 @@ impl VboxGuestCaps {
     fn new() -> syscall::Result<Dma<Self>> {
         let mut packet = unsafe { Dma::<Self>::zeroed()?.assume_init() };
 
-        packet.header.size.write(mem::size_of::<Self>() as u32);
+        packet.header.size.write(size_of::<Self>() as u32);
         packet.header.version.write(VBOX_REQUEST_HEADER_VERSION);
         packet.header.request.write(Self::request());
 
@@ -157,7 +157,7 @@ impl VboxDisplayChange {
     fn new() -> syscall::Result<Dma<Self>> {
         let mut packet = unsafe { Dma::<Self>::zeroed()?.assume_init() };
 
-        packet.header.size.write(mem::size_of::<Self>() as u32);
+        packet.header.size.write(size_of::<Self>() as u32);
         packet.header.version.write(VBOX_REQUEST_HEADER_VERSION);
         packet.header.request.write(Self::request());
 
@@ -181,7 +181,7 @@ impl VboxGuestInfo {
     fn new() -> syscall::Result<Dma<Self>> {
         let mut packet = unsafe { Dma::<Self>::zeroed()?.assume_init() };
 
-        packet.header.size.write(mem::size_of::<Self>() as u32);
+        packet.header.size.write(size_of::<Self>() as u32);
         packet.header.version.write(VBOX_REQUEST_HEADER_VERSION);
         packet.header.request.write(Self::request());
 

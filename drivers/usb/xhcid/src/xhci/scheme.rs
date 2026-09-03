@@ -18,9 +18,9 @@
 //! port<n>/endpoints/<n>/data
 use std::convert::TryFrom;
 use std::io::prelude::*;
-use std::ops::Deref;
-use std::sync::atomic;
-use std::{cmp, fmt, io, mem, str};
+use std::ops::{Add, Deref, Div, Rem};
+use std::sync::{atomic, LazyLock};
+use std::{cmp, fmt, io, str};
 
 use common::dma::Dma;
 use common::io::Io;
@@ -50,33 +50,48 @@ use super::usb::endpoint::EndpointTy;
 use super::{port, usb, EndpNum, EndpointState, PortId, Xhci};
 use crate::driver_interface::*;
 
-lazy_static! {
-    static ref REGEX_PORT_CONFIGURE: Regex = Regex::new(r"^port([\d\.]+)/configure$")
-        .expect("Failed to create the regex for the port<n>/configure scheme.");
-    static ref REGEX_PORT_ATTACH: Regex = Regex::new(r"^port([\d\.]+)/attach$")
-        .expect("Failed to create the regex for the port<n>/attach scheme.");
-    static ref REGEX_PORT_DETACH: Regex = Regex::new(r"^port([\d\.]+)/detach$")
-        .expect("Failed to create the regex for the port<n>/detach scheme.");
-    static ref REGEX_PORT_DESCRIPTORS: Regex = Regex::new(r"^port([\d\.]+)/descriptors$")
-        .expect("Failed to create the regex for the port<n>/descriptors");
-    static ref REGEX_PORT_STATE: Regex = Regex::new(r"^port([\d\.]+)/state$")
-        .expect("Failed to create the regex for the port<n>/state scheme");
-    static ref REGEX_PORT_REQUEST: Regex = Regex::new(r"^port([\d\.]+)/request$")
-        .expect("Failed to create the regex for the port<n>/request scheme");
-    static ref REGEX_PORT_ENDPOINTS: Regex = Regex::new(r"^port([\d\.]+)/endpoints$")
-        .expect("Failed to create the regex for the port<n>/endpoints scheme");
-    static ref REGEX_PORT_SPECIFIC_ENDPOINT: Regex =
-        Regex::new(r"^port([\d\.]+)/endpoints/(\d{1,3})$")
-            .expect("Failed to create the regex for the port<n>/endpoints/<n> scheme");
-    static ref REGEX_PORT_SUB_ENDPOINT: Regex = Regex::new(
-        r"port([\d\.]+)/endpoints/(\d{1,3})/(ctl|data)$"
-    )
-    .expect("Failed to create the regex for the port<n>/endpoints/<n>/<sub_endpoint> scheme");
-    static ref REGEX_PORT_ROOT: Regex =
-        Regex::new(r"^port([\d\.]+)$").expect("Failed to create the regex for the port<n> scheme.");
-    static ref REGEX_TOP_LEVEL: Regex =
-        Regex::new(r"^$").expect("Failed to create the regex for the top-level scheme");
-}
+static REGEX_PORT_CONFIGURE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^port([\d\.]+)/configure$")
+        .expect("Failed to create the regex for the port<n>/configure scheme.")
+});
+static REGEX_PORT_ATTACH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^port([\d\.]+)/attach$")
+        .expect("Failed to create the regex for the port<n>/attach scheme.")
+});
+static REGEX_PORT_DETACH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^port([\d\.]+)/detach$")
+        .expect("Failed to create the regex for the port<n>/detach scheme.")
+});
+static REGEX_PORT_DESCRIPTORS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^port([\d\.]+)/descriptors$")
+        .expect("Failed to create the regex for the port<n>/descriptors")
+});
+static REGEX_PORT_STATE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^port([\d\.]+)/state$")
+        .expect("Failed to create the regex for the port<n>/state scheme")
+});
+static REGEX_PORT_REQUEST: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^port([\d\.]+)/request$")
+        .expect("Failed to create the regex for the port<n>/request scheme")
+});
+static REGEX_PORT_ENDPOINTS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^port([\d\.]+)/endpoints$")
+        .expect("Failed to create the regex for the port<n>/endpoints scheme")
+});
+static REGEX_PORT_SPECIFIC_ENDPOINT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^port([\d\.]+)/endpoints/(\d{1,3})$")
+        .expect("Failed to create the regex for the port<n>/endpoints/<n> scheme")
+});
+static REGEX_PORT_SUB_ENDPOINT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"port([\d\.]+)/endpoints/(\d{1,3})/(ctl|data)$")
+        .expect("Failed to create the regex for the port<n>/endpoints/<n>/<sub_endpoint> scheme")
+});
+static REGEX_PORT_ROOT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^port([\d\.]+)$").expect("Failed to create the regex for the port<n> scheme.")
+});
+static REGEX_TOP_LEVEL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^$").expect("Failed to create the regex for the top-level scheme")
+});
 
 pub enum ControlFlow {
     Continue,
@@ -430,7 +445,7 @@ impl<'a, T> fmt::Debug for DmaSliceDbg<'a, T> {
         f.debug_struct("Dma")
             .field("phys_ptr", &(dma.physical() as *const u8))
             .field("virt_ptr", &(dma.deref().as_ptr() as *const u8))
-            .field("length", &(dma.len() * mem::size_of::<T>()))
+            .field("length", &(dma.len() * size_of::<T>()))
             .finish()
     }
 }
@@ -1347,7 +1362,7 @@ impl<const N: usize> Xhci<N> {
                     div_round_up(
                         dma_buf.as_ref().map(|buf| buf.len()).unwrap_or(0),
                         max_transfer_size as usize,
-                    ) * mem::size_of::<Trb>(),
+                    ) * size_of::<Trb>(),
                 )
                 .ok()
                 .unwrap_or(0x1F),
@@ -1497,7 +1512,7 @@ impl<const N: usize> Xhci<N> {
                 desc
             );
 
-            let extra_length = desc.total_length as usize - mem::size_of_val(&desc);
+            let extra_length = desc.total_length as usize - size_of_val(&desc);
             let data = &data[..extra_length];
 
             let mut i = 0;
@@ -2849,9 +2864,6 @@ pub fn handle_transfer_event_trb(name: &str, event_trb: &Trb, transfer_trb: &Trb
         Err(Error::new(EIO))
     }
 }
-use std::ops::{Add, Div, Rem};
-
-use lazy_static::lazy_static;
 
 pub fn div_round_up<T>(a: T, b: T) -> T
 where

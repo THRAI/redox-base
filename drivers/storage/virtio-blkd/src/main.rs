@@ -59,7 +59,7 @@ impl BlockDeviceConfig {
     {
         let transport = self.0.upgrade().unwrap();
 
-        let size = core::mem::size_of::<T>()
+        let size = size_of::<T>()
             .try_into()
             .expect("load_config: invalid size");
 
@@ -85,7 +85,7 @@ pub enum BlockRequestTy {
     Out = 1,
 }
 
-const_assert_eq!(core::mem::size_of::<BlockRequestTy>(), 4);
+const_assert_eq!(size_of::<BlockRequestTy>(), 4);
 
 #[repr(C)]
 pub struct BlockVirtRequest {
@@ -94,7 +94,7 @@ pub struct BlockVirtRequest {
     pub sector: u64,
 }
 
-const_assert_eq!(core::mem::size_of::<BlockVirtRequest>(), 16);
+const_assert_eq!(size_of::<BlockVirtRequest>(), 16);
 
 fn main() {
     pcid_interface::pci_daemon(daemon_runner);

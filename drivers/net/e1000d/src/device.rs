@@ -307,10 +307,7 @@ impl Intel8254x {
 
         self.write_reg(RDBAH, ((self.receive_ring.physical() as u64) >> 32) as u32);
         self.write_reg(RDBAL, self.receive_ring.physical() as u32);
-        self.write_reg(
-            RDLEN,
-            (self.receive_ring.len() * mem::size_of::<Rd>()) as u32,
-        );
+        self.write_reg(RDLEN, (self.receive_ring.len() * size_of::<Rd>()) as u32);
         self.write_reg(RDH, 0);
         self.write_reg(RDT, self.receive_ring.len() as u32 - 1);
 
@@ -321,10 +318,7 @@ impl Intel8254x {
 
         self.write_reg(TDBAH, ((self.transmit_ring.physical() as u64) >> 32) as u32);
         self.write_reg(TDBAL, self.transmit_ring.physical() as u32);
-        self.write_reg(
-            TDLEN,
-            (self.transmit_ring.len() * mem::size_of::<Td>()) as u32,
-        );
+        self.write_reg(TDLEN, (self.transmit_ring.len() * size_of::<Td>()) as u32);
         self.write_reg(TDH, 0);
         self.write_reg(TDT, 0);
 

@@ -1,6 +1,6 @@
 use std::convert::{TryFrom, TryInto};
 use std::os::unix::io::AsRawFd;
-use std::{mem, str};
+use std::str;
 
 use event::{EventFlags, RawEventQueue};
 use indexmap::IndexMap;
@@ -1500,7 +1500,7 @@ fn check_permissions(flags: usize, single_mode: u8) -> Result<()> {
 }
 
 fn get_uid_gid_from_pid(cap_fd: &libredox::Fd, target_pid: usize) -> Result<(u32, u32, u32)> {
-    let mut buffer = [0u8; mem::size_of::<libredox::protocol::ProcMeta>()];
+    let mut buffer = [0u8; size_of::<libredox::protocol::ProcMeta>()];
     let _ = libredox::call::get_proc_credentials(cap_fd.raw(), target_pid, &mut buffer).map_err(
         |e| {
             eprintln!(
@@ -1512,9 +1512,9 @@ fn get_uid_gid_from_pid(cap_fd: &libredox::Fd, target_pid: usize) -> Result<(u32
     )?;
     let mut cursor = 0;
     let pid = read_u32(&buffer, cursor)?;
-    cursor += mem::size_of::<u32>() * 3;
+    cursor += size_of::<u32>() * 3;
     let uid = read_u32(&buffer, cursor)?;
-    cursor += mem::size_of::<u32>() * 3;
+    cursor += size_of::<u32>() * 3;
     let gid = read_u32(&buffer, cursor)?;
     Ok((pid, uid, gid))
 }

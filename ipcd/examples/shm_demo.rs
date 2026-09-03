@@ -15,7 +15,7 @@ fn main() -> Result<(), io::Error> {
             &syscall::Map {
                 offset: 0,
                 address: 0,
-                size: mem::size_of::<usize>(),
+                size: size_of::<usize>(),
                 flags: syscall::PROT_READ | syscall::PROT_WRITE | syscall::MAP_SHARED,
             },
         )

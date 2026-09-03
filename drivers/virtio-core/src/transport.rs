@@ -1,4 +1,3 @@
-use core::mem::size_of;
 use core::sync::atomic::{AtomicU16, Ordering};
 use std::collections::HashMap;
 use std::future::Future;

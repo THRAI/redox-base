@@ -176,7 +176,7 @@ impl<'initfs> InitFs<'initfs> {
     pub fn new(base: &'initfs [u8], required_page_size: Option<u16>) -> Result<Self> {
         let this = Self { base };
 
-        if base.len() < core::mem::size_of::<Header>() {
+        if base.len() < size_of::<Header>() {
             return Err(Error);
         }
         if u32::try_from(base.len()).is_err() {
@@ -217,19 +217,19 @@ impl<'initfs> InitFs<'initfs> {
         Ok(this)
     }
     fn get_header_assume_valid(&self) -> &Header {
-        plain::from_bytes::<Header>(&self.base[..core::mem::size_of::<Header>()])
+        plain::from_bytes::<Header>(&self.base[..size_of::<Header>()])
             .expect("expected header type to require no alignment, and size to be sufficient")
     }
     pub fn header(&self) -> &Header {
         self.get_header_assume_valid()
     }
     fn header_len_8() -> u8 {
-        core::mem::size_of::<Header>()
+        size_of::<Header>()
             .try_into()
             .expect("expected header size to fit within u8")
     }
     fn inode_struct_len_8() -> u8 {
-        core::mem::size_of::<InodeHeader>()
+        size_of::<InodeHeader>()
             .try_into()
             .expect("expected inode struct size to fit within u8")
     }

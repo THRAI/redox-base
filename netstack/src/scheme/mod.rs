@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::mem::size_of;
 use std::os::fd::{FromRawFd, RawFd};
 use std::rc::Rc;
 use std::str::FromStr;

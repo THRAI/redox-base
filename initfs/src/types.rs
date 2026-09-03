@@ -31,7 +31,7 @@ macro_rules! primitive(
         }
         impl core::fmt::Debug for $wrapper {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                write!(f, "{:#0width$x}", self.get(), width = 2 * core::mem::size_of::<$primitive>())
+                write!(f, "{:#0width$x}", self.get(), width = 2 * size_of::<$primitive>())
             }
         }
     }

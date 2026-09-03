@@ -1,5 +1,4 @@
 use std::convert::TryFrom;
-use std::mem;
 
 pub mod cmds;
 pub mod opcodes;
@@ -39,7 +38,7 @@ pub enum ScsiError {
 
 impl Scsi {
     pub fn new(protocol: &mut dyn Protocol) -> Result<Self> {
-        assert_eq!(std::mem::size_of::<StandardInquiryData>(), 96);
+        assert_eq!(size_of::<StandardInquiryData>(), 96);
 
         let mut this = Self {
             command_buffer: [0u8; 16],
@@ -134,11 +133,11 @@ impl Scsi {
         BlkDescSlice<'_>,
         impl Iterator<Item = cmds::AnyModePage<'_>>,
     )> {
-        let initial_alloc_len = mem::size_of::<cmds::ModeParamHeader10>() as u16; // covers both mode_data_len and blk_desc_len.
+        let initial_alloc_len = size_of::<cmds::ModeParamHeader10>() as u16; // covers both mode_data_len and blk_desc_len.
         let mode_sense10 = self.cmd_mode_sense10();
         *mode_sense10 = cmds::ModeSense10::get_block_desc(initial_alloc_len, 0);
         self.data_buffer
-            .resize(mem::size_of::<cmds::ModeParamHeader10>(), 0);
+            .resize(size_of::<cmds::ModeParamHeader10>(), 0);
         if let SendCommandStatus {
             kind: SendCommandStatusKind::Failed,
             ..
@@ -201,7 +200,7 @@ impl Scsi {
     }
     pub fn res_blkdesc_mode6(&self) -> &[cmds::ShortLbaModeParamBlkDesc] {
         let header = self.res_mode_param_header6();
-        let descs_start = mem::size_of::<cmds::ModeParamHeader6>();
+        let descs_start = size_of::<cmds::ModeParamHeader6>();
         plain::slice_from_bytes(
             &self.data_buffer[descs_start..descs_start + usize::from(header.block_desc_len)],
         )
@@ -209,7 +208,7 @@ impl Scsi {
     }
     pub fn res_blkdesc_mode10(&self) -> BlkDescSlice<'_> {
         let header = self.res_mode_param_header10();
-        let descs_start = mem::size_of::<cmds::ModeParamHeader10>();
+        let descs_start = size_of::<cmds::ModeParamHeader10>();
         if header.longlba() {
             BlkDescSlice::Long(
                 plain::slice_from_bytes(
@@ -242,7 +241,7 @@ impl Scsi {
 
     pub fn res_mode_pages10(&self) -> impl Iterator<Item = cmds::AnyModePage<'_>> {
         let header = self.res_mode_param_header10();
-        let descs_start = mem::size_of::<cmds::ModeParamHeader10>();
+        let descs_start = size_of::<cmds::ModeParamHeader10>();
         let buffer = &self.data_buffer[descs_start + header.block_desc_len() as usize..];
         cmds::mode_page_iter(buffer)
     }

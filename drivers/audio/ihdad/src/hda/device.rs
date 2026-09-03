@@ -999,7 +999,7 @@ impl IntelHDA {
         }
 
         let buf_ptr = chunk.as_ptr() as *const u8;
-        let buf_len = std::mem::size_of_val(&chunk);
+        let buf_len = size_of_val(&chunk);
         let buf = unsafe { std::slice::from_raw_parts(buf_ptr, buf_len) };
 
         let _ = os.write_block(buf);

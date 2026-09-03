@@ -71,7 +71,7 @@ struct Regs {
 
 impl Regs {
     unsafe fn from_base(base: usize) -> &'static mut Self {
-        assert_eq!(mem::size_of::<Regs>(), 256);
+        assert_eq!(size_of::<Regs>(), 256);
 
         let regs = &mut *(base as *mut Regs);
 

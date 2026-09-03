@@ -78,12 +78,12 @@ impl Ring {
         let offset = paddr.checked_sub(base)? as usize;
 
         assert_eq!(
-            offset % mem::size_of::<Trb>(),
+            offset % size_of::<Trb>(),
             0,
             "unaligned TRB physical address"
         );
 
-        let index = offset / mem::size_of::<Trb>();
+        let index = offset / size_of::<Trb>();
 
         if index > self.trbs.len() {
             return None;
@@ -113,7 +113,7 @@ impl Ring {
 
         if (trb_virt_pointer as usize) < (trbs_base_virt_pointer as usize)
             || (trb_virt_pointer as usize)
-                > (trbs_base_virt_pointer as usize) + self.trbs.len() * mem::size_of::<Trb>()
+                > (trbs_base_virt_pointer as usize) + self.trbs.len() * size_of::<Trb>()
         {
             panic!("Gave a TRB outside of the ring, when retrieving its physical address in that ring. TRB: {:?} (at address {:p})", trb, trb);
         }

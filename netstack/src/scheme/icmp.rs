@@ -1,4 +1,4 @@
-use std::{mem, str};
+use std::str;
 
 use scheme_utils::FpathWriter;
 use smoltcp::iface::SocketHandle;
@@ -176,7 +176,7 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
         } else if self.can_send() {
             match file.data.socket_type {
                 IcmpSocketType::Echo => {
-                    if buf.len() < mem::size_of::<u16>() {
+                    if buf.len() < size_of::<u16>() {
                         return Err(SyscallError::new(syscall::EINVAL));
                     }
                     let (&seq_buf, payload) = buf.split_first_chunk::<2>().unwrap();
@@ -219,16 +219,16 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
             let icmp_repr = Icmpv4Repr::parse(&icmp_packet, &Default::default()).unwrap();
 
             if let Icmpv4Repr::EchoReply { seq_no, data, .. } = icmp_repr {
-                if buf.len() < mem::size_of::<u16>() + data.len() {
+                if buf.len() < size_of::<u16>() + data.len() {
                     return Err(SyscallError::new(syscall::EINVAL));
                 }
                 buf[0..2].copy_from_slice(&seq_no.to_be_bytes());
 
                 for i in 0..data.len() {
-                    buf[mem::size_of::<u16>() + i] = data[i];
+                    buf[size_of::<u16>() + i] = data[i];
                 }
 
-                return Ok(mem::size_of::<u16>() + data.len());
+                return Ok(size_of::<u16>() + data.len());
             }
         }
 

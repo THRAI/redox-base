@@ -11,7 +11,6 @@
 //! Read events from `input:consumer`. Optionally, set the `EVENT_READ` flag to be notified when
 //! events are available.
 
-use core::mem::size_of;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fs::File;
