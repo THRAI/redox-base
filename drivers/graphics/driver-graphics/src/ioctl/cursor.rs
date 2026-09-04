@@ -81,7 +81,13 @@ fn cursor_inner<T: GraphicsAdapter>(
     let Some(plane) = objects.get_crtc(crtc_id)?.lock().unwrap().cursor_plane else {
         return Err(Error::new(ENXIO));
     };
-    let mut new_state = objects.get_plane(plane)?.lock().unwrap().state.clone();
+    let plane_index = objects
+        .get_plane(plane)
+        .unwrap()
+        .lock()
+        .unwrap()
+        .plane_index as usize;
+    let new_state = &mut vts.get_mut(&handle.vt).unwrap().plane_state[plane_index];
     let old_fb_id = new_state.fb_id;
     new_state.crtc_id = Some(crtc_id);
 
@@ -121,9 +127,8 @@ fn cursor_inner<T: GraphicsAdapter>(
         new_state.crtc_rect.y = y;
     }
 
-    let plane = objects.get_plane(plane).unwrap();
-
     if handle.vt == active_vt {
+        let plane = objects.get_plane(plane).unwrap();
         #[rustfmt::skip]
         let damage = if flags & DRM_MODE_CURSOR_BO != 0 {
             Damage { x: 0, y: 0, width, height }
@@ -132,8 +137,6 @@ fn cursor_inner<T: GraphicsAdapter>(
         };
         adapter.set_plane(&objects, plane, new_state.clone(), damage)?;
     }
-    vts.get_mut(&handle.vt).unwrap().plane_state[plane.lock().unwrap().plane_index as usize] =
-        new_state;
 
     if let Some(old_fb_id) = old_fb_id {
         if !VtState::fb_has_any_use(vts, old_fb_id) {
