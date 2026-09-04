@@ -331,10 +331,12 @@ impl TextScreen {
         let _bold = cell.flags.contains(Flags::BOLD);
         let _italic = cell.flags.contains(Flags::ITALIC);
 
+        let c = if cell.c == '\t' { ' ' } else { cell.c };
+
         if x + font.width <= map.width && y + font.height <= map.height {
             let mut dst = map.offscreen as *mut u8 as usize + (y * map.width + x) * 4;
 
-            let font_i = font.height * (cell.c as usize);
+            let font_i = font.height * (c as usize);
             if font_i + font.height <= font.glyphs.len() {
                 for row in 0..font.height {
                     let row_data = font.glyphs[font_i + row];
@@ -352,9 +354,7 @@ impl TextScreen {
 
         Some(point)
     }
-}
 
-impl TextScreen {
     pub fn write(
         &mut self,
         map: &mut V2DisplayMap,
