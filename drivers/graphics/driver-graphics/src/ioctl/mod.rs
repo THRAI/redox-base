@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use drm_fourcc::DrmFourcc;
 use drm_sys::{DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT, DRM_CLIENT_CAP_UNIVERSAL_PLANES};
-use syscall::{EINVAL, ENOENT, Error};
+use syscall::{EINVAL, ENOENT, EOPNOTSUPP, Error};
 
 use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
 use crate::{Buffer, Damage, DrmHandle, GraphicsAdapter, MAP_FAKE_OFFSET_MULTIPLIER, VtState};
@@ -89,8 +89,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
                 // FIXME hide cursor plane on virtio-gpu unless this client cap is set
                 DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT => {
                     if enable && !adapter.cursor_plane_needs_hotspot() {
-                        // FIXME this should return an error, but orbital doesn't yet handle that
-                        // return Err(Error::new(EOPNOTSUPP));
+                        return Err(Error::new(EOPNOTSUPP));
                     }
                 }
                 _ => return Err(Error::new(EINVAL)),
