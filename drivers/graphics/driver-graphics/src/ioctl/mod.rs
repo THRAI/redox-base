@@ -4,6 +4,7 @@ use std::mem;
 use std::sync::Arc;
 
 use drm_fourcc::DrmFourcc;
+use drm_sys::{DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT, DRM_CLIENT_CAP_UNIVERSAL_PLANES};
 use syscall::{EINVAL, ENOENT, Error};
 
 use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
@@ -73,12 +74,27 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             Ok(0)
         }),
         ipc::SET_CLIENT_CAP => ipc::DrmSetClientCap::with(payload, |data| {
-            adapter.set_client_cap(
-                data.capability()
-                    .try_into()
-                    .map_err(|_| Error::new(EINVAL))?,
-                data.value(),
-            )?;
+            let cap: u32 = data
+                .capability()
+                .try_into()
+                .map_err(|_| Error::new(EINVAL))?;
+            let enable = match data.value() {
+                0 => false,
+                1 => true,
+                _ => return Err(Error::new(EINVAL)),
+            };
+            match cap {
+                // FIXME hide cursor and overlay planes unless this client cap is set
+                DRM_CLIENT_CAP_UNIVERSAL_PLANES => {}
+                // FIXME hide cursor plane on virtio-gpu unless this client cap is set
+                DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT => {
+                    if enable && !adapter.cursor_plane_needs_hotspot() {
+                        // FIXME this should return an error, but orbital doesn't yet handle that
+                        // return Err(Error::new(EOPNOTSUPP));
+                    }
+                }
+                _ => return Err(Error::new(EINVAL)),
+            }
             Ok(0)
         }),
         ipc::MODE_CARD_RES => ipc::DrmModeCardRes::with(payload, |mut data| {
