@@ -1,0 +1,15 @@
+[package]
+name = "getty"
+version = "0.1.0"
+edition = "2024"
+description = "Used by `init(8)` to open and initialize the TTY line, read a login name and invoke `login(1)`."
+
+[dependencies]
+clap = "4"
+termion = "4"
+libc = "0.2"
+
+[target.'cfg(target_os = "redox")'.dependencies]
+libredox = { version = "0.1.18", features = ["mkns"] }
+redox_event = "0.4.8"
+redox_termios = "0.1.3"

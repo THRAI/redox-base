@@ -5,6 +5,7 @@ members = [
     "config",
     "daemon",
     "dhcpd",
+    "getty",
     "init",
     "initfs",
     "initfs/tools",
