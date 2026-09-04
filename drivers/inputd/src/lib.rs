@@ -54,7 +54,7 @@ impl ConsumerHandle {
         self.0.as_fd()
     }
 
-    pub fn open_display_v2(&self) -> io::Result<File> {
+    pub fn open_display(&self) -> io::Result<File> {
         let display_file = libredox::call::openat(
             self.0.as_raw_fd() as usize,
             "display",

@@ -16,7 +16,7 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use alacritty_terminal::{vte, Term};
 use drm::buffer::{Buffer, DrmFourcc};
 use drm::control::{connector, crtc, framebuffer, ClipRect, Device, Mode};
-use graphics_ipc::{CpuBackedBuffer, V2GraphicsHandle};
+use graphics_ipc::{CpuBackedBuffer, DrmHandle};
 use orbclient::FONT;
 
 #[derive(Debug, Copy, Clone)]
@@ -59,7 +59,7 @@ impl Damage {
 }
 
 pub struct V2DisplayMap {
-    pub display_handle: V2GraphicsHandle,
+    pub display_handle: DrmHandle,
     pub connector: connector::Handle,
     crtc: crtc::Handle,
     fb: framebuffer::Handle,
@@ -67,7 +67,7 @@ pub struct V2DisplayMap {
 }
 
 impl V2DisplayMap {
-    pub fn new(display_handle: V2GraphicsHandle) -> io::Result<Self> {
+    pub fn new(display_handle: DrmHandle) -> io::Result<Self> {
         let connector_info = display_handle.first_display()?;
 
         let Some(&mode) = connector_info.modes().get(0) else {

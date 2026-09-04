@@ -8,27 +8,23 @@ use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
 use drm::control::Device as _;
 use drm::{Device as _, DriverCapability};
 
-/// A graphics handle using the v2 graphics API.
-///
-/// The v2 graphics API allows creating framebuffers on the fly, using them for page flipping and
-/// handles all displays using a single fd. This is basically a subset of the Linux DRM interface
-/// with a couple of custom ioctls in the place of the KMS ioctls that are missing.
-pub struct V2GraphicsHandle {
+/// A graphics handle using the Linux DRM interface.
+pub struct DrmHandle {
     file: File,
 }
 
-impl AsFd for V2GraphicsHandle {
+impl AsFd for DrmHandle {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.file.as_fd()
     }
 }
 
-impl drm::Device for V2GraphicsHandle {}
-impl drm::control::Device for V2GraphicsHandle {}
+impl drm::Device for DrmHandle {}
+impl drm::control::Device for DrmHandle {}
 
-impl V2GraphicsHandle {
+impl DrmHandle {
     pub fn from_file(file: File) -> io::Result<Self> {
-        let handle = V2GraphicsHandle { file };
+        let handle = DrmHandle { file };
         assert!(handle.get_driver_capability(DriverCapability::DumbBuffer)? == 1);
         Ok(handle)
     }
@@ -52,7 +48,7 @@ pub struct CpuBackedBuffer {
 
 impl CpuBackedBuffer {
     pub fn new(
-        display_handle: &V2GraphicsHandle,
+        display_handle: &DrmHandle,
         size: (u32, u32),
         format: drm::buffer::DrmFourcc,
         bpp: u32,
@@ -122,7 +118,7 @@ impl CpuBackedBuffer {
         // to do a DRM ioctl to actually present the changes on the display.
     }
 
-    pub fn destroy(self, display_handle: &V2GraphicsHandle) -> io::Result<()> {
+    pub fn destroy(self, display_handle: &DrmHandle) -> io::Result<()> {
         display_handle.destroy_dumb_buffer(self.buffer)
     }
 }

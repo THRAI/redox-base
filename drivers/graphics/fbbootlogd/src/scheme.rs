@@ -6,7 +6,7 @@ use console_draw::alacritty_terminal::term;
 use console_draw::{TextScreen, V2DisplayMap};
 use drm::buffer::Buffer;
 use drm::control::Device;
-use graphics_ipc::V2GraphicsHandle;
+use graphics_ipc::DrmHandle;
 use inputd::ConsumerHandle;
 use orbclient::{Event, EventOption};
 use redox_scheme::CallerCtx;
@@ -49,8 +49,8 @@ impl FbbootlogSchemeData {
     }
 
     pub fn handle_handoff(&mut self) {
-        let new_display_handle = match self.input_handle.open_display_v2() {
-            Ok(display) => V2GraphicsHandle::from_file(display).unwrap(),
+        let new_display_handle = match self.input_handle.open_display() {
+            Ok(display) => DrmHandle::from_file(display).unwrap(),
             Err(err) => {
                 eprintln!("fbbootlogd: No display present yet: {err}");
                 return;
