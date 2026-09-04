@@ -7,10 +7,7 @@ use driver_graphics::kms::objects::{
     KmsCrtc, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneState,
 };
 use driver_graphics::{Buffer, Damage, GraphicsAdapter};
-use drm_sys::{
-    DRM_CAP_DUMB_BUFFER, DRM_CAP_DUMB_PREFERRED_DEPTH, DRM_CAP_DUMB_PREFER_SHADOW,
-    DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT,
-};
+use drm_sys::{DRM_CAP_DUMB_BUFFER, DRM_CAP_DUMB_PREFERRED_DEPTH, DRM_CAP_DUMB_PREFER_SHADOW};
 use syscall::{EINVAL, PAGE_SIZE};
 
 #[derive(Debug)]
@@ -70,13 +67,6 @@ impl GraphicsAdapter for FbAdapter {
             DRM_CAP_DUMB_BUFFER => Ok(1),
             DRM_CAP_DUMB_PREFERRED_DEPTH => Ok(24),
             DRM_CAP_DUMB_PREFER_SHADOW => Ok(0),
-            _ => Err(syscall::Error::new(EINVAL)),
-        }
-    }
-
-    fn set_client_cap(&self, cap: u32, _value: u64) -> syscall::Result<()> {
-        match cap {
-            DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT => Ok(()),
             _ => Err(syscall::Error::new(EINVAL)),
         }
     }

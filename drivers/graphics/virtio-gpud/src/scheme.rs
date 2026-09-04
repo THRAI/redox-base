@@ -10,7 +10,7 @@ use driver_graphics::kms::objects::{
 use driver_graphics::{Buffer as DrmBuffer, Damage, GraphicsAdapter, GraphicsScheme};
 use drm_sys::{
     DRM_CAP_CURSOR_HEIGHT, DRM_CAP_CURSOR_WIDTH, DRM_CAP_DUMB_BUFFER, DRM_CAP_DUMB_PREFERRED_DEPTH,
-    DRM_CAP_DUMB_PREFER_SHADOW, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT,
+    DRM_CAP_DUMB_PREFER_SHADOW,
 };
 use syscall::{EINVAL, PAGE_SIZE};
 use virtio_core::spec::{Buffer, ChainBuilder, DescriptorFlags};
@@ -397,12 +397,8 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         }
     }
 
-    fn set_client_cap(&self, cap: u32, _value: u64) -> syscall::Result<()> {
-        match cap {
-            // FIXME hide cursor plane unless this client cap is set
-            DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT => Ok(()),
-            _ => Err(syscall::Error::new(EINVAL)),
-        }
+    fn cursor_plane_needs_hotspot(&self) -> bool {
+        true
     }
 
     fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {

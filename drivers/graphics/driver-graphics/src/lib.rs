@@ -90,7 +90,9 @@ pub trait GraphicsAdapter: Sized + Debug {
 
     fn get_unique(&self) -> String;
     fn get_cap(&self, cap: u32) -> Result<u64>;
-    fn set_client_cap(&self, cap: u32, value: u64) -> Result<()>;
+    fn cursor_plane_needs_hotspot(&self) -> bool {
+        false
+    }
 
     fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId);
 
