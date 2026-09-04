@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::marker::PhantomData;
 use std::ops::ControlFlow;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use inputd::{DisplayHandle, VtEvent, VtEventKind};
 use libredox::Fd;
@@ -102,14 +102,14 @@ pub trait GraphicsAdapter: Sized + Debug {
     fn set_crtc(
         &mut self,
         objects: &KmsObjects<Self>,
-        crtc: &Mutex<KmsCrtc<Self>>,
+        crtc: &KmsCrtc<Self>,
         new_state: KmsCrtcState<Self>,
     ) -> syscall::Result<()>;
 
     fn set_plane(
         &mut self,
         objects: &KmsObjects<Self>,
-        plane: &Mutex<KmsPlane<Self>>,
+        plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
         damage: Damage,
     ) -> syscall::Result<()>;
@@ -282,11 +282,11 @@ impl<T: GraphicsAdapter> GraphicsSchemeData<T> {
                 .collect(),
             crtc_state: objects
                 .crtcs()
-                .map(|crtc| crtc.lock().unwrap().state.clone())
+                .map(|crtc| crtc.state.lock().unwrap().clone())
                 .collect(),
             plane_state: objects
                 .planes()
-                .map(|plane| plane.lock().unwrap().state.clone())
+                .map(|plane| plane.state.lock().unwrap().clone())
                 .collect(),
         })
     }

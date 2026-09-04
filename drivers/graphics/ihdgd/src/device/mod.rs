@@ -459,6 +459,7 @@ impl Device {
                 plane_idx: 0,
             },
             (),
+            None,
         );
 
         // FIXME add cursor plane
@@ -476,9 +477,9 @@ impl Device {
         objects
             .get_plane(primary_plane_id)
             .unwrap()
+            .state
             .lock()
             .unwrap()
-            .state
             .fb_id = Some(fb_id);
     }
 

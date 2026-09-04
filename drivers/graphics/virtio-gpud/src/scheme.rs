@@ -1,12 +1,11 @@
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use common::dma::Dma;
 use common::sgl;
 use driver_graphics::kms::connector::{KmsConnectorDriver, KmsConnectorStatus};
 use driver_graphics::kms::objects::{
     KmsCrtc, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver, KmsPlaneState,
-    KmsPlaneType,
 };
 use driver_graphics::{Buffer as DrmBuffer, Damage, GraphicsAdapter, GraphicsScheme};
 use drm_sys::{
@@ -371,18 +370,13 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         });
 
         for display_id in 0..self.config.num_scanouts.get() {
-            let (crtc, _primary_plane_id) =
-                objects.add_crtc((), (), VirtGpuPlane { is_cursor: false }, ());
-
-            let cursor_plane = objects.add_plane(
-                &[crtc],
-                KmsPlaneType::Cursor,
-                true,
-                VirtGpuPlane { is_cursor: true },
+            let (crtc, _primary_plane_id) = objects.add_crtc(
                 (),
+                (),
+                VirtGpuPlane { is_cursor: false },
+                (),
+                Some((VirtGpuPlane { is_cursor: true }, ())),
             );
-
-            objects.get_crtc(crtc).unwrap().lock().unwrap().cursor_plane = Some(cursor_plane);
 
             objects.add_connector(VirtGpuConnector { display_id }, (), &[crtc]);
         }
@@ -448,24 +442,21 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
     fn set_crtc(
         &mut self,
         _objects: &KmsObjects<Self>,
-        crtc: &Mutex<KmsCrtc<Self>>,
+        crtc: &KmsCrtc<Self>,
         state: KmsCrtcState<Self>,
     ) -> syscall::Result<()> {
-        let mut crtc = crtc.lock().unwrap();
-        crtc.state = state;
+        *crtc.state.lock().unwrap() = state;
         Ok(())
     }
 
     fn set_plane(
         &mut self,
         objects: &KmsObjects<Self>,
-        plane: &Mutex<KmsPlane<Self>>,
+        plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
         damage: Damage,
     ) -> syscall::Result<()> {
         futures::executor::block_on(async {
-            let mut plane = plane.lock().unwrap();
-
             let framebuffer = new_plane_state
                 .fb_id
                 .map(|fb_id| objects.get_framebuffer_maybe_closed(fb_id))
@@ -487,12 +478,12 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                             .await;
                     }
                 } else {
-                    if plane.state.fb_id.is_some() {
+                    if plane.state.lock().unwrap().fb_id.is_some() {
                         self.disable_cursor().await;
                     }
                 }
 
-                plane.state = new_plane_state;
+                *plane.state.lock().unwrap() = new_plane_state;
 
                 return Ok(());
             }
@@ -500,9 +491,9 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
             let Some(crtc_id) = new_plane_state.crtc_id else {
                 return Ok(());
             };
-            let crtc = objects.get_crtc(crtc_id).unwrap().lock().unwrap();
+            let crtc = objects.get_crtc(crtc_id).unwrap();
 
-            plane.state = new_plane_state;
+            *plane.state.lock().unwrap() = new_plane_state;
 
             for connector in objects.connectors() {
                 let connector = connector.lock().unwrap();

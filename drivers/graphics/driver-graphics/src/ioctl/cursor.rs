@@ -78,15 +78,10 @@ fn cursor_inner<T: GraphicsAdapter>(
     hot_y: i32,
 ) -> Result<usize, Error> {
     let crtc_id = KmsObjectId(crtc_id);
-    let Some(plane) = objects.get_crtc(crtc_id)?.lock().unwrap().cursor_plane else {
+    let Some(plane) = objects.get_crtc(crtc_id)?.cursor_plane else {
         return Err(Error::new(ENXIO));
     };
-    let plane_index = objects
-        .get_plane(plane)
-        .unwrap()
-        .lock()
-        .unwrap()
-        .plane_index as usize;
+    let plane_index = objects.get_plane(plane).unwrap().plane_index as usize;
     let new_state = &mut vts.get_mut(&handle.vt).unwrap().plane_state[plane_index];
     let old_fb_id = new_state.fb_id;
     new_state.crtc_id = Some(crtc_id);

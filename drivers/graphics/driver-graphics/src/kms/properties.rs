@@ -53,14 +53,11 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
     pub fn get_object_properties_data(&self, id: KmsObjectId) -> Result<(Vec<u32>, Vec<u64>)> {
         let object = self.objects.get(&id).ok_or(Error::new(ENOENT))?;
         match object {
-            KmsObject::Crtc(crtc) => {
-                let crtc = crtc.lock().unwrap();
-                Ok(crtc
-                    .properties
-                    .iter()
-                    .map(|prop| (prop.id.0, (prop.getter)(&crtc)))
-                    .unzip())
-            }
+            KmsObject::Crtc(crtc) => Ok(crtc
+                .properties
+                .iter()
+                .map(|prop| (prop.id.0, (prop.getter)(&crtc)))
+                .unzip()),
             KmsObject::Connector(connector) => {
                 let connector = connector.lock().unwrap();
                 Ok(connector
@@ -69,14 +66,11 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
                     .map(|prop| (prop.id.0, (prop.getter)(&connector)))
                     .unzip())
             }
-            KmsObject::Plane(plane) => {
-                let plane = plane.lock().unwrap();
-                Ok(plane
-                    .properties
-                    .iter()
-                    .map(|prop| (prop.id.0, (prop.getter)(&plane)))
-                    .unzip())
-            }
+            KmsObject::Plane(plane) => Ok(plane
+                .properties
+                .iter()
+                .map(|prop| (prop.id.0, (prop.getter)(&plane)))
+                .unzip()),
             KmsObject::Encoder(_)
             | KmsObject::Property(_)
             | KmsObject::Framebuffer(_)

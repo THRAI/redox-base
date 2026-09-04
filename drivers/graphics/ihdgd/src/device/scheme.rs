@@ -1,5 +1,3 @@
-use std::sync::Mutex;
-
 use driver_graphics::kms::connector::KmsConnectorStatus;
 use driver_graphics::kms::objects::{
     KmsCrtc, KmsCrtcDriver, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver,
@@ -102,29 +100,26 @@ impl GraphicsAdapter for Device {
     fn set_crtc(
         &mut self,
         _objects: &KmsObjects<Self>,
-        crtc: &Mutex<KmsCrtc<Self>>,
+        crtc: &KmsCrtc<Self>,
         state: KmsCrtcState<Self>,
     ) -> syscall::Result<()> {
-        let mut crtc = crtc.lock().unwrap();
-        crtc.state = state;
+        *crtc.state.lock().unwrap() = state;
         Ok(())
     }
 
     fn set_plane(
         &mut self,
         objects: &KmsObjects<Self>,
-        plane: &Mutex<KmsPlane<Self>>,
+        plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
         _damage: Damage,
     ) -> syscall::Result<()> {
-        let mut plane = plane.lock().unwrap();
-
         let buffer = new_plane_state
             .fb_id
             .map(|fb_id| objects.get_framebuffer_maybe_closed(fb_id))
             .transpose()?;
 
-        plane.state = new_plane_state;
+        *plane.state.lock().unwrap() = new_plane_state;
 
         if let Some(plane_hw) = self.pipes[plane.driver_data.pipe_idx]
             .planes

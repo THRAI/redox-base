@@ -138,7 +138,7 @@ pub(super) fn mode_dirtyfb<T: GraphicsAdapter>(
 
     if handle.vt == active_vt {
         for plane in objects.planes() {
-            let state = plane.lock().unwrap().state.clone();
+            let state = plane.state.lock().unwrap().clone();
             if state.fb_id == Some(KmsObjectId(data.fb_id())) {
                 adapter.set_plane(&objects, plane, state, damage)?;
             }

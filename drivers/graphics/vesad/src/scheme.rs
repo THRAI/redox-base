@@ -1,7 +1,6 @@
 use std::alloc::{self, Layout};
 use std::convert::TryInto;
 use std::ptr::{self, NonNull};
-use std::sync::Mutex;
 
 use driver_graphics::kms::connector::{KmsConnectorDriver, KmsConnectorStatus};
 use driver_graphics::kms::objects::{
@@ -48,7 +47,7 @@ impl GraphicsAdapter for FbAdapter {
 
     fn init(&mut self, objects: &mut KmsObjects<Self>) {
         for (framebuffer_id, framebuffer) in self.framebuffers.iter().enumerate() {
-            let (crtc, _primary_plane_id) = objects.add_crtc((), (), (), ());
+            let (crtc, _primary_plane_id) = objects.add_crtc((), (), (), (), None);
 
             objects.add_connector(
                 Connector {
@@ -107,33 +106,31 @@ impl GraphicsAdapter for FbAdapter {
     fn set_crtc(
         &mut self,
         _objects: &KmsObjects<Self>,
-        crtc: &Mutex<KmsCrtc<Self>>,
+        crtc: &KmsCrtc<Self>,
         state: KmsCrtcState<Self>,
     ) -> syscall::Result<()> {
-        let mut crtc = crtc.lock().unwrap();
-        crtc.state = state;
+        *crtc.state.lock().unwrap() = state;
         Ok(())
     }
 
     fn set_plane(
         &mut self,
         objects: &KmsObjects<Self>,
-        plane: &Mutex<KmsPlane<Self>>,
+        plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
         damage: Damage,
     ) -> syscall::Result<()> {
         let Some(crtc_id) = new_plane_state.crtc_id else {
             return Ok(());
         };
-        let crtc = objects.get_crtc(crtc_id).unwrap().lock().unwrap();
-        let mut plane = plane.lock().unwrap();
+        let crtc = objects.get_crtc(crtc_id).unwrap();
 
         let buffer = new_plane_state
             .fb_id
             .map(|fb_id| objects.get_framebuffer_maybe_closed(fb_id))
             .transpose()?;
 
-        plane.state = new_plane_state;
+        *plane.state.lock().unwrap() = new_plane_state;
 
         for connector in objects.connectors() {
             let connector = connector.lock().unwrap();
