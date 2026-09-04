@@ -1,0 +1,7 @@
+[unit]
+description = "Initialize consoles"
+requires_weak = [
+    "00_base.target",
+    "30_getty_debug.service",
+    "getty@2.service",
+]

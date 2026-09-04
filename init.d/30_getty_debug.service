@@ -1,0 +1,10 @@
+[unit]
+description = "Initialize terminal /scheme/debug"
+requires_weak = [
+    "00_ptyd.service",
+]
+
+[service]
+cmd = "getty"
+args = ["/scheme/debug/no-preserve", "-J"]
+type = "oneshot_async"

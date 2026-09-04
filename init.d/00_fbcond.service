@@ -1,7 +1,0 @@
-[unit]
-description = "Framebuffer text console"
-
-[service]
-cmd = "fbcond"
-args = ["2"]
-type = { scheme = "fbcon" }

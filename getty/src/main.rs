@@ -32,8 +32,8 @@ OPTIONS
     -J, --noclear
         Do not clear the screen before forking login(1).
 
-    -C, --contain
-        Run contain_login instead of login
+    --no-contain
+        Run login instead of contain_login even when /etc/contain.toml exists
 
 AUTHOR
     Written by Jeremy Soller.
@@ -276,16 +276,17 @@ pub fn main() {
         .about("Set terminal mode")
         .arg(clap::arg!(<TTY> ""))
         .arg(clap::arg!(NO_CLEAR: -J --"no-clear" "Do not clear the screen before forking"))
-        .arg(clap::arg!(CONTAIN: -C --contain "Run contain_login instead of login"))
+        .arg(clap::arg!(NO_CONTAIN: --"no-contain" "Run login instead of contain_login even when /etc/contain.toml exists"))
         .get_matches();
 
     let clear = !args.get_flag("NO_CLEAR");
-    let contain = args.get_flag("CONTAIN");
+    let contain =
+        std::fs::exists("/etc/contain.toml").unwrap_or(false) && !args.get_flag("NO_CONTAIN");
     let vt = args.get_one::<String>("TTY").unwrap();
 
     let buf: String;
     let vt_path = if vt.parse::<usize>().is_ok() {
-        buf = format!("/scheme/fbcon/{vt}");
+        buf = format!("/scheme/fbcon.{vt}");
         &*buf
     } else {
         vt
