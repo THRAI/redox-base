@@ -2734,7 +2734,6 @@ dependencies = [
  "daemon",
  "driver-graphics",
  "libredox",
- "orbclient",
  "redox_event",
  "redox_syscall 0.9.3",
 ]
@@ -2787,11 +2786,9 @@ dependencies = [
  "futures",
  "libredox",
  "log",
- "orbclient",
  "pcid",
  "redox_event",
  "redox_syscall 0.9.3",
- "spin",
  "static_assertions",
  "virtio-core",
 ]

@@ -19,8 +19,6 @@ pcid = { path = "../../pcid" }
 
 redox_event.workspace = true
 redox_syscall.workspace = true
-orbclient.workspace = true
-spin.workspace = true
 libredox.workspace = true
 
 [lints]
