@@ -57,6 +57,10 @@ impl GraphicsAdapter for Device {
         self.unique.clone()
     }
 
+    fn min_max_fb_size(&self) -> (u32, u32, u32, u32) {
+        (0, 16384, 0, 16384)
+    }
+
     fn dumb_buffer_config(&self) -> Option<DumbBufferConfig> {
         Some(DumbBufferConfig {
             preferred_depth: 24,

@@ -53,10 +53,10 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             data.set_crtc_id_ptr(&crtc_ids);
             data.set_connector_id_ptr(&conn_ids);
             data.set_encoder_id_ptr(&enc_ids);
-            data.set_min_width(0);
-            data.set_max_width(16384);
-            data.set_min_height(0);
-            data.set_max_height(16384);
+            data.set_min_width(adapter.min_max_fb_size().0);
+            data.set_max_width(adapter.min_max_fb_size().1);
+            data.set_min_height(adapter.min_max_fb_size().2);
+            data.set_max_height(adapter.min_max_fb_size().3);
             Ok(0)
         }),
         ipc::MODE_GET_CRTC => ipc::DrmModeCrtc::with(payload, |mut data| {

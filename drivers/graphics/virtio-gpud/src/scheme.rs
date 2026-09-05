@@ -384,6 +384,12 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         self.unique.clone()
     }
 
+    fn min_max_fb_size(&self) -> (u32, u32, u32, u32) {
+        // Linux probably uses this value because an 8192x8192 framebuffer takes 256MiB,
+        // which is the max total VRAM usage allowed by QEMU's virtio-gpu device by default.
+        (32, 8192, 32, 8192)
+    }
+
     fn dumb_buffer_config(&self) -> Option<DumbBufferConfig> {
         Some(DumbBufferConfig {
             preferred_depth: 24,

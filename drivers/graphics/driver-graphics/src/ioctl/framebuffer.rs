@@ -52,6 +52,8 @@ pub(super) fn mode_add_fb<T: GraphicsAdapter>(
         _ => return Err(Error::new(EINVAL)),
     };
 
+    // FIXME enforce driver reported framebuffer size requirements
+
     let fb = adapter.create_framebuffer(buffer);
 
     let id = objects.add_framebuffer(KmsFramebuffer {
@@ -160,6 +162,8 @@ pub(super) fn mode_add_fb2<T: GraphicsAdapter>(
         .buffers
         .get(&data.handles()[0])
         .ok_or(Error::new(EINVAL))?;
+
+    // FIXME enforce driver reported framebuffer size requirements
 
     let fb = adapter.create_framebuffer(buffer);
 

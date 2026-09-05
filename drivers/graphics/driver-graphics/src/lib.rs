@@ -94,6 +94,8 @@ pub trait GraphicsAdapter: Sized + Debug {
     fn init(&mut self, objects: &mut KmsObjects<Self>);
 
     fn get_unique(&self) -> String;
+    /// min_w, max_w, min_h, max_h
+    fn min_max_fb_size(&self) -> (u32, u32, u32, u32);
     fn dumb_buffer_config(&self) -> Option<DumbBufferConfig>;
     fn cursor_size(&self) -> Option<(u64, u64)>;
     fn cursor_plane_needs_hotspot(&self) -> bool {
