@@ -5,7 +5,7 @@ use drm_fourcc::DrmFourcc;
 use syscall::{EINVAL, ENOENT, Error};
 
 use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
-use crate::{Buffer, Damage, DrmHandle, GraphicsAdapter, MAP_FAKE_OFFSET_MULTIPLIER, VtState};
+use crate::{Buffer, DrmHandle, GraphicsAdapter, MAP_FAKE_OFFSET_MULTIPLIER, VtState};
 
 mod cursor;
 mod driver_info;
@@ -53,29 +53,24 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             data.set_crtc_id_ptr(&crtc_ids);
             data.set_connector_id_ptr(&conn_ids);
             data.set_encoder_id_ptr(&enc_ids);
-            data.set_min_width(0);
-            data.set_max_width(16384);
-            data.set_min_height(0);
-            data.set_max_height(16384);
+            data.set_min_width(adapter.min_max_fb_size().0);
+            data.set_max_width(adapter.min_max_fb_size().1);
+            data.set_min_height(adapter.min_max_fb_size().2);
+            data.set_max_height(adapter.min_max_fb_size().3);
             Ok(0)
         }),
         ipc::MODE_GET_CRTC => ipc::DrmModeCrtc::with(payload, |mut data| {
             let crtc = objects.get_crtc(KmsObjectId(data.crtc_id()))?;
             // Don't touch set_connectors, that is only used by MODE_SET_CRTC
-            data.set_fb_id(
-                objects
-                    .get_plane(crtc.primary_plane)
-                    .unwrap()
-                    .state
-                    .lock()
-                    .unwrap()
-                    .fb_id
-                    .unwrap_or(KmsObjectId::INVALID)
-                    .0,
-            );
-            // FIXME fill x and y with the data from the primary plane
-            data.set_x(0);
-            data.set_y(0);
+            let primary_plane_state = objects
+                .get_plane(crtc.primary_plane)
+                .unwrap()
+                .state
+                .lock()
+                .unwrap();
+            data.set_fb_id(primary_plane_state.fb_id.unwrap_or(KmsObjectId::INVALID).0);
+            data.set_x(primary_plane_state.src_rect.x >> 16);
+            data.set_y(primary_plane_state.src_rect.y >> 16);
             data.set_gamma_size(crtc.gamma_size);
             if let Some(mode) = crtc.state.lock().unwrap().mode {
                 data.set_mode_valid(1);
@@ -119,17 +114,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             new_plane_state.crtc_id = Some(crtc_id);
             if handle.vt == active_vt {
                 adapter.set_crtc(&objects, crtc, new_crtc_state.clone())?;
-                adapter.set_plane(
-                    &objects,
-                    plane,
-                    new_plane_state.clone(),
-                    Damage {
-                        x: data.x(),
-                        y: data.y(),
-                        width: mode.map_or(0, |m| m.hdisplay as u32),
-                        height: mode.map_or(0, |m| m.vdisplay as u32),
-                    },
-                )?;
+                adapter.set_plane(&objects, plane, new_plane_state.clone(), None)?;
                 for connector in connector_ids {
                     objects
                         .get_connector(connector)?
@@ -284,17 +269,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             };
 
             if handle.vt == active_vt {
-                adapter.set_plane(
-                    &objects,
-                    plane,
-                    new_state.clone(),
-                    Damage {
-                        x: 0,
-                        y: 0,
-                        width: data.src_w(),
-                        height: data.src_h(),
-                    },
-                )?;
+                adapter.set_plane(&objects, plane, new_state.clone(), None)?;
             }
 
             if let Some(old_fb_id) = old_fb_id {

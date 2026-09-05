@@ -197,8 +197,6 @@ impl<T: GraphicsAdapter> KmsConnector<T> {
         for mode in self.modes.iter_mut().skip(1) {
             mode.flags &= !DRM_MODE_TYPE_PREFERRED;
         }
-
-        // FIXME update the EDID property
     }
 }
 

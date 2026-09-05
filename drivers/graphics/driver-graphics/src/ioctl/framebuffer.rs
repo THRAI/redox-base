@@ -52,6 +52,8 @@ pub(super) fn mode_add_fb<T: GraphicsAdapter>(
         _ => return Err(Error::new(EINVAL)),
     };
 
+    // FIXME enforce driver reported framebuffer size requirements
+
     let fb = adapter.create_framebuffer(buffer);
 
     let id = objects.add_framebuffer(KmsFramebuffer {
@@ -92,17 +94,7 @@ pub(super) fn mode_rm_fb<T: GraphicsAdapter>(
             }
             let plane = objects.planes().nth(plane_idx).unwrap();
             adapter
-                .set_plane(
-                    &objects,
-                    plane,
-                    plane_state.clone(),
-                    Damage {
-                        x: 0,
-                        y: 0,
-                        width: 0,
-                        height: 0,
-                    },
-                )
+                .set_plane(&objects, plane, plane_state.clone(), None)
                 .unwrap();
         }
     }
@@ -134,13 +126,14 @@ pub(super) fn mode_dirtyfb<T: GraphicsAdapter>(
             y: 0,
             width: fb.width,
             height: fb.height,
-        });
+        })
+        .clip(fb.width, fb.height);
 
     if handle.vt == active_vt {
         for plane in objects.planes() {
             let state = plane.state.lock().unwrap().clone();
             if state.fb_id == Some(KmsObjectId(data.fb_id())) {
-                adapter.set_plane(&objects, plane, state, damage)?;
+                adapter.set_plane(&objects, plane, state, Some(damage))?;
             }
         }
     }
@@ -160,6 +153,8 @@ pub(super) fn mode_add_fb2<T: GraphicsAdapter>(
         .buffers
         .get(&data.handles()[0])
         .ok_or(Error::new(EINVAL))?;
+
+    // FIXME enforce driver reported framebuffer size requirements
 
     let fb = adapter.create_framebuffer(buffer);
 

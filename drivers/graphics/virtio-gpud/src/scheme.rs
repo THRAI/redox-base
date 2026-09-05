@@ -384,6 +384,12 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         self.unique.clone()
     }
 
+    fn min_max_fb_size(&self) -> (u32, u32, u32, u32) {
+        // Linux probably uses this value because an 8192x8192 framebuffer takes 256MiB,
+        // which is the max total VRAM usage allowed by QEMU's virtio-gpu device by default.
+        (32, 8192, 32, 8192)
+    }
+
     fn dumb_buffer_config(&self) -> Option<DumbBufferConfig> {
         Some(DumbBufferConfig {
             preferred_depth: 24,
@@ -448,7 +454,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         objects: &KmsObjects<Self>,
         plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
-        damage: Damage,
+        damage: Option<Damage>,
     ) -> syscall::Result<()> {
         futures::executor::block_on(async {
             let framebuffer = new_plane_state
@@ -458,7 +464,9 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
 
             if plane.driver_data.is_cursor {
                 if let Some(framebuffer) = framebuffer {
-                    if damage.width != 0 || damage.height != 0 {
+                    if damage.map_or(true, |damage| damage.width != 0 && damage.height != 0)
+                        || plane.state.lock().unwrap().fb_id != new_plane_state.fb_id
+                    {
                         self.update_cursor(
                             &framebuffer.buffer,
                             new_plane_state.crtc_rect.x,
@@ -542,7 +550,14 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
 
                 let flush = ResourceFlush::new(
                     framebuffer.buffer.id,
-                    damage.clip(framebuffer.width, framebuffer.height).into(),
+                    damage
+                        .unwrap_or(Damage {
+                            x: 0,
+                            y: 0,
+                            width: framebuffer.width,
+                            height: framebuffer.height,
+                        })
+                        .into(),
                 );
                 let header = self.send_request(Dma::new(flush).unwrap()).await.unwrap();
                 assert_eq!(header.ty, CommandTy::RespOkNodata);

@@ -57,6 +57,10 @@ impl GraphicsAdapter for Device {
         self.unique.clone()
     }
 
+    fn min_max_fb_size(&self) -> (u32, u32, u32, u32) {
+        (0, 16384, 0, 16384)
+    }
+
     fn dumb_buffer_config(&self) -> Option<DumbBufferConfig> {
         Some(DumbBufferConfig {
             preferred_depth: 24,
@@ -101,7 +105,7 @@ impl GraphicsAdapter for Device {
         objects: &KmsObjects<Self>,
         plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
-        _damage: Damage,
+        _damage: Option<Damage>,
     ) -> syscall::Result<()> {
         let buffer = new_plane_state
             .fb_id
