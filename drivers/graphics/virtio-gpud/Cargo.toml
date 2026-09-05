@@ -6,7 +6,6 @@ edition = "2021"
 authors = ["Anhad Singh <andypython@protonmail.com>"]
 
 [dependencies]
-drm-sys.workspace = true
 log.workspace = true
 static_assertions.workspace = true
 futures = { version = "0.3.28", features = ["executor"] }

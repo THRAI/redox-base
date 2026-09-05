@@ -75,6 +75,11 @@ impl Damage {
     }
 }
 
+pub struct DumbBufferConfig {
+    pub preferred_depth: u8,
+    pub prefer_shadow: bool,
+}
+
 pub trait GraphicsAdapter: Sized + Debug {
     type Connector: KmsConnectorDriver;
     type Crtc: KmsCrtcDriver;
@@ -89,7 +94,8 @@ pub trait GraphicsAdapter: Sized + Debug {
     fn init(&mut self, objects: &mut KmsObjects<Self>);
 
     fn get_unique(&self) -> String;
-    fn get_cap(&self, cap: u32) -> Result<u64>;
+    fn dumb_buffer_config(&self) -> Option<DumbBufferConfig>;
+    fn cursor_size(&self) -> Option<(u64, u64)>;
     fn cursor_plane_needs_hotspot(&self) -> bool {
         false
     }

@@ -4,7 +4,11 @@ use std::mem;
 use std::sync::Arc;
 
 use drm_fourcc::DrmFourcc;
-use drm_sys::{DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT, DRM_CLIENT_CAP_UNIVERSAL_PLANES};
+use drm_sys::{
+    DRM_CAP_CURSOR_HEIGHT, DRM_CAP_CURSOR_WIDTH, DRM_CAP_DUMB_BUFFER, DRM_CAP_DUMB_PREFER_SHADOW,
+    DRM_CAP_DUMB_PREFERRED_DEPTH, DRM_CAP_TIMESTAMP_MONOTONIC, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT,
+    DRM_CLIENT_CAP_UNIVERSAL_PLANES,
+};
 use syscall::{EINVAL, ENOENT, EOPNOTSUPP, Error};
 
 use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
@@ -64,13 +68,44 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             Ok(0)
         }),
         ipc::GET_CAP => ipc::DrmGetCap::with(payload, |mut data| {
-            data.set_value(
-                adapter.get_cap(
-                    data.capability()
-                        .try_into()
-                        .map_err(|_| Error::new(EINVAL))?,
-                )?,
-            );
+            let cap: u32 = data
+                .capability()
+                .try_into()
+                .map_err(|_| Error::new(EINVAL))?;
+            let value = match cap {
+                DRM_CAP_DUMB_BUFFER => u64::from(adapter.dumb_buffer_config().is_some()),
+                DRM_CAP_DUMB_PREFERRED_DEPTH => adapter
+                    .dumb_buffer_config()
+                    .map_or(0, |config| u64::from(config.preferred_depth)),
+                DRM_CAP_DUMB_PREFER_SHADOW => u64::from(
+                    adapter
+                        .dumb_buffer_config()
+                        .map_or(false, |config| config.prefer_shadow),
+                ),
+                DRM_CAP_TIMESTAMP_MONOTONIC => 1,
+                DRM_CAP_CURSOR_WIDTH => {
+                    // FIXME should return a default value when hardware cursors are not supported
+                    // once Orbital no longer uses an EINVAL result to detect support for hardware
+                    // cursors.
+                    if let Some((width, _height)) = adapter.cursor_size() {
+                        width
+                    } else {
+                        return Err(Error::new(EINVAL));
+                    }
+                }
+                DRM_CAP_CURSOR_HEIGHT => {
+                    // FIXME should return a default value when hardware cursors are not supported
+                    // once Orbital no longer uses an EINVAL result to detect support for hardware
+                    // cursors.
+                    if let Some((_width, height)) = adapter.cursor_size() {
+                        height
+                    } else {
+                        return Err(Error::new(EINVAL));
+                    }
+                }
+                _ => return Err(Error::new(EINVAL)),
+            };
+            data.set_value(value);
             Ok(0)
         }),
         ipc::SET_CLIENT_CAP => ipc::DrmSetClientCap::with(payload, |data| {
