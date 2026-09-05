@@ -3,16 +3,14 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::str::FromStr;
-use hashbrown::HashMap;
-use redox_scheme::Socket;
 
+use hashbrown::HashMap;
 use libredox::protocol::O_CLOEXEC;
-use syscall::CallFlags;
+use redox_rt::proc::*;
+use redox_scheme::Socket;
 use syscall::data::{GlobalSchemes, KernelSchemeInfo};
 use syscall::flag::{O_DIRECTORY, O_RDONLY, O_STAT};
-use syscall::{EINTR, Error};
-
-use redox_rt::proc::*;
+use syscall::{CallFlags, EINTR, Error};
 
 use crate::KernelSchemeMap;
 
@@ -109,10 +107,9 @@ pub fn main() -> ! {
     if let Some(log_env) = envs
         .iter()
         .find_map(|var| var.strip_prefix(b"BOOTSTRAP_LOG_LEVEL="))
+        && let Ok(Ok(log_level)) = str::from_utf8(log_env).map(log::LevelFilter::from_str)
     {
-        if let Ok(Ok(log_level)) = str::from_utf8(&log_env).map(|s| log::LevelFilter::from_str(s)) {
-            log::set_max_level(log_level);
-        }
+        log::set_max_level(log_level);
     }
 
     let _ = log::set_logger(&Logger);
@@ -136,7 +133,7 @@ pub fn main() -> ! {
         "initfs daemon",
         "initfs",
         auth,
-        &this_thr_fd,
+        this_thr_fd,
         scheme_creation_cap,
         kernel_schemes,
         false,
@@ -165,7 +162,7 @@ pub fn main() -> ! {
         "process manager",
         "procmgr",
         auth,
-        &this_thr_fd,
+        this_thr_fd,
         scheme_creation_cap,
         kernel_schemes,
         true,
@@ -186,7 +183,7 @@ pub fn main() -> ! {
         "init namespace manager",
         "initnsmgr",
         auth,
-        &this_thr_fd,
+        this_thr_fd,
         scheme_creation_cap,
         kernel_schemes,
         false,
@@ -286,6 +283,7 @@ pub fn main() -> ! {
     unreachable!()
 }
 
+#[expect(clippy::too_many_arguments, reason = "all required")]
 pub(crate) fn spawn(
     name: &str,
     short_name: &str,
@@ -343,17 +341,12 @@ pub(crate) fn spawn(
                     core::mem::size_of::<usize>(),
                 )
             };
-            loop {
-                match redox_rt::sys::sys_call_ro(
-                    read.as_raw_fd(),
-                    fd_bytes,
-                    CallFlags::FD | CallFlags::FD_UPPER,
-                    &[],
-                ) {
-                    Err(Error { errno: EINTR }) => continue,
-                    _ => break,
-                }
-            }
+            while let Err(Error { errno: EINTR }) = redox_rt::sys::sys_call_ro(
+                read.as_raw_fd(),
+                fd_bytes,
+                CallFlags::FD | CallFlags::FD_UPPER,
+                &[],
+            ) {}
 
             (
                 scheme_creation_cap,

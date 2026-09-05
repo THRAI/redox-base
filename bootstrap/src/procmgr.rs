@@ -1,3 +1,8 @@
+use alloc::collections::VecDeque;
+use alloc::collections::btree_map::BTreeMap;
+use alloc::rc::{Rc, Weak};
+use alloc::vec;
+use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::cmp;
 use core::mem::size_of;
@@ -8,16 +13,9 @@ use core::str::FromStr;
 use core::sync::atomic::Ordering;
 use core::task::Poll::{self, *};
 
-use alloc::collections::VecDeque;
-use alloc::collections::btree_map::BTreeMap;
-use alloc::rc::{Rc, Weak};
-use alloc::vec;
-use alloc::vec::Vec;
-
 use arrayvec::ArrayString;
 use hashbrown::hash_map::{Entry, OccupiedEntry, VacantEntry};
 use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
-
 use libredox::protocol::{
     PidfdCall, ProcCall, ProcKillTarget, ProcMeta, RtSigInfo, SIGCHLD, SIGCONT, SIGHUP, SIGKILL,
     SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU, ThreadCall, WaitFlags,
@@ -884,6 +882,14 @@ impl<'a> ProcScheme<'a> {
                         flags: NewFdFlags::empty(),
                     })
                 }
+                b"proc-obj" => Ok(OpenResult::ThisScheme {
+                    number: self.handles.insert(Handle::ProcObj(pid)),
+                    flags: NewFdFlags::empty(),
+                }),
+                b"pgrp-obj" => Ok(OpenResult::ThisScheme {
+                    number: self.handles.insert(Handle::PgrpObj(pid)),
+                    flags: NewFdFlags::empty(),
+                }),
                 b"new-thread" => {
                     let thread = self.new_thread(pid)?;
                     Ok(OpenResult::ThisScheme {
@@ -943,7 +949,7 @@ impl<'a> ProcScheme<'a> {
                 };
                 match verb {
                     ThreadCall::SyncSigTctl => Ready(Response::new(
-                        Self::on_sync_sigtctl(&mut *thr.borrow_mut()).map(|()| 0),
+                        Self::on_sync_sigtctl(&mut thr.borrow_mut()).map(|()| 0),
                         op,
                     )),
                     ThreadCall::SignalThread => Ready(Response::new(
@@ -1232,7 +1238,7 @@ impl<'a> ProcScheme<'a> {
 
         Self::set_pgid(
             caller_proc_rc,
-            &mut *caller_proc,
+            &mut caller_proc,
             parent.as_deref_mut(),
             &mut self.groups,
             caller_pid,
@@ -1329,7 +1335,7 @@ impl<'a> ProcScheme<'a> {
 
         Self::set_pgid(
             proc_rc,
-            &mut *proc,
+            &mut proc,
             parent.as_deref_mut(),
             &mut self.groups,
             new_pgid,
@@ -2048,6 +2054,7 @@ impl<'a> ProcScheme<'a> {
             Ok(())
         }
     }
+    #[expect(clippy::too_many_arguments, reason = "all args required")]
     fn on_send_sig(
         &self,
         caller_pid: ProcessId,

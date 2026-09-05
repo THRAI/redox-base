@@ -26,12 +26,11 @@ pub mod start;
 
 extern crate alloc;
 
+use alloc::collections::btree_map::BTreeMap;
 use core::cell::UnsafeCell;
 
-use alloc::collections::btree_map::BTreeMap;
 use redox_rt::proc::FdGuard;
-use syscall::data::Map;
-use syscall::data::{GlobalSchemes, KernelSchemeInfo};
+use syscall::data::{GlobalSchemes, KernelSchemeInfo, Map};
 use syscall::flag::MapFlags;
 
 #[panic_handler]

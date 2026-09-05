@@ -1,25 +1,17 @@
+use alloc::string::String;
 use core::convert::TryFrom;
 #[allow(deprecated)]
 use core::hash::{BuildHasherDefault, SipHasher};
 use core::str;
 
-use alloc::string::String;
-
 use hashbrown::HashMap;
 use redox_initfs::{InitFs, Inode, InodeDir, InodeKind, InodeStruct};
-
 use redox_rt::proc::FdGuard;
-use redox_scheme::{
-    CallerCtx, OpenResult, RequestKind,
-    scheme::{SchemeState, SchemeSync},
-};
-
-use redox_scheme::{Response, SignalBehavior, Socket};
+use redox_scheme::scheme::{SchemeState, SchemeSync};
+use redox_scheme::{CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket};
 use syscall::PAGE_SIZE;
 use syscall::data::Stat;
-use syscall::dirent::DirEntry;
-use syscall::dirent::DirentBuf;
-use syscall::dirent::DirentKind;
+use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
 use syscall::error::*;
 use syscall::flag::*;
 use syscall::schemev2::NewFdFlags;
@@ -399,13 +391,10 @@ pub fn run(bytes: &'static [u8], sync_pipe: FdGuard, socket: Socket) -> ! {
     );
     drop(sync_pipe);
 
-    loop {
-        let Some(req) = socket
-            .next_request(SignalBehavior::Restart)
-            .expect("bootstrap: failed to read scheme request from kernel")
-        else {
-            break;
-        };
+    while let Some(req) = socket
+        .next_request(SignalBehavior::Restart)
+        .expect("bootstrap: failed to read scheme request from kernel")
+    {
         match req.kind() {
             RequestKind::Call(req) => {
                 let resp = req.handle_sync(&mut scheme, &mut state);
