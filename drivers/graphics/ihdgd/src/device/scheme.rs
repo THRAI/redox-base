@@ -3,9 +3,7 @@ use driver_graphics::kms::objects::{
     KmsCrtc, KmsCrtcDriver, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver,
     KmsPlaneState,
 };
-use driver_graphics::{Buffer, Damage, GraphicsAdapter};
-use drm_sys::{DRM_CAP_DUMB_BUFFER, DRM_CAP_DUMB_PREFERRED_DEPTH, DRM_CAP_DUMB_PREFER_SHADOW};
-use syscall::error::EINVAL;
+use driver_graphics::{Buffer, Damage, DumbBufferConfig, GraphicsAdapter};
 
 use super::buffer::GpuBuffer;
 use super::Device;
@@ -59,13 +57,15 @@ impl GraphicsAdapter for Device {
         self.unique.clone()
     }
 
-    fn get_cap(&self, cap: u32) -> syscall::Result<u64> {
-        match cap {
-            DRM_CAP_DUMB_BUFFER => Ok(1),
-            DRM_CAP_DUMB_PREFERRED_DEPTH => Ok(24),
-            DRM_CAP_DUMB_PREFER_SHADOW => Ok(1),
-            _ => Err(syscall::Error::new(EINVAL)),
-        }
+    fn dumb_buffer_config(&self) -> Option<DumbBufferConfig> {
+        Some(DumbBufferConfig {
+            preferred_depth: 24,
+            prefer_shadow: true,
+        })
+    }
+
+    fn cursor_size(&self) -> Option<(u64, u64)> {
+        None
     }
 
     fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {

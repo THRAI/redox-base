@@ -205,7 +205,7 @@ impl SchemeSync for InputScheme<'_> {
                         // root. That would currently deadlock due to initnsmgr not handling openat
                         // requests in parallel: https://gitlab.redox-os.org/redox-os/base/-/work_items/93
                         return Ok(OpenResult::OtherScheme {
-                            fd: File::open(format!("/scheme/{display}/v2/{vt}"))
+                            fd: File::open(format!("/scheme/{display}/{vt}"))
                                 .map_err(|err| SysError::new(err.raw_os_error().unwrap()))?
                                 .into_raw_fd() as usize,
                         });

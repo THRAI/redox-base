@@ -473,8 +473,6 @@ impl MoveCursor {
     }
 }
 
-static DEVICE: spin::Once<virtio_core::Device> = spin::Once::new();
-
 fn main() {
     pcid_interface::pci_daemon(daemon_runner);
 }
@@ -501,7 +499,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
     assert_eq!(pci_config.func.full_device_id.device_id, 0x1050);
     log::info!("virtio-gpu: initiating startup sequence :^)");
 
-    let device = DEVICE.try_call_once(|| virtio_core::probe_device(&mut pcid_handle))?;
+    let device = virtio_core::probe_device(&mut pcid_handle)?;
     let config = unsafe { &mut *(device.device_space as *mut GpuConfig) };
 
     // Negotiate features.

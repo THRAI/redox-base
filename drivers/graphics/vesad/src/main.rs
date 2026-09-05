@@ -1,6 +1,3 @@
-extern crate orbclient;
-extern crate syscall;
-
 use std::collections::HashMap;
 use std::env;
 

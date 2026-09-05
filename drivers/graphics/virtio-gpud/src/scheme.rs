@@ -7,12 +7,10 @@ use driver_graphics::kms::connector::{KmsConnectorDriver, KmsConnectorStatus};
 use driver_graphics::kms::objects::{
     KmsCrtc, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver, KmsPlaneState,
 };
-use driver_graphics::{Buffer as DrmBuffer, Damage, GraphicsAdapter, GraphicsScheme};
-use drm_sys::{
-    DRM_CAP_CURSOR_HEIGHT, DRM_CAP_CURSOR_WIDTH, DRM_CAP_DUMB_BUFFER, DRM_CAP_DUMB_PREFERRED_DEPTH,
-    DRM_CAP_DUMB_PREFER_SHADOW,
+use driver_graphics::{
+    Buffer as DrmBuffer, Damage, DumbBufferConfig, GraphicsAdapter, GraphicsScheme,
 };
-use syscall::{EINVAL, PAGE_SIZE};
+use syscall::PAGE_SIZE;
 use virtio_core::spec::{Buffer, ChainBuilder, DescriptorFlags};
 use virtio_core::transport::{Error, Queue, Transport};
 
@@ -386,15 +384,15 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         self.unique.clone()
     }
 
-    fn get_cap(&self, cap: u32) -> syscall::Result<u64> {
-        match cap {
-            DRM_CAP_DUMB_BUFFER => Ok(1),
-            DRM_CAP_DUMB_PREFERRED_DEPTH => Ok(24),
-            DRM_CAP_DUMB_PREFER_SHADOW => Ok(0),
-            DRM_CAP_CURSOR_WIDTH => Ok(64),
-            DRM_CAP_CURSOR_HEIGHT => Ok(64),
-            _ => Err(syscall::Error::new(EINVAL)),
-        }
+    fn dumb_buffer_config(&self) -> Option<DumbBufferConfig> {
+        Some(DumbBufferConfig {
+            preferred_depth: 24,
+            prefer_shadow: false,
+        })
+    }
+
+    fn cursor_size(&self) -> Option<(u64, u64)> {
+        Some((64, 64))
     }
 
     fn cursor_plane_needs_hotspot(&self) -> bool {

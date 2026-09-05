@@ -15,7 +15,7 @@ use redox_scheme::scheme::{SchemeSync, register_scheme_inner};
 use redox_scheme::{CallerCtx, Socket};
 use scheme_utils::{Blocking, FpathWriter, ResourceOpenResult, ResourceSync, resource_scheme};
 use syscall::schemev2::NewFdFlags;
-use syscall::{EINVAL, ENOENT, Error, MapFlags, Result};
+use syscall::{EINVAL, Error, MapFlags, Result};
 
 use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState};
 use crate::kms::objects::{
@@ -75,6 +75,11 @@ impl Damage {
     }
 }
 
+pub struct DumbBufferConfig {
+    pub preferred_depth: u8,
+    pub prefer_shadow: bool,
+}
+
 pub trait GraphicsAdapter: Sized + Debug {
     type Connector: KmsConnectorDriver;
     type Crtc: KmsCrtcDriver;
@@ -89,7 +94,8 @@ pub trait GraphicsAdapter: Sized + Debug {
     fn init(&mut self, objects: &mut KmsObjects<Self>);
 
     fn get_unique(&self) -> String;
-    fn get_cap(&self, cap: u32) -> Result<u64>;
+    fn dumb_buffer_config(&self) -> Option<DumbBufferConfig>;
+    fn cursor_size(&self) -> Option<(u64, u64)>;
     fn cursor_plane_needs_hotspot(&self) -> bool {
         false
     }
@@ -388,26 +394,18 @@ impl<T: GraphicsAdapter> ResourceSync for SchemeRoot<T> {
             return Err(Error::new(EINVAL));
         }
 
-        let handle = if path.starts_with("v") {
-            if !path.starts_with("v2/") {
-                return Err(Error::new(ENOENT));
-            }
-            let vt = path["v2/".len()..]
-                .parse::<usize>()
-                .map_err(|_| Error::new(EINVAL))?;
+        let vt = path.parse::<usize>().map_err(|_| Error::new(EINVAL))?;
 
-            // Ensure the VT exists such that the rest of the methods can freely access it.
-            GraphicsSchemeData::get_or_create_vt(&scheme_data.objects, &mut scheme_data.vts, vt);
+        // Ensure the VT exists such that the rest of the methods can freely access it.
+        GraphicsSchemeData::get_or_create_vt(&scheme_data.objects, &mut scheme_data.vts, vt);
 
-            GraphicsResource::DrmHandle(DrmHandle {
-                vt,
-                unique: None,
-                next_id: 0,
-                buffers: HashMap::new(),
-            })
-        } else {
-            return Err(Error::new(EINVAL));
-        };
+        let handle = GraphicsResource::DrmHandle(DrmHandle {
+            vt,
+            unique: None,
+            next_id: 0,
+            buffers: HashMap::new(),
+        });
+
         Ok(ResourceOpenResult::ThisScheme {
             data: handle,
             flags: NewFdFlags::empty(),
@@ -468,7 +466,7 @@ impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
         _scheme_data: &mut Self::SchemeData,
         w: &mut FpathWriter,
     ) -> syscall::Result<()> {
-        write!(w, "v2/{}", self.vt).unwrap();
+        write!(w, "{}", self.vt).unwrap();
         Ok(())
     }
 

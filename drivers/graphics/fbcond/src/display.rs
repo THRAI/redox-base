@@ -3,7 +3,7 @@ use std::io;
 use console_draw::V2DisplayMap;
 use drm::buffer::Buffer;
 use drm::control::Device;
-use graphics_ipc::V2GraphicsHandle;
+use graphics_ipc::DrmHandle;
 use inputd::ConsumerHandle;
 
 pub struct Display {
@@ -25,14 +25,14 @@ impl Display {
 
     /// Re-open the display after a handoff.
     pub fn reopen_for_handoff(&mut self) {
-        let display_file = match self.input_handle.open_display_v2() {
+        let display_file = match self.input_handle.open_display() {
             Ok(display_file) => display_file,
             Err(err) => {
                 log::error!("fbcond: No display present yet: {err}");
                 return;
             }
         };
-        let new_display_handle = V2GraphicsHandle::from_file(display_file).unwrap();
+        let new_display_handle = DrmHandle::from_file(display_file).unwrap();
 
         log::debug!("fbcond: Opened new display");
 

@@ -6,9 +6,8 @@ use driver_graphics::kms::connector::{KmsConnectorDriver, KmsConnectorStatus};
 use driver_graphics::kms::objects::{
     KmsCrtc, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneState,
 };
-use driver_graphics::{Buffer, Damage, GraphicsAdapter};
-use drm_sys::{DRM_CAP_DUMB_BUFFER, DRM_CAP_DUMB_PREFERRED_DEPTH, DRM_CAP_DUMB_PREFER_SHADOW};
-use syscall::{EINVAL, PAGE_SIZE};
+use driver_graphics::{Buffer, Damage, DumbBufferConfig, GraphicsAdapter};
+use syscall::PAGE_SIZE;
 
 #[derive(Debug)]
 pub struct FbAdapter {
@@ -62,13 +61,15 @@ impl GraphicsAdapter for FbAdapter {
         format!("vesad:{:x}", self.framebuffers[0].phys)
     }
 
-    fn get_cap(&self, cap: u32) -> syscall::Result<u64> {
-        match cap {
-            DRM_CAP_DUMB_BUFFER => Ok(1),
-            DRM_CAP_DUMB_PREFERRED_DEPTH => Ok(24),
-            DRM_CAP_DUMB_PREFER_SHADOW => Ok(0),
-            _ => Err(syscall::Error::new(EINVAL)),
-        }
+    fn dumb_buffer_config(&self) -> Option<DumbBufferConfig> {
+        Some(DumbBufferConfig {
+            preferred_depth: 24,
+            prefer_shadow: false,
+        })
+    }
+
+    fn cursor_size(&self) -> Option<(u64, u64)> {
+        None
     }
 
     fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {

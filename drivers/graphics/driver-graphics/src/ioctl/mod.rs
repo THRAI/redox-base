@@ -1,16 +1,14 @@
 use std::collections::HashMap;
-use std::ffi::c_char;
-use std::mem;
 use std::sync::Arc;
 
 use drm_fourcc::DrmFourcc;
-use drm_sys::{DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT, DRM_CLIENT_CAP_UNIVERSAL_PLANES};
 use syscall::{EINVAL, ENOENT, Error};
 
 use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
 use crate::{Buffer, Damage, DrmHandle, GraphicsAdapter, MAP_FAKE_OFFSET_MULTIPLIER, VtState};
 
 mod cursor;
+mod driver_info;
 mod framebuffer;
 mod property;
 
@@ -27,76 +25,17 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
     use redox_ioctl::drm as ipc;
 
     match cmd {
-        ipc::VERSION => ipc::DrmVersion::with(payload, |mut data| {
-            data.set_version_major(1);
-            data.set_version_minor(4);
-            data.set_version_patchlevel(0);
-
-            data.set_name(unsafe { mem::transmute(adapter.name()) });
-            data.set_date(unsafe { mem::transmute(&b"0"[..]) });
-            data.set_desc(unsafe { mem::transmute(adapter.desc()) });
-
-            Ok(0)
+        ipc::VERSION => ipc::DrmVersion::with(payload, |data| driver_info::version(adapter, data)),
+        ipc::GET_UNIQUE => {
+            ipc::DrmUnique::with(payload, |data| driver_info::get_unique(handle, data))
+        }
+        ipc::SET_VERSION => ipc::DrmSetVersion::with(payload, |data| {
+            driver_info::set_version(adapter, handle, data)
         }),
-        ipc::GET_UNIQUE => ipc::DrmUnique::with(payload, |mut data| {
-            if let Some(unique) = &handle.unique {
-                data.set_unique(unsafe { mem::transmute::<&[u8], &[c_char]>(unique.as_bytes()) });
-            } else {
-                data.set_unique_len(0);
-            }
-            Ok(0)
-        }),
-        ipc::SET_VERSION => ipc::DrmSetVersion::with(payload, |mut data| {
-            // We only support version 1.4 currently
-            if data.drm_di_major() != 0 || data.drm_di_minor() != 4 {
-                return Err(Error::new(EINVAL));
-            }
-            if data.drm_dd_major() != 0 || data.drm_dd_minor() != 4 {
-                return Err(Error::new(EINVAL));
-            }
-            data.set_drm_di_major(1);
-            data.set_drm_di_minor(4);
-            data.set_drm_dd_major(1);
-            data.set_drm_dd_minor(4);
-
-            handle.unique = Some(adapter.get_unique());
-
-            Ok(0)
-        }),
-        ipc::GET_CAP => ipc::DrmGetCap::with(payload, |mut data| {
-            data.set_value(
-                adapter.get_cap(
-                    data.capability()
-                        .try_into()
-                        .map_err(|_| Error::new(EINVAL))?,
-                )?,
-            );
-            Ok(0)
-        }),
-        ipc::SET_CLIENT_CAP => ipc::DrmSetClientCap::with(payload, |data| {
-            let cap: u32 = data
-                .capability()
-                .try_into()
-                .map_err(|_| Error::new(EINVAL))?;
-            let enable = match data.value() {
-                0 => false,
-                1 => true,
-                _ => return Err(Error::new(EINVAL)),
-            };
-            match cap {
-                // FIXME hide cursor and overlay planes unless this client cap is set
-                DRM_CLIENT_CAP_UNIVERSAL_PLANES => {}
-                // FIXME hide cursor plane on virtio-gpu unless this client cap is set
-                DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT => {
-                    if enable && !adapter.cursor_plane_needs_hotspot() {
-                        // FIXME this should return an error, but orbital doesn't yet handle that
-                        // return Err(Error::new(EOPNOTSUPP));
-                    }
-                }
-                _ => return Err(Error::new(EINVAL)),
-            }
-            Ok(0)
-        }),
+        ipc::GET_CAP => ipc::DrmGetCap::with(payload, |data| driver_info::get_cap(adapter, data)),
+        ipc::SET_CLIENT_CAP => {
+            ipc::DrmSetClientCap::with(payload, |data| driver_info::set_client_cap(adapter, data))
+        }
         ipc::MODE_CARD_RES => ipc::DrmModeCardRes::with(payload, |mut data| {
             let conn_ids = objects
                 .connector_ids()

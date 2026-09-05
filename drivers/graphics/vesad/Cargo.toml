@@ -5,8 +5,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-drm-sys.workspace = true
-orbclient.workspace = true
 redox_syscall.workspace = true
 redox_event.workspace = true
 
