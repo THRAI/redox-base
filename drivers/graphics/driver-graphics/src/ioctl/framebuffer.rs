@@ -94,17 +94,7 @@ pub(super) fn mode_rm_fb<T: GraphicsAdapter>(
             }
             let plane = objects.planes().nth(plane_idx).unwrap();
             adapter
-                .set_plane(
-                    &objects,
-                    plane,
-                    plane_state.clone(),
-                    Damage {
-                        x: 0,
-                        y: 0,
-                        width: 0,
-                        height: 0,
-                    },
-                )
+                .set_plane(&objects, plane, plane_state.clone(), None)
                 .unwrap();
         }
     }
@@ -136,13 +126,14 @@ pub(super) fn mode_dirtyfb<T: GraphicsAdapter>(
             y: 0,
             width: fb.width,
             height: fb.height,
-        });
+        })
+        .clip(fb.width, fb.height);
 
     if handle.vt == active_vt {
         for plane in objects.planes() {
             let state = plane.state.lock().unwrap().clone();
             if state.fb_id == Some(KmsObjectId(data.fb_id())) {
-                adapter.set_plane(&objects, plane, state, damage)?;
+                adapter.set_plane(&objects, plane, state, Some(damage))?;
             }
         }
     }

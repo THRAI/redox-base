@@ -105,7 +105,7 @@ impl GraphicsAdapter for Device {
         objects: &KmsObjects<Self>,
         plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
-        _damage: Damage,
+        _damage: Option<Damage>,
     ) -> syscall::Result<()> {
         let buffer = new_plane_state
             .fb_id

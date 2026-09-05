@@ -126,9 +126,9 @@ fn cursor_inner<T: GraphicsAdapter>(
         let plane = objects.get_plane(plane).unwrap();
         #[rustfmt::skip]
         let damage = if flags & DRM_MODE_CURSOR_BO != 0 {
-            Damage { x: 0, y: 0, width, height }
+            None // Damage entire cursor framebuffer
         } else {
-            Damage { x: 0, y: 0, width: 0, height: 0 }
+            Some(Damage { x: 0, y: 0, width: 0, height: 0 })
         };
         adapter.set_plane(&objects, plane, new_state.clone(), damage)?;
     }

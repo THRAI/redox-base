@@ -113,7 +113,7 @@ impl GraphicsAdapter for FbAdapter {
         objects: &KmsObjects<Self>,
         plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
-        damage: Damage,
+        damage: Option<Damage>,
     ) -> syscall::Result<()> {
         let Some(crtc_id) = new_plane_state.crtc_id else {
             return Ok(());
@@ -258,11 +258,13 @@ impl Buffer for GraphicScreen {
 }
 
 impl GraphicScreen {
-    fn sync(&self, framebuffer: &mut FrameBuffer, sync_rect: Damage) {
-        let sync_rect = sync_rect.clip(
-            self.width.try_into().unwrap(),
-            self.height.try_into().unwrap(),
-        );
+    fn sync(&self, framebuffer: &mut FrameBuffer, sync_rect: Option<Damage>) {
+        let sync_rect = sync_rect.unwrap_or(Damage {
+            x: 0,
+            y: 0,
+            width: self.width.try_into().unwrap(),
+            height: self.height.try_into().unwrap(),
+        });
 
         let start_x: usize = sync_rect.x.try_into().unwrap();
         let start_y: usize = sync_rect.y.try_into().unwrap();

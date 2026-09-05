@@ -5,7 +5,7 @@ use drm_fourcc::DrmFourcc;
 use syscall::{EINVAL, ENOENT, Error};
 
 use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
-use crate::{Buffer, Damage, DrmHandle, GraphicsAdapter, MAP_FAKE_OFFSET_MULTIPLIER, VtState};
+use crate::{Buffer, DrmHandle, GraphicsAdapter, MAP_FAKE_OFFSET_MULTIPLIER, VtState};
 
 mod cursor;
 mod driver_info;
@@ -114,17 +114,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             new_plane_state.crtc_id = Some(crtc_id);
             if handle.vt == active_vt {
                 adapter.set_crtc(&objects, crtc, new_crtc_state.clone())?;
-                adapter.set_plane(
-                    &objects,
-                    plane,
-                    new_plane_state.clone(),
-                    Damage {
-                        x: data.x(),
-                        y: data.y(),
-                        width: mode.map_or(0, |m| m.hdisplay as u32),
-                        height: mode.map_or(0, |m| m.vdisplay as u32),
-                    },
-                )?;
+                adapter.set_plane(&objects, plane, new_plane_state.clone(), None)?;
                 for connector in connector_ids {
                     objects
                         .get_connector(connector)?
@@ -279,17 +269,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             };
 
             if handle.vt == active_vt {
-                adapter.set_plane(
-                    &objects,
-                    plane,
-                    new_state.clone(),
-                    Damage {
-                        x: 0,
-                        y: 0,
-                        width: data.src_w(),
-                        height: data.src_h(),
-                    },
-                )?;
+                adapter.set_plane(&objects, plane, new_state.clone(), None)?;
             }
 
             if let Some(old_fb_id) = old_fb_id {

@@ -121,7 +121,8 @@ pub trait GraphicsAdapter: Sized + Debug {
         objects: &KmsObjects<Self>,
         plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
-        damage: Damage,
+        // None means entire framebuffer is damaged
+        damage: Option<Damage>,
     ) -> syscall::Result<()>;
 }
 
@@ -349,24 +350,8 @@ impl<T: GraphicsAdapter> GraphicsSchemeData<T> {
             let plane_id = self.objects.plane_ids()[plane_idx];
             let plane = self.objects.get_plane(plane_id).unwrap();
 
-            let fb = plane_state.fb_id.map(|fb_id| {
-                self.objects
-                    .get_framebuffer_maybe_closed(fb_id)
-                    .expect("removed framebuffers should be unset")
-            });
-
             self.adapter
-                .set_plane(
-                    &self.objects,
-                    plane,
-                    plane_state.clone(),
-                    Damage {
-                        x: 0,
-                        y: 0,
-                        width: fb.map_or(0, |fb| fb.width),
-                        height: fb.map_or(0, |fb| fb.height),
-                    },
-                )
+                .set_plane(&self.objects, plane, plane_state.clone(), None)
                 .unwrap();
         }
     }
