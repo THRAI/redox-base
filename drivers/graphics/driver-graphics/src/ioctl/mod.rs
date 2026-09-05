@@ -4,7 +4,7 @@ use std::sync::Arc;
 use drm_fourcc::DrmFourcc;
 use syscall::{EINVAL, ENOENT, Error};
 
-use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
+use crate::kms::objects::{KmsObjectId, KmsObjects, KmsPlaneType, KmsRect};
 use crate::{Buffer, DrmHandle, GraphicsAdapter, MAP_FAKE_OFFSET_MULTIPLIER, VtState};
 
 mod cursor;
@@ -33,9 +33,9 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             driver_info::set_version(adapter, handle, data)
         }),
         ipc::GET_CAP => ipc::DrmGetCap::with(payload, |data| driver_info::get_cap(adapter, data)),
-        ipc::SET_CLIENT_CAP => {
-            ipc::DrmSetClientCap::with(payload, |data| driver_info::set_client_cap(adapter, data))
-        }
+        ipc::SET_CLIENT_CAP => ipc::DrmSetClientCap::with(payload, |data| {
+            driver_info::set_client_cap(adapter, handle, data)
+        }),
         ipc::MODE_CARD_RES => ipc::DrmModeCardRes::with(payload, |mut data| {
             let conn_ids = objects
                 .connector_ids()
@@ -227,6 +227,27 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             let ids = objects
                 .plane_ids()
                 .iter()
+                .filter(|&&id| {
+                    // FIXME should unsupported planes also give ENOENT for get/set plane?
+
+                    let plane_type = objects.get_plane(id).unwrap().plane_type;
+
+                    if !handle.supports_universal_planes {
+                        // Universal planes not supported by client, only return primary planes.
+                        return plane_type == KmsPlaneType::Primary;
+                    }
+
+                    if plane_type == KmsPlaneType::Cursor
+                        && adapter.cursor_plane_needs_hotspot()
+                        && !handle.supports_cursor_hotspot
+                    {
+                        // Cursor hotspot not supported by client but required by driver,
+                        // omit cursor planes.
+                        return false;
+                    }
+
+                    true
+                })
                 .map(|id| id.0)
                 .collect::<Vec<_>>();
             data.set_plane_id_ptr(&ids);

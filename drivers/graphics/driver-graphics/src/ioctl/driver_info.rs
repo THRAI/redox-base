@@ -106,6 +106,7 @@ pub(super) fn get_cap<T: GraphicsAdapter>(
 
 pub(super) fn set_client_cap<T: GraphicsAdapter>(
     adapter: &mut T,
+    handle: &mut DrmHandle<T>,
     data: redox_ioctl::drm::DrmSetClientCap<'_>,
 ) -> Result<usize, Error> {
     let cap: u32 = data
@@ -118,13 +119,12 @@ pub(super) fn set_client_cap<T: GraphicsAdapter>(
         _ => return Err(Error::new(EINVAL)),
     };
     match cap {
-        // FIXME hide cursor and overlay planes unless this client cap is set
-        DRM_CLIENT_CAP_UNIVERSAL_PLANES => {}
-        // FIXME hide cursor plane on virtio-gpu unless this client cap is set
+        DRM_CLIENT_CAP_UNIVERSAL_PLANES => handle.supports_universal_planes = enable,
         DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT => {
             if enable && !adapter.cursor_plane_needs_hotspot() {
                 return Err(Error::new(EOPNOTSUPP));
             }
+            handle.supports_cursor_hotspot = enable;
         }
         _ => return Err(Error::new(EINVAL)),
     }
