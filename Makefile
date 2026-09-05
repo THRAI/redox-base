@@ -30,6 +30,9 @@ ifeq ($(TARGET),aarch64-unknown-redox)
 	INITFS_BINS += bcm2835-sdhcid
 endif
 
+# For testing/benchmarking only
+# BASE_BINS += drawbench
+
 INITFS_CARGO_ARGS = $(foreach bin,$(INITFS_BINS),-p $(bin))
 INITFS_DRIVERS_CARGO_ARGS = $(foreach bin,$(INITFS_DRIVERS_BINS),-p $(bin))
 BASE_CARGO_ARGS = $(foreach bin,$(BASE_BINS),-p $(bin))
