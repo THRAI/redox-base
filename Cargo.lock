@@ -627,6 +627,7 @@ name = "drawbench"
 version = "0.1.0"
 dependencies = [
  "console-draw",
+ "drm",
  "graphics-ipc",
  "inputd",
 ]

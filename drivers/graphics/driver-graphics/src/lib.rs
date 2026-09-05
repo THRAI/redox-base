@@ -389,6 +389,8 @@ impl<T: GraphicsAdapter> ResourceSync for SchemeRoot<T> {
         let handle = GraphicsResource::DrmHandle(DrmHandle {
             vt,
             unique: None,
+            supports_universal_planes: false,
+            supports_cursor_hotspot: false,
             next_id: 0,
             buffers: HashMap::new(),
         });
@@ -431,6 +433,8 @@ impl<T: GraphicsAdapter> ResourceSync for Control<T> {
 struct DrmHandle<T: GraphicsAdapter> {
     vt: usize,
     unique: Option<String>,
+    supports_universal_planes: bool,
+    supports_cursor_hotspot: bool,
     next_id: u32,
     buffers: HashMap<u32, Arc<T::Buffer>>,
 }
