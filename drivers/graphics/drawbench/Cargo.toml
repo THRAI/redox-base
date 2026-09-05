@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+drm.workspace = true
+
 console-draw = { path = "../console-draw" }
 graphics-ipc = { path = "../graphics-ipc" }
 inputd = { path = "../../inputd" }

@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::rc::Rc;
-use std::{cmp, io, mem, ptr};
+use std::{io, mem, ptr};
 
 pub use alacritty_terminal;
 use alacritty_terminal::event::{Event, EventListener};
@@ -18,45 +18,6 @@ use drm::buffer::{Buffer, DrmFourcc};
 use drm::control::{connector, crtc, framebuffer, ClipRect, Device, Mode};
 use graphics_ipc::{CpuBackedBuffer, DrmHandle};
 use orbclient::FONT;
-
-#[derive(Debug, Copy, Clone)]
-pub struct Damage {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl Damage {
-    pub const NONE: Self = Damage {
-        x: 0,
-        y: 0,
-        width: 0,
-        height: 0,
-    };
-
-    pub fn merge(self, other: Self) -> Self {
-        if self.width == 0 || self.height == 0 {
-            return other;
-        }
-
-        if other.width == 0 || other.height == 0 {
-            return self;
-        }
-
-        let x = cmp::min(self.x, other.x);
-        let y = cmp::min(self.y, other.y);
-        let x2 = cmp::max(self.x + self.width, other.x + other.width);
-        let y2 = cmp::max(self.y + self.height, other.y + other.height);
-
-        Damage {
-            x,
-            y,
-            width: x2 - x,
-            height: y2 - y,
-        }
-    }
-}
 
 pub struct V2DisplayMap {
     pub display_handle: DrmHandle,
@@ -127,19 +88,15 @@ impl V2DisplayMap {
         }
     }
 
-    pub fn dirty_fb(&mut self, damage: Damage) -> io::Result<()> {
-        self.buffer
-            .sync_rect(damage.x, damage.y, damage.width, damage.height);
+    pub fn dirty_fb(&mut self, damage: ClipRect) -> io::Result<()> {
+        self.buffer.sync_rect(
+            u32::from(damage.x1()),
+            u32::from(damage.y1()),
+            u32::from(damage.x2() - damage.x1()),
+            u32::from(damage.y2() - damage.y1()),
+        );
 
-        self.display_handle.dirty_framebuffer(
-            self.fb,
-            &[ClipRect::new(
-                damage.x as u16,
-                damage.y as u16,
-                (damage.x + damage.width) as u16,
-                (damage.y + damage.height) as u16,
-            )],
-        )
+        self.display_handle.dirty_framebuffer(self.fb, &[damage])
     }
 }
 
@@ -360,7 +317,7 @@ impl TextScreen {
         map: &mut V2DisplayMap,
         buf: &[u8],
         input: &mut VecDeque<u8>,
-    ) -> Damage {
+    ) -> ClipRect {
         let map = unsafe { &mut map.console_map() };
 
         let mut min_changed_x = map.width;
@@ -413,14 +370,12 @@ impl TextScreen {
 
         input.extend(self.term_input.borrow_mut().drain(..));
 
-        let damage = Damage {
-            x: u32::try_from(min_changed_x).unwrap() * self.font.width as u32,
-            y: u32::try_from(min_changed_y).unwrap() * self.font.height as u32,
-            width: u32::try_from(max_changed_x.saturating_sub(min_changed_x) + 1).unwrap()
-                * self.font.width as u32,
-            height: u32::try_from(max_changed_y.saturating_sub(min_changed_y) + 1).unwrap()
-                * self.font.height as u32,
-        };
+        let damage = ClipRect::new(
+            u16::try_from(min_changed_x).unwrap() * self.font.width as u16,
+            u16::try_from(min_changed_y).unwrap() * self.font.height as u16,
+            u16::try_from(max_changed_x + 1).unwrap() * self.font.width as u16,
+            u16::try_from(max_changed_y + 1).unwrap() * self.font.height as u16,
+        );
 
         damage
     }

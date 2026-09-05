@@ -1,7 +1,8 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use console_draw::{Damage, V2DisplayMap};
+use console_draw::V2DisplayMap;
+use drm::control::ClipRect;
 use graphics_ipc::DrmHandle;
 use inputd::ConsumerHandle;
 
@@ -13,13 +14,7 @@ fn main() {
     loop {
         let start = Instant::now();
         for _ in 0..100 {
-            map.dirty_fb(Damage {
-                x: 0,
-                y: 0,
-                width: 512,
-                height: 512,
-            })
-            .unwrap();
+            map.dirty_fb(ClipRect::new(0, 0, 512, 512)).unwrap();
         }
         println!("100 frames took {:?}", start.elapsed());
         thread::sleep(Duration::from_millis(500));
