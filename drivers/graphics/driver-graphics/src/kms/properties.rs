@@ -22,8 +22,10 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
     ) -> KmsObjectId {
         match &kind {
             KmsPropertyKind::Range(start, end) => assert!(start < end),
-            KmsPropertyKind::Enum(_variants) => {
-                // FIXME check duplicate variant numbers
+            KmsPropertyKind::Enum(variants) => {
+                let mut ids = variants.iter().map(|(_, id)| id).collect::<Vec<_>>();
+                ids.sort();
+                assert!(ids.array_windows::<2>().all(|[a, b]| a != b));
             }
             KmsPropertyKind::Blob => {}
             KmsPropertyKind::Bitmask(_bitmask_flags) => {
