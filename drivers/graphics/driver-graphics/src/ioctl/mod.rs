@@ -62,20 +62,15 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
         ipc::MODE_GET_CRTC => ipc::DrmModeCrtc::with(payload, |mut data| {
             let crtc = objects.get_crtc(KmsObjectId(data.crtc_id()))?;
             // Don't touch set_connectors, that is only used by MODE_SET_CRTC
-            data.set_fb_id(
-                objects
-                    .get_plane(crtc.primary_plane)
-                    .unwrap()
-                    .state
-                    .lock()
-                    .unwrap()
-                    .fb_id
-                    .unwrap_or(KmsObjectId::INVALID)
-                    .0,
-            );
-            // FIXME fill x and y with the data from the primary plane
-            data.set_x(0);
-            data.set_y(0);
+            let primary_plane_state = objects
+                .get_plane(crtc.primary_plane)
+                .unwrap()
+                .state
+                .lock()
+                .unwrap();
+            data.set_fb_id(primary_plane_state.fb_id.unwrap_or(KmsObjectId::INVALID).0);
+            data.set_x(primary_plane_state.src_rect.x >> 16);
+            data.set_y(primary_plane_state.src_rect.y >> 16);
             data.set_gamma_size(crtc.gamma_size);
             if let Some(mode) = crtc.state.lock().unwrap().mode {
                 data.set_mode_valid(1);
