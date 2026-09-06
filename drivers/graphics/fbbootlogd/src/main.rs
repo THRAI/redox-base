@@ -4,8 +4,8 @@
 //! in quiet mode.
 
 use std::collections::VecDeque;
-use std::io::{self, PipeReader, Read};
-use std::os::fd::AsRawFd;
+use std::io::{self, Read};
+use std::os::fd::{AsRawFd, IntoRawFd};
 
 use console_draw::alacritty_terminal::grid::Scroll;
 use console_draw::alacritty_terminal::term;
@@ -30,7 +30,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         }
     }
 
-    let (log_reader, log_writer) = io::pipe().expect("fbbootlogd: failed to create pipe");
+    let (mut log_reader, log_writer) = io::pipe().expect("fbbootlogd: failed to create pipe");
     if unsafe { libc::fcntl(log_reader.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) != 0 } {
         panic!(
             "fbbootlogd: failed to set pipe as nonblocking: {}",
@@ -38,11 +38,13 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         )
     };
 
-    let mut bootlog = Fbbootlog::new(log_reader);
+    let input_handle = ConsumerHandle::bootlog_vt().expect("fbbootlogd: Failed to open vt");
+    let mut bootlog = Fbbootlog::new();
+    bootlog.handle_handoff(&input_handle);
 
     event_queue
         .subscribe(
-            bootlog.log_reader.as_raw_fd() as usize,
+            log_reader.as_raw_fd() as usize,
             Source::LogPipe,
             event::EventFlags::READ,
         )
@@ -50,7 +52,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     event_queue
         .subscribe(
-            bootlog.input_handle.event_handle().as_raw_fd() as usize,
+            input_handle.event_handle().as_raw_fd() as usize,
             Source::Input,
             event::EventFlags::READ,
         )
@@ -66,7 +68,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         .expect("fbbootlogd: failed to open log/add_sink");
         log_file
             .call_wo(
-                &(log_writer.as_raw_fd() as usize).to_ne_bytes(),
+                &(log_writer.into_raw_fd() as usize).to_ne_bytes(),
                 syscall::CallFlags::FD,
                 &[],
             )
@@ -81,7 +83,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         match event.expect("fbbootlogd: failed to get event").user_data {
             Source::LogPipe => loop {
                 let mut buf = [0; 4096];
-                let n = match bootlog.log_reader.read(&mut buf) {
+                let n = match log_reader.read(&mut buf) {
                     Ok(n) => n,
                     Err(e) if e.raw_os_error() == Some(libc::EAGAIN) => break,
                     Err(e) => panic!("fbbootlogd: failed to read from log pipe: {e}"),
@@ -91,8 +93,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
             Source::Input => {
                 let mut events = [Event::new(); 16];
                 loop {
-                    match bootlog
-                        .input_handle
+                    match input_handle
                         .read_events(&mut events)
                         .expect("fbbootlogd: error while reading events")
                     {
@@ -104,7 +105,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
                         }
                         ConsumerHandleEvent::Handoff => {
                             eprintln!("fbbootlogd: handoff requested");
-                            bootlog.handle_handoff();
+                            bootlog.handle_handoff(&input_handle);
                         }
                     }
                 }
@@ -116,33 +117,25 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 }
 
 struct Fbbootlog {
-    log_reader: PipeReader,
-    input_handle: ConsumerHandle,
     display_map: Option<V2DisplayMap>,
     text_screen: console_draw::TextScreen,
     shift: bool,
 }
 
 impl Fbbootlog {
-    fn new(log_reader: PipeReader) -> Self {
+    fn new() -> Self {
         let mut config = term::Config::default();
         config.scrolling_history = 1000;
 
-        let mut scheme_data = Self {
-            log_reader,
-            input_handle: ConsumerHandle::bootlog_vt().expect("fbbootlogd: Failed to open vt"),
+        Self {
             display_map: None,
             text_screen: console_draw::TextScreen::new(None, config),
             shift: false,
-        };
-
-        scheme_data.handle_handoff();
-
-        scheme_data
+        }
     }
 
-    fn handle_handoff(&mut self) {
-        let new_display_handle = match self.input_handle.open_display() {
+    fn handle_handoff(&mut self, input_handle: &ConsumerHandle) {
+        let new_display_handle = match input_handle.open_display() {
             Ok(display) => DrmHandle::from_file(display).unwrap(),
             Err(err) => {
                 eprintln!("fbbootlogd: No display present yet: {err}");
