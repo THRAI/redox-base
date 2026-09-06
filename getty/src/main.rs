@@ -3,13 +3,13 @@ use std::ffi::CStr;
 use std::fs::File;
 use std::io::{self, ErrorKind, Read, Stderr, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
 use std::str;
 use std::time::{Duration, Instant};
 
-use event::{EventFlags, RawEventQueue};
-use libc::{EAGAIN, O_NONBLOCK, grantpt, ptsname, unlockpt};
+use libc::{EAGAIN, O_NOCTTY, O_NONBLOCK, grantpt, ptsname, unlockpt};
 
 const _MAN_PAGE: &'static str = /* @MANSTART{getty} */
     r#"
@@ -53,20 +53,15 @@ fn fail<'a>(s: &'a str, stderr: &mut io::Stderr) -> ! {
     std::process::exit(1);
 }
 
-pub fn handle(
-    event_queue: &mut RawEventQueue,
-    tty: &mut File,
-    master: &mut File,
-    process: &mut Child,
-) {
+const TTY: mio::Token = mio::Token(0);
+const MASTER: mio::Token = mio::Token(1);
+
+pub fn handle(event_queue: &mut mio::Poll, tty: &mut File, master: &mut File, process: &mut Child) {
     // tty_fd => Display
     // master_fd => PTY
 
-    let tty_fd = tty.as_raw_fd();
-    let master_fd = master.as_raw_fd();
-
-    let mut handle_event = |event_id: usize| {
-        if event_id as RawFd == tty_fd {
+    let mut handle_event = |event_id: mio::Token| {
+        if event_id == TTY {
             let mut packet = [0; 4096];
             loop {
                 let count = match tty.read(&mut packet) {
@@ -79,7 +74,7 @@ pub fn handle(
                     .write_all(&packet[..count])
                     .expect("getty: failed to write master PTY");
             }
-        } else if event_id as RawFd == master_fd {
+        } else if event_id == MASTER {
             let mut packet = [0; 4096];
             loop {
                 let count = match master.read(&mut packet) {
@@ -97,15 +92,17 @@ pub fn handle(
         }
     };
 
-    handle_event(tty_fd as usize);
-    handle_event(master_fd as usize);
+    handle_event(TTY);
+    handle_event(MASTER);
 
     'events: loop {
-        let sys_event = event_queue
-            .next()
-            .expect("getty: event queue stopped")
+        let mut events = mio::Events::with_capacity(2);
+        event_queue
+            .poll(&mut events, None)
             .expect("getty: failed to read event file");
-        handle_event(sys_event.fd);
+        for event in events.iter() {
+            handle_event(event.token());
+        }
 
         match process.try_wait() {
             Ok(status) => match status {
@@ -128,8 +125,8 @@ pub fn getpty(columns: u16, lines: u16) -> (File, String) {
         .read(true)
         .write(true)
         .create(true)
-        .custom_flags(O_NONBLOCK)
-        .open("/scheme/pty/ptmx")
+        .custom_flags(O_NONBLOCK | O_NOCTTY)
+        .open("/dev/ptmx")
         .expect("getty: failed to create PTY");
 
     if unsafe {
@@ -222,14 +219,24 @@ fn daemon(tty: &mut File, clear: bool, contain: bool, stderr: &mut Stderr) {
     let (mut master, pty) = getpty(columns, lines);
 
     // FIXME maybe switch to mio?
-    let mut event_queue = event::RawEventQueue::new().expect("getty: failed to open event queue");
+    let mut event_queue = mio::Poll::new().expect("getty: failed to open event queue");
 
     event_queue
-        .subscribe(tty.as_raw_fd() as usize, 0, EventFlags::READ)
+        .registry()
+        .register(
+            &mut mio::unix::SourceFd(&tty.as_raw_fd()),
+            mio::Token(0),
+            mio::Interest::READABLE,
+        )
         .expect("getty: failed to fevent TTY");
 
     event_queue
-        .subscribe(master.as_raw_fd() as usize, 0, EventFlags::READ)
+        .registry()
+        .register(
+            &mut mio::unix::SourceFd(&master.as_raw_fd()),
+            mio::Token(1),
+            mio::Interest::READABLE,
+        )
         .expect("getty: failed to fevent master PTY");
 
     loop {
@@ -257,11 +264,26 @@ fn daemon(tty: &mut File, clear: bool, contain: bool, stderr: &mut Stderr) {
             Command::new("login")
         };
         command
-            .stdin(slave_stdin)
+            .stdin(slave_stdin.try_clone().unwrap())
             .stdout(slave_stdout)
             .stderr(slave_stderr)
             .env("TERM", "xterm-256color")
             .env("TTY", &pty);
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+
+                // FIXME enable this once redox supports controlling ttys
+                #[cfg(not(target_os = "redox"))]
+                if libc::ioctl(slave_stdin.as_raw_fd(), libc::TIOCSCTTY, 1) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+
+                Ok(())
+            });
+        }
 
         match command.spawn() {
             Ok(mut process) => {
