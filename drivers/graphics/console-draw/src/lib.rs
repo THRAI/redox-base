@@ -11,7 +11,9 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{self, point_to_viewport, viewport_to_point, TermDamage};
+use alacritty_terminal::term::{
+    self, point_to_viewport, viewport_to_point, RenderableContent, TermDamage,
+};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use alacritty_terminal::{vte, Term};
 use drm::buffer::{Buffer, DrmFourcc};
@@ -269,20 +271,19 @@ impl TextScreen {
     fn draw_cell(
         map: &mut DisplayMap,
         font: &ConsoleFont,
-        term_colors: &Colors,
         default_colors: &Colors,
-        display_offset: usize,
+        term_content: &RenderableContent,
         cell: Indexed<&Cell>,
     ) -> Option<Point<usize>> {
-        let Some(point) = point_to_viewport(display_offset, cell.point) else {
+        let Some(point) = point_to_viewport(term_content.display_offset, cell.point) else {
             return None;
         };
 
         let x = point.column.0 * font.width;
         let y = point.line * font.height;
 
-        let mut bg_color = Self::lookup_color(term_colors, default_colors, cell.bg);
-        let mut fg_color = Self::lookup_color(term_colors, default_colors, cell.fg);
+        let mut bg_color = Self::lookup_color(term_content.colors, default_colors, cell.bg);
+        let mut fg_color = Self::lookup_color(term_content.colors, default_colors, cell.fg);
         if cell.flags.contains(Flags::INVERSE) {
             mem::swap(&mut bg_color, &mut fg_color);
         }
@@ -359,7 +360,6 @@ impl TextScreen {
             }
         };
 
-        let display_offset = self.term.grid().display_offset();
         // FIXME handle column damage
         let changed_lines = match self.term.damage() {
             TermDamage::Full => (0..self.term.screen_lines()).collect::<Vec<_>>(),
@@ -375,21 +375,16 @@ impl TextScreen {
                 .term
                 .grid()
                 .iter_from(viewport_to_point(
-                    display_offset,
+                    term_content.display_offset,
                     // For whatever reason iter_from skips the point you give it:
                     // https://github.com/alacritty/alacritty/issues/9038
                     Point::new(line - 1, last_column),
                 ))
                 .take(self.term.grid().columns())
             {
-                if let Some(point) = Self::draw_cell(
-                    map,
-                    &self.font,
-                    term_content.colors,
-                    &self.colors,
-                    display_offset,
-                    cell,
-                ) {
+                if let Some(point) =
+                    Self::draw_cell(map, &self.font, &self.colors, &term_content, cell)
+                {
                     col_changed(point.column.0);
                     line_changed(point.line);
                 }
@@ -404,9 +399,8 @@ impl TextScreen {
             if let Some(point) = Self::draw_cell(
                 map,
                 &self.font,
-                term_content.colors,
                 &self.colors,
-                term_content.display_offset,
+                &term_content,
                 Indexed { point, cell },
             ) {
                 col_changed(point.column.0);
@@ -421,9 +415,8 @@ impl TextScreen {
             if let Some(point) = Self::draw_cell(
                 map,
                 &self.font,
-                term_content.colors,
                 &self.colors,
-                display_offset,
+                &term_content,
                 Indexed { point, cell: &cell },
             ) {
                 col_changed(point.column.0);
