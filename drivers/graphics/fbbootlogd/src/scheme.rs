@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::io;
+use std::io::{self, PipeReader};
 
 use console_draw::alacritty_terminal::grid::Scroll;
 use console_draw::alacritty_terminal::term;
@@ -9,34 +9,22 @@ use drm::control::Device;
 use graphics_ipc::DrmHandle;
 use inputd::ConsumerHandle;
 use orbclient::{Event, EventOption};
-use redox_scheme::CallerCtx;
-use scheme_utils::{resource_scheme, FpathWriter, ResourceOpenResult, ResourceSync};
-use syscall::schemev2::NewFdFlags;
-use syscall::{Error, Result, ENOENT};
 
-resource_scheme! {
-    pub(crate) FbbootlogScheme<>;
-    type SchemeData = FbbootlogSchemeData;
-
-    pub(crate) enum FbbootlogResource {
-        SchemeRoot(SchemeRoot),
-        Log(Log),
-    }
-}
-
-pub struct FbbootlogSchemeData {
-    pub input_handle: ConsumerHandle,
+pub(crate) struct FbbootlogSchemeData {
+    pub(crate) log_reader: PipeReader,
+    pub(crate) input_handle: ConsumerHandle,
     display_map: Option<V2DisplayMap>,
     text_screen: console_draw::TextScreen,
     shift: bool,
 }
 
 impl FbbootlogSchemeData {
-    pub fn new() -> Self {
+    pub(crate) fn new(log_reader: PipeReader) -> Self {
         let mut config = term::Config::default();
         config.scrolling_history = 1000;
 
         let mut scheme_data = Self {
+            log_reader,
             input_handle: ConsumerHandle::bootlog_vt().expect("fbbootlogd: Failed to open vt"),
             display_map: None,
             text_screen: console_draw::TextScreen::new(None, config),
@@ -48,7 +36,7 @@ impl FbbootlogSchemeData {
         scheme_data
     }
 
-    pub fn handle_handoff(&mut self) {
+    pub(crate) fn handle_handoff(&mut self) {
         let new_display_handle = match self.input_handle.open_display() {
             Ok(display) => DrmHandle::from_file(display).unwrap(),
             Err(err) => {
@@ -68,7 +56,7 @@ impl FbbootlogSchemeData {
         eprintln!("fbbootlogd: mapped display");
     }
 
-    pub fn handle_input(&mut self, ev: &Event) {
+    pub(crate) fn handle_input(&mut self, ev: &Event) {
         match ev.to_option() {
             EventOption::Key(key_event) => {
                 if key_event.scancode == 0x2A || key_event.scancode == 0x36 {
@@ -112,6 +100,15 @@ impl FbbootlogSchemeData {
         }
     }
 
+    pub(crate) fn handle_logs(&mut self, buf: &[u8]) {
+        if let Some(map) = &mut self.display_map {
+            FbbootlogSchemeData::handle_resize(map, &mut self.text_screen);
+
+            let damage = self.text_screen.write(map, buf, &mut VecDeque::new());
+            map.dirty_fb(damage).unwrap();
+        }
+    }
+
     fn handle_resize(map: &mut V2DisplayMap, text_screen: &mut TextScreen) {
         let mode = match map
             .display_handle
@@ -138,66 +135,5 @@ impl FbbootlogSchemeData {
                 }
             }
         }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct SchemeRoot;
-
-impl ResourceSync for SchemeRoot {
-    type ResourceEnum = FbbootlogResource;
-    type SchemeData = FbbootlogSchemeData;
-
-    fn openat<'a>(
-        &mut self,
-        _scheme_data: &mut Self::SchemeData,
-        path: &str,
-        _flags: usize,
-        _fcntl_flags: u32,
-        _ctx: &CallerCtx,
-    ) -> Result<ResourceOpenResult<Self::ResourceEnum>> {
-        if !path.is_empty() {
-            return Err(Error::new(ENOENT));
-        }
-
-        Ok(ResourceOpenResult::ThisScheme {
-            data: FbbootlogResource::Log(Log),
-            flags: NewFdFlags::empty(),
-        })
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct Log;
-
-impl ResourceSync for Log {
-    type ResourceEnum = FbbootlogResource;
-    type SchemeData = FbbootlogSchemeData;
-
-    fn fpath(&mut self, _scheme_data: &mut Self::SchemeData, _w: &mut FpathWriter) -> Result<()> {
-        Ok(())
-    }
-
-    fn fsync(&mut self, _scheme_data: &mut Self::SchemeData) -> Result<()> {
-        Ok(())
-    }
-
-    fn write(
-        &mut self,
-        scheme_data: &mut Self::SchemeData,
-        buf: &[u8],
-        _offset: u64,
-        _fcntl_flags: u32,
-    ) -> Result<usize> {
-        if let Some(map) = &mut scheme_data.display_map {
-            FbbootlogSchemeData::handle_resize(map, &mut scheme_data.text_screen);
-
-            let damage = scheme_data
-                .text_screen
-                .write(map, buf, &mut VecDeque::new());
-            map.dirty_fb(damage).unwrap();
-        }
-
-        Ok(buf.len())
     }
 }

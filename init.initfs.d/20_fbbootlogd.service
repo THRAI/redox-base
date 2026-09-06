@@ -4,4 +4,4 @@ requires_weak = ["10_inputd.service", "20_vesad.service"]
 
 [service]
 cmd = "fbbootlogd"
-type = { scheme = "fbbootlog" }
+type = "notify"

@@ -837,12 +837,11 @@ dependencies = [
  "drm",
  "graphics-ipc",
  "inputd",
+ "libc",
  "libredox",
  "orbclient",
- "redox-scheme",
  "redox_event",
  "redox_syscall 0.9.4",
- "scheme-utils",
 ]
 
 [[package]]
