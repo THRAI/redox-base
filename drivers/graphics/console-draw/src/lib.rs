@@ -7,11 +7,13 @@ use std::{io, mem, ptr};
 pub use alacritty_terminal;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Indexed, Scroll};
-use alacritty_terminal::index::Point;
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{self, point_to_viewport, viewport_to_point, TermDamage};
+use alacritty_terminal::term::{
+    self, point_to_viewport, viewport_to_point, RenderableContent, TermDamage,
+};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use alacritty_terminal::{vte, Term};
 use drm::buffer::{Buffer, DrmFourcc};
@@ -173,6 +175,7 @@ impl EventListener for TextScreenListener {
 pub struct TextScreen {
     vte_parser: vte::ansi::Processor,
     term: Term<TextScreenListener>,
+    last_cursor: Point,
     colors: Colors,
     font: ConsoleFont,
     term_input: Rc<RefCell<Vec<u8>>>,
@@ -244,6 +247,7 @@ impl TextScreen {
                 &TermSize::new(1, 1),
                 TextScreenListener(term_input.clone()),
             ),
+            last_cursor: Point::new(Line(0), Column(0)),
             font: font.unwrap_or_else(|| ConsoleFont::new(FONT.to_vec(), 8, 16)),
             term_input,
         }
@@ -267,20 +271,19 @@ impl TextScreen {
     fn draw_cell(
         map: &mut DisplayMap,
         font: &ConsoleFont,
-        term_colors: &Colors,
         default_colors: &Colors,
-        display_offset: usize,
+        term_content: &RenderableContent,
         cell: Indexed<&Cell>,
     ) -> Option<Point<usize>> {
-        let Some(point) = point_to_viewport(display_offset, cell.point) else {
+        let Some(point) = point_to_viewport(term_content.display_offset, cell.point) else {
             return None;
         };
 
         let x = point.column.0 * font.width;
         let y = point.line * font.height;
 
-        let mut bg_color = Self::lookup_color(term_colors, default_colors, cell.bg);
-        let mut fg_color = Self::lookup_color(term_colors, default_colors, cell.fg);
+        let mut bg_color = Self::lookup_color(term_content.colors, default_colors, cell.bg);
+        let mut fg_color = Self::lookup_color(term_content.colors, default_colors, cell.fg);
         if cell.flags.contains(Flags::INVERSE) {
             mem::swap(&mut bg_color, &mut fg_color);
         }
@@ -320,6 +323,20 @@ impl TextScreen {
     ) -> ClipRect {
         let map = unsafe { &mut map.console_map() };
 
+        self.term.resize(TermSize::new(
+            map.width / self.font.width,
+            map.height / self.font.height,
+        ));
+
+        self.vte_parser.advance(&mut self.term, buf);
+        self.vte_parser.stop_sync(&mut self.term); // FIXME
+
+        input.extend(self.term_input.borrow_mut().drain(..));
+
+        self.redraw(map)
+    }
+
+    fn redraw(&mut self, map: &mut DisplayMap) -> ClipRect {
         let mut min_changed_x = map.width;
         let mut max_changed_x = 0;
         let mut min_changed_y = map.height;
@@ -341,52 +358,6 @@ impl TextScreen {
             }
         };
 
-        self.term.resize(TermSize::new(
-            map.width / self.font.width,
-            map.height / self.font.height,
-        ));
-
-        {
-            let term_content = self.term.renderable_content();
-            let point = term_content.cursor.point;
-            let cell = &self.term.grid()[point];
-            if let Some(point) = Self::draw_cell(
-                map,
-                &self.font,
-                term_content.colors,
-                &self.colors,
-                term_content.display_offset,
-                Indexed { point, cell },
-            ) {
-                col_changed(point.column.0);
-                line_changed(point.line);
-            }
-        }
-
-        self.vte_parser.advance(&mut self.term, buf);
-        self.vte_parser.stop_sync(&mut self.term); // FIXME
-
-        self.redraw(map, col_changed, line_changed);
-
-        input.extend(self.term_input.borrow_mut().drain(..));
-
-        let damage = ClipRect::new(
-            u16::try_from(min_changed_x).unwrap() * self.font.width as u16,
-            u16::try_from(min_changed_y).unwrap() * self.font.height as u16,
-            u16::try_from(max_changed_x + 1).unwrap() * self.font.width as u16,
-            u16::try_from(max_changed_y + 1).unwrap() * self.font.height as u16,
-        );
-
-        damage
-    }
-
-    fn redraw(
-        &mut self,
-        map: &mut DisplayMap,
-        mut col_changed: impl FnMut(usize),
-        mut line_changed: impl FnMut(usize),
-    ) {
-        let display_offset = self.term.grid().display_offset();
         // FIXME handle column damage
         let changed_lines = match self.term.damage() {
             TermDamage::Full => (0..self.term.screen_lines()).collect::<Vec<_>>(),
@@ -402,24 +373,36 @@ impl TextScreen {
                 .term
                 .grid()
                 .iter_from(viewport_to_point(
-                    display_offset,
+                    term_content.display_offset,
                     // For whatever reason iter_from skips the point you give it:
                     // https://github.com/alacritty/alacritty/issues/9038
                     Point::new(line - 1, last_column),
                 ))
                 .take(self.term.grid().columns())
             {
-                if let Some(point) = Self::draw_cell(
-                    map,
-                    &self.font,
-                    term_content.colors,
-                    &self.colors,
-                    display_offset,
-                    cell,
-                ) {
+                if let Some(point) =
+                    Self::draw_cell(map, &self.font, &self.colors, &term_content, cell)
+                {
                     col_changed(point.column.0);
                     line_changed(point.line);
                 }
+            }
+        }
+
+        // Hide old cursor if the cursor moved
+        if self.last_cursor != term_content.cursor.point {
+            let point = self.last_cursor;
+            self.last_cursor = term_content.cursor.point;
+            let cell = &self.term.grid()[point];
+            if let Some(point) = Self::draw_cell(
+                map,
+                &self.font,
+                &self.colors,
+                &term_content,
+                Indexed { point, cell },
+            ) {
+                col_changed(point.column.0);
+                line_changed(point.line);
             }
         }
 
@@ -430,9 +413,8 @@ impl TextScreen {
             if let Some(point) = Self::draw_cell(
                 map,
                 &self.font,
-                term_content.colors,
                 &self.colors,
-                display_offset,
+                &term_content,
                 Indexed { point, cell: &cell },
             ) {
                 col_changed(point.column.0);
@@ -440,6 +422,13 @@ impl TextScreen {
             }
         }
         self.term.reset_damage();
+
+        ClipRect::new(
+            u16::try_from(min_changed_x).unwrap() * self.font.width as u16,
+            u16::try_from(min_changed_y).unwrap() * self.font.height as u16,
+            u16::try_from(max_changed_x + 1).unwrap() * self.font.width as u16,
+            u16::try_from(max_changed_y + 1).unwrap() * self.font.height as u16,
+        )
     }
 
     pub fn resize_to_preferred(&mut self, map: &mut V2DisplayMap) -> io::Result<bool> {
@@ -480,10 +469,7 @@ impl TextScreen {
         let old_buffer = mem::replace(&mut map.buffer, new_buffer);
         let old_fb = mem::replace(&mut map.fb, new_fb);
 
-        {
-            let mut map = unsafe { map.console_map() };
-            self.redraw(&mut map, |_| {}, |_| {});
-        }
+        self.redraw(&mut unsafe { map.console_map() });
 
         map.display_handle.set_crtc(
             map.crtc,
