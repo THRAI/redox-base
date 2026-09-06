@@ -834,7 +834,6 @@ version = "0.1.0"
 dependencies = [
  "console-draw",
  "daemon",
- "drm",
  "graphics-ipc",
  "inputd",
  "libc",

@@ -1,31 +1,65 @@
 use std::collections::VecDeque;
 
 use console_draw::alacritty_terminal::term;
+use console_draw::V2DisplayMap;
+use drm::buffer::Buffer;
+use graphics_ipc::DrmHandle;
+use inputd::ConsumerHandle;
 use orbclient::{Event, EventOption};
 use syscall::error::*;
 
-use crate::display::Display;
-
 pub struct TextScreen {
-    pub display: Display,
+    pub input_handle: ConsumerHandle,
+    map: Option<V2DisplayMap>,
     inner: console_draw::TextScreen,
     ctrl: bool,
     input: VecDeque<u8>,
 }
 
 impl TextScreen {
-    pub fn new(display: Display, font: Option<console_draw::ConsoleFont>) -> TextScreen {
-        TextScreen {
-            display,
+    pub fn new(
+        input_handle: ConsumerHandle,
+        font: Option<console_draw::ConsoleFont>,
+    ) -> TextScreen {
+        let mut text_screen = TextScreen {
+            input_handle,
+            map: None,
             inner: console_draw::TextScreen::new(font, term::Config::default()),
             ctrl: false,
             input: VecDeque::new(),
-        }
+        };
+        text_screen.handle_handoff();
+        text_screen
     }
 
     pub fn handle_handoff(&mut self) {
         log::info!("fbcond: Performing handoff");
-        self.display.reopen_for_handoff();
+
+        let display_file = match self.input_handle.open_display() {
+            Ok(display_file) => display_file,
+            Err(err) => {
+                log::error!("fbcond: No display present yet: {err}");
+                return;
+            }
+        };
+        let new_display_handle = DrmHandle::from_file(display_file).unwrap();
+
+        log::debug!("fbcond: Opened new display");
+
+        match V2DisplayMap::new(new_display_handle) {
+            Ok(map) => {
+                log::debug!(
+                    "fbcond: Mapped new display with size {}x{}",
+                    map.buffer.buffer().size().0,
+                    map.buffer.buffer().size().1,
+                );
+                self.map = Some(map)
+            }
+            Err(err) => {
+                log::error!("fbcond: failed to map new display: {err}");
+                return;
+            }
+        }
     }
 
     pub fn input(&mut self, event: &Event) {
@@ -124,13 +158,12 @@ impl TextScreen {
     }
 
     pub fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        if let Some(map) = &mut self.display.map {
-            if let Some(new_mode) = Display::handle_resize(map) {
-                match self.inner.resize(map, new_mode) {
-                    Ok(()) => eprintln!("fbcond: mapped display"),
-                    Err(err) => {
-                        eprintln!("fbcond: failed to create or map framebuffer: {}", err);
-                    }
+        if let Some(map) = &mut self.map {
+            match self.inner.resize_to_preferred(map) {
+                Ok(false) => {}
+                Ok(true) => eprintln!("fbcond: resized display"),
+                Err(err) => {
+                    eprintln!("fbcond: failed to create or map framebuffer: {}", err);
                 }
             }
 

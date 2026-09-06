@@ -10,8 +10,6 @@ use std::os::fd::{AsRawFd, IntoRawFd};
 use console_draw::alacritty_terminal::grid::Scroll;
 use console_draw::alacritty_terminal::term;
 use console_draw::{TextScreen, V2DisplayMap};
-use drm::buffer::Buffer;
-use drm::control::Device;
 use event::EventQueue;
 use graphics_ipc::DrmHandle;
 use inputd::{ConsumerHandle, ConsumerHandleEvent};
@@ -118,7 +116,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
 struct Fbbootlog {
     display_map: Option<V2DisplayMap>,
-    text_screen: console_draw::TextScreen,
+    text_screen: TextScreen,
     shift: bool,
 }
 
@@ -129,7 +127,7 @@ impl Fbbootlog {
 
         Self {
             display_map: None,
-            text_screen: console_draw::TextScreen::new(None, config),
+            text_screen: TextScreen::new(None, config),
             shift: false,
         }
     }
@@ -200,38 +198,17 @@ impl Fbbootlog {
 
     fn handle_logs(&mut self, buf: &[u8]) {
         if let Some(map) = &mut self.display_map {
-            Fbbootlog::handle_resize(map, &mut self.text_screen);
-
-            let damage = self.text_screen.write(map, buf, &mut VecDeque::new());
-            map.dirty_fb(damage).unwrap();
-        }
-    }
-
-    fn handle_resize(map: &mut V2DisplayMap, text_screen: &mut TextScreen) {
-        let mode = match map
-            .display_handle
-            .get_connector(map.connector, false)
-            .and_then(|info| {
-                info.modes()
-                    .get(0)
-                    .map(|m| *m)
-                    .ok_or(io::Error::other("Unable to get first display connector"))
-            }) {
-            Ok(mode) => mode,
-            Err(err) => {
-                eprintln!("fbbootlogd: failed to get display size: {}", err);
-                return;
-            }
-        };
-
-        if (u32::from(mode.size().0), u32::from(mode.size().1)) != map.buffer.buffer().size() {
-            match text_screen.resize(map, mode) {
-                Ok(()) => eprintln!("fbbootlogd: mapped display"),
+            match self.text_screen.resize_to_preferred(map) {
+                Ok(false) => {}
+                Ok(true) => eprintln!("fbbootlogd: resized display"),
                 Err(err) => {
                     eprintln!("fbbootlogd: failed to create or map framebuffer: {}", err);
                     return;
                 }
             }
+
+            let damage = self.text_screen.write(map, buf, &mut VecDeque::new());
+            map.dirty_fb(damage).unwrap();
         }
     }
 }

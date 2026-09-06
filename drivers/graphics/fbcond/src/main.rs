@@ -2,16 +2,14 @@ use std::env;
 use std::os::fd::AsRawFd;
 
 use event::{user_data, EventQueue};
-use inputd::ConsumerHandleEvent;
+use inputd::{ConsumerHandle, ConsumerHandleEvent};
 use orbclient::Event;
 use redox_scheme::{Response, SignalBehavior, Socket};
 use scheme_utils::ReadinessBased;
 use syscall::EVENT_READ;
 
-use crate::display::Display;
 use crate::scheme::{FbconResource, FbconScheme, FbconSchemeData, SchemeRoot};
 
-mod display;
 mod scheme;
 mod text;
 
@@ -47,10 +45,10 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
         )
         .expect("fbcond: failed to subscribe to scheme events");
 
-    let display = Display::open_new_vt().expect("Failed to open display for vt");
+    let input_handle = ConsumerHandle::new_vt().expect("Failed to open display for vt");
     event_queue
         .subscribe(
-            display.input_handle.event_handle().as_raw_fd() as usize,
+            input_handle.event_handle().as_raw_fd() as usize,
             Source::Vt,
             event::EventFlags::READ,
         )
@@ -58,7 +56,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 
     let mut scheme = FbconScheme::new(
         format!("fbcon.{vt_id}"),
-        FbconSchemeData::new(display),
+        FbconSchemeData::new(input_handle),
         FbconResource::SchemeRoot(SchemeRoot),
     );
     let mut readiness = ReadinessBased::new(Box::new(socket), 16);
@@ -96,7 +94,6 @@ fn handle_event(
             let mut events = [Event::new(); 16];
             loop {
                 match vt
-                    .display
                     .input_handle
                     .read_events(&mut events)
                     .expect("fbcond: Error while reading events")
