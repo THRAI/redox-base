@@ -331,11 +331,9 @@ impl TextScreen {
         self.vte_parser.advance(&mut self.term, buf);
         self.vte_parser.stop_sync(&mut self.term); // FIXME
 
-        let damage = self.redraw(map);
-
         input.extend(self.term_input.borrow_mut().drain(..));
 
-        damage
+        self.redraw(map)
     }
 
     fn redraw(&mut self, map: &mut DisplayMap) -> ClipRect {
