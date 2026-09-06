@@ -7,7 +7,7 @@ use std::{io, mem, ptr};
 pub use alacritty_terminal;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Indexed, Scroll};
-use alacritty_terminal::index::Point;
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::test::TermSize;
@@ -173,6 +173,7 @@ impl EventListener for TextScreenListener {
 pub struct TextScreen {
     vte_parser: vte::ansi::Processor,
     term: Term<TextScreenListener>,
+    last_cursor: Point,
     colors: Colors,
     font: ConsoleFont,
     term_input: Rc<RefCell<Vec<u8>>>,
@@ -244,6 +245,7 @@ impl TextScreen {
                 &TermSize::new(1, 1),
                 TextScreenListener(term_input.clone()),
             ),
+            last_cursor: Point::new(Line(0), Column(0)),
             font: font.unwrap_or_else(|| ConsoleFont::new(FONT.to_vec(), 8, 16)),
             term_input,
         }
@@ -320,6 +322,22 @@ impl TextScreen {
     ) -> ClipRect {
         let map = unsafe { &mut map.console_map() };
 
+        self.term.resize(TermSize::new(
+            map.width / self.font.width,
+            map.height / self.font.height,
+        ));
+
+        self.vte_parser.advance(&mut self.term, buf);
+        self.vte_parser.stop_sync(&mut self.term); // FIXME
+
+        let damage = self.redraw(map);
+
+        input.extend(self.term_input.borrow_mut().drain(..));
+
+        damage
+    }
+
+    fn redraw(&mut self, map: &mut DisplayMap) -> ClipRect {
         let mut min_changed_x = map.width;
         let mut max_changed_x = 0;
         let mut min_changed_y = map.height;
@@ -341,51 +359,6 @@ impl TextScreen {
             }
         };
 
-        self.term.resize(TermSize::new(
-            map.width / self.font.width,
-            map.height / self.font.height,
-        ));
-
-        {
-            let term_content = self.term.renderable_content();
-            let point = term_content.cursor.point;
-            let cell = &self.term.grid()[point];
-            if let Some(point) = Self::draw_cell(
-                map,
-                &self.font,
-                term_content.colors,
-                &self.colors,
-                term_content.display_offset,
-                Indexed { point, cell },
-            ) {
-                col_changed(point.column.0);
-                line_changed(point.line);
-            }
-        }
-
-        self.vte_parser.advance(&mut self.term, buf);
-        self.vte_parser.stop_sync(&mut self.term); // FIXME
-
-        self.redraw(map, col_changed, line_changed);
-
-        input.extend(self.term_input.borrow_mut().drain(..));
-
-        let damage = ClipRect::new(
-            u16::try_from(min_changed_x).unwrap() * self.font.width as u16,
-            u16::try_from(min_changed_y).unwrap() * self.font.height as u16,
-            u16::try_from(max_changed_x + 1).unwrap() * self.font.width as u16,
-            u16::try_from(max_changed_y + 1).unwrap() * self.font.height as u16,
-        );
-
-        damage
-    }
-
-    fn redraw(
-        &mut self,
-        map: &mut DisplayMap,
-        mut col_changed: impl FnMut(usize),
-        mut line_changed: impl FnMut(usize),
-    ) {
         let display_offset = self.term.grid().display_offset();
         // FIXME handle column damage
         let changed_lines = match self.term.damage() {
@@ -423,6 +396,24 @@ impl TextScreen {
             }
         }
 
+        // Hide old cursor if the cursor moved
+        if self.last_cursor != term_content.cursor.point {
+            let point = self.last_cursor;
+            self.last_cursor = term_content.cursor.point;
+            let cell = &self.term.grid()[point];
+            if let Some(point) = Self::draw_cell(
+                map,
+                &self.font,
+                term_content.colors,
+                &self.colors,
+                term_content.display_offset,
+                Indexed { point, cell },
+            ) {
+                col_changed(point.column.0);
+                line_changed(point.line);
+            }
+        }
+
         {
             let point = term_content.cursor.point;
             let mut cell = self.term.grid()[point].clone();
@@ -440,6 +431,13 @@ impl TextScreen {
             }
         }
         self.term.reset_damage();
+
+        ClipRect::new(
+            u16::try_from(min_changed_x).unwrap() * self.font.width as u16,
+            u16::try_from(min_changed_y).unwrap() * self.font.height as u16,
+            u16::try_from(max_changed_x + 1).unwrap() * self.font.width as u16,
+            u16::try_from(max_changed_y + 1).unwrap() * self.font.height as u16,
+        )
     }
 
     pub fn resize_to_preferred(&mut self, map: &mut V2DisplayMap) -> io::Result<bool> {
@@ -480,10 +478,7 @@ impl TextScreen {
         let old_buffer = mem::replace(&mut map.buffer, new_buffer);
         let old_fb = mem::replace(&mut map.fb, new_fb);
 
-        {
-            let mut map = unsafe { map.console_map() };
-            self.redraw(&mut map, |_| {}, |_| {});
-        }
+        self.redraw(&mut unsafe { map.console_map() });
 
         map.display_handle.set_crtc(
             map.crtc,
