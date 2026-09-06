@@ -132,17 +132,21 @@ pub fn getpty(columns: u16, lines: u16) -> (File, String) {
         .open("/scheme/pty/ptmx")
         .expect("getty: failed to create PTY");
 
-    #[cfg(target_os = "redox")]
-    if let Ok(winsize_fd) = libredox::call::dup(master.as_raw_fd() as usize, b"winsize") {
-        let _ = libredox::call::write(
-            winsize_fd,
-            &redox_termios::Winsize {
+    if unsafe {
+        libc::ioctl(
+            master.as_raw_fd(),
+            libc::TIOCSWINSZ,
+            &libc::winsize {
                 ws_row: lines,
                 ws_col: columns,
+                ws_xpixel: columns * 8,
+                ws_ypixel: lines * 16,
             },
-        );
-        let _ = libredox::call::close(winsize_fd);
+        ) != 0
+    } {
+        eprintln!("failed to set pty size: {}", io::Error::last_os_error());
     }
+
     let _ = unsafe { grantpt(master.as_raw_fd()) };
     let _ = unsafe { unlockpt(master.as_raw_fd()) };
 
