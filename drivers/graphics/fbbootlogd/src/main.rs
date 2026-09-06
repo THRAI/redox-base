@@ -3,16 +3,19 @@
 //! In the future it could display a boot splash like plymouth instead of a boot log when booting
 //! in quiet mode.
 
-use std::io::{self, Read};
+use std::collections::VecDeque;
+use std::io::{self, PipeReader, Read};
 use std::os::fd::AsRawFd;
 
+use console_draw::alacritty_terminal::grid::Scroll;
+use console_draw::alacritty_terminal::term;
+use console_draw::{TextScreen, V2DisplayMap};
+use drm::buffer::Buffer;
+use drm::control::Device;
 use event::EventQueue;
-use inputd::ConsumerHandleEvent;
-use orbclient::Event;
-
-use crate::scheme::FbbootlogSchemeData;
-
-mod scheme;
+use graphics_ipc::DrmHandle;
+use inputd::{ConsumerHandle, ConsumerHandleEvent};
+use orbclient::{Event, EventOption};
 
 fn main() {
     daemon::Daemon::new(daemon);
@@ -35,11 +38,11 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         )
     };
 
-    let mut scheme = FbbootlogSchemeData::new(log_reader);
+    let mut bootlog = Fbbootlog::new(log_reader);
 
     event_queue
         .subscribe(
-            scheme.log_reader.as_raw_fd() as usize,
+            bootlog.log_reader.as_raw_fd() as usize,
             Source::LogPipe,
             event::EventFlags::READ,
         )
@@ -47,7 +50,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     event_queue
         .subscribe(
-            scheme.input_handle.event_handle().as_raw_fd() as usize,
+            bootlog.input_handle.event_handle().as_raw_fd() as usize,
             Source::Input,
             event::EventFlags::READ,
         )
@@ -78,17 +81,17 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         match event.expect("fbbootlogd: failed to get event").user_data {
             Source::LogPipe => loop {
                 let mut buf = [0; 4096];
-                let n = match scheme.log_reader.read(&mut buf) {
+                let n = match bootlog.log_reader.read(&mut buf) {
                     Ok(n) => n,
                     Err(e) if e.raw_os_error() == Some(libc::EAGAIN) => break,
                     Err(e) => panic!("fbbootlogd: failed to read from log pipe: {e}"),
                 };
-                scheme.handle_logs(&buf[..n]);
+                bootlog.handle_logs(&buf[..n]);
             },
             Source::Input => {
                 let mut events = [Event::new(); 16];
                 loop {
-                    match scheme
+                    match bootlog
                         .input_handle
                         .read_events(&mut events)
                         .expect("fbbootlogd: error while reading events")
@@ -96,12 +99,12 @@ fn daemon(daemon: daemon::Daemon) -> ! {
                         ConsumerHandleEvent::Events(&[]) => break,
                         ConsumerHandleEvent::Events(events) => {
                             for event in events {
-                                scheme.handle_input(&event);
+                                bootlog.handle_input(&event);
                             }
                         }
                         ConsumerHandleEvent::Handoff => {
                             eprintln!("fbbootlogd: handoff requested");
-                            scheme.handle_handoff();
+                            bootlog.handle_handoff();
                         }
                     }
                 }
@@ -110,4 +113,132 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     }
 
     std::process::exit(0);
+}
+
+struct Fbbootlog {
+    log_reader: PipeReader,
+    input_handle: ConsumerHandle,
+    display_map: Option<V2DisplayMap>,
+    text_screen: console_draw::TextScreen,
+    shift: bool,
+}
+
+impl Fbbootlog {
+    fn new(log_reader: PipeReader) -> Self {
+        let mut config = term::Config::default();
+        config.scrolling_history = 1000;
+
+        let mut scheme_data = Self {
+            log_reader,
+            input_handle: ConsumerHandle::bootlog_vt().expect("fbbootlogd: Failed to open vt"),
+            display_map: None,
+            text_screen: console_draw::TextScreen::new(None, config),
+            shift: false,
+        };
+
+        scheme_data.handle_handoff();
+
+        scheme_data
+    }
+
+    fn handle_handoff(&mut self) {
+        let new_display_handle = match self.input_handle.open_display() {
+            Ok(display) => DrmHandle::from_file(display).unwrap(),
+            Err(err) => {
+                eprintln!("fbbootlogd: No display present yet: {err}");
+                return;
+            }
+        };
+
+        match V2DisplayMap::new(new_display_handle) {
+            Ok(display_map) => self.display_map = Some(display_map),
+            Err(err) => {
+                eprintln!("fbbootlogd: failed to open display: {}", err);
+                return;
+            }
+        };
+
+        eprintln!("fbbootlogd: mapped display");
+    }
+
+    fn handle_input(&mut self, ev: &Event) {
+        match ev.to_option() {
+            EventOption::Key(key_event) => {
+                if key_event.scancode == 0x2A || key_event.scancode == 0x36 {
+                    self.shift = key_event.pressed;
+                } else if !key_event.pressed || !self.shift {
+                    return;
+                }
+                match key_event.scancode {
+                    0x48 => {
+                        // Up
+                        self.text_screen.scroll_display(Scroll::Delta(1));
+                    }
+                    0x49 => {
+                        // Page up
+                        self.text_screen.scroll_display(Scroll::PageUp);
+                    }
+                    0x50 => {
+                        // Down
+                        self.text_screen.scroll_display(Scroll::Delta(-1));
+                    }
+                    0x51 => {
+                        // Page down
+                        self.text_screen.scroll_display(Scroll::PageDown);
+                    }
+                    0x47 => {
+                        // Home
+                        self.text_screen.scroll_display(Scroll::Bottom);
+                    }
+                    0x4F => {
+                        // End
+                        self.text_screen.scroll_display(Scroll::Top);
+                    }
+                    _ => return,
+                }
+            }
+            _ => return,
+        }
+        if let Some(map) = &mut self.display_map {
+            let damage = self.text_screen.write(map, &[], &mut VecDeque::new());
+            map.dirty_fb(damage).unwrap();
+        }
+    }
+
+    fn handle_logs(&mut self, buf: &[u8]) {
+        if let Some(map) = &mut self.display_map {
+            Fbbootlog::handle_resize(map, &mut self.text_screen);
+
+            let damage = self.text_screen.write(map, buf, &mut VecDeque::new());
+            map.dirty_fb(damage).unwrap();
+        }
+    }
+
+    fn handle_resize(map: &mut V2DisplayMap, text_screen: &mut TextScreen) {
+        let mode = match map
+            .display_handle
+            .get_connector(map.connector, false)
+            .and_then(|info| {
+                info.modes()
+                    .get(0)
+                    .map(|m| *m)
+                    .ok_or(io::Error::other("Unable to get first display connector"))
+            }) {
+            Ok(mode) => mode,
+            Err(err) => {
+                eprintln!("fbbootlogd: failed to get display size: {}", err);
+                return;
+            }
+        };
+
+        if (u32::from(mode.size().0), u32::from(mode.size().1)) != map.buffer.buffer().size() {
+            match text_screen.resize(map, mode) {
+                Ok(()) => eprintln!("fbbootlogd: mapped display"),
+                Err(err) => {
+                    eprintln!("fbbootlogd: failed to create or map framebuffer: {}", err);
+                    return;
+                }
+            }
+        }
+    }
 }
