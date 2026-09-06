@@ -125,12 +125,11 @@ impl TextScreen {
 
     pub fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if let Some(map) = &mut self.display.map {
-            if let Some(new_mode) = Display::handle_resize(map) {
-                match self.inner.resize(map, new_mode) {
-                    Ok(()) => eprintln!("fbcond: mapped display"),
-                    Err(err) => {
-                        eprintln!("fbcond: failed to create or map framebuffer: {}", err);
-                    }
+            match self.inner.resize_to_preferred(map) {
+                Ok(false) => {}
+                Ok(true) => eprintln!("fbcond: resized display"),
+                Err(err) => {
+                    eprintln!("fbcond: failed to create or map framebuffer: {}", err);
                 }
             }
 

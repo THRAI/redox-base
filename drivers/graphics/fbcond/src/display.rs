@@ -2,7 +2,6 @@ use std::io;
 
 use console_draw::V2DisplayMap;
 use drm::buffer::Buffer;
-use drm::control::Device;
 use graphics_ipc::DrmHandle;
 use inputd::ConsumerHandle;
 
@@ -50,25 +49,5 @@ impl Display {
                 return;
             }
         }
-    }
-
-    pub fn handle_resize(map: &mut V2DisplayMap) -> Option<drm::control::Mode> {
-        let mode = match map
-            .display_handle
-            .get_connector(map.connector, false)
-            .map(|info| info.modes()[0])
-        {
-            Ok(mode) => mode,
-            Err(err) => {
-                eprintln!("fbcond: failed to get display size: {}", err);
-                return None;
-            }
-        };
-
-        if (u32::from(mode.size().0), u32::from(mode.size().1)) != map.buffer.buffer().size() {
-            return Some(mode);
-        }
-
-        None
     }
 }

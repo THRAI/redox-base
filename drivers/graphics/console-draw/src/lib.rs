@@ -15,7 +15,7 @@ use alacritty_terminal::term::{self, point_to_viewport, viewport_to_point, TermD
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use alacritty_terminal::{vte, Term};
 use drm::buffer::{Buffer, DrmFourcc};
-use drm::control::{connector, crtc, framebuffer, ClipRect, Device, Mode};
+use drm::control::{connector, crtc, framebuffer, ClipRect, Device};
 use graphics_ipc::{CpuBackedBuffer, DrmHandle};
 use orbclient::FONT;
 
@@ -442,7 +442,29 @@ impl TextScreen {
         self.term.reset_damage();
     }
 
-    pub fn resize(&mut self, map: &mut V2DisplayMap, mode: Mode) -> io::Result<()> {
+    pub fn resize_to_preferred(&mut self, map: &mut V2DisplayMap) -> io::Result<bool> {
+        let mode = match map
+            .display_handle
+            .get_connector(map.connector, false)
+            .and_then(|info| {
+                info.modes()
+                    .get(0)
+                    .map(|m| *m)
+                    .ok_or(io::Error::other("unable to get default mode for connector"))
+            }) {
+            Ok(mode) => mode,
+            Err(err) => {
+                return Err(io::Error::other(format!(
+                    "failed to get display size: {}",
+                    err
+                )));
+            }
+        };
+
+        if (u32::from(mode.size().0), u32::from(mode.size().1)) == map.buffer.buffer().size() {
+            return Ok(false);
+        }
+
         let mut new_buffer = CpuBackedBuffer::new(
             &map.display_handle,
             (u32::from(mode.size().0), u32::from(mode.size().1)),
@@ -474,6 +496,6 @@ impl TextScreen {
         old_buffer.destroy(&map.display_handle)?;
         let _ = map.display_handle.destroy_framebuffer(old_fb);
 
-        Ok(())
+        Ok(true)
     }
 }
