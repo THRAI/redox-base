@@ -157,6 +157,12 @@ impl GraphicsAdapter for Device {
                 log::debug!("set crtc {}: no mode", crtc.crtc_index);
             }
         }
+
+        // FIXME set gamma lut:
+        // CSC_MODE: CSC before gamma
+        // GAMMA_MODE: 8bit palette
+        // PAL_LGC[0..256]: u32::from_be_bytes([0, red >> 8, green >> 8, blue >> 8])
+
         *crtc.state.lock().unwrap() = state;
         Ok(())
     }

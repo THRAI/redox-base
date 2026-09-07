@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::ptr;
 use std::sync::Mutex;
 
-use syscall::Error;
+use drm_sys::drm_color_lut;
+use syscall::{EINVAL, Error};
 
 use crate::kms::connector::KmsConnector;
 use crate::kms::objects::{KmsObjectId, KmsObjects};
@@ -86,6 +88,72 @@ pub(super) fn set_crtc<T: GraphicsAdapter>(
         adapter.set_crtc(&objects, crtc, new_crtc_state.clone(), &connector_ids)?;
         adapter.set_plane(&objects, plane, new_plane_state.clone(), None)?;
     }
+
+    Ok(0)
+}
+
+pub(super) fn set_gamma<T: GraphicsAdapter>(
+    adapter: &mut T,
+    objects: &mut KmsObjects<T>,
+    vts: &mut HashMap<usize, VtState<T>>,
+    handle: &mut DrmHandle<T>,
+    data: redox_ioctl::drm::DrmModeCrtcLut<'_>,
+) -> Result<usize, Error> {
+    let crtc = objects.get_crtc(KmsObjectId(data.crtc_id()))?;
+
+    if data.red().len() != crtc.gamma_size as usize
+        || data.blue().len() != crtc.gamma_size as usize
+        || data.green().len() != crtc.gamma_size as usize
+    {
+        return Err(Error::new(EINVAL));
+    }
+
+    let new_crtc_state = &mut vts.get_mut(&handle.vt).unwrap().crtc_state[crtc.crtc_index as usize];
+
+    let mut gamma_data = vec![
+        drm_color_lut {
+            red: 0,
+            green: 0,
+            blue: 0,
+            reserved: 0
+        };
+        crtc.gamma_size as usize
+    ]
+    .into_boxed_slice();
+
+    for i in 0..crtc.gamma_size as usize {
+        gamma_data[i].red = data.red()[i];
+        gamma_data[i].green = data.green()[i];
+        gamma_data[i].blue = data.blue()[i];
+    }
+
+    let gamma_data = unsafe {
+        Box::from_raw(ptr::slice_from_raw_parts_mut(
+            Box::into_raw(gamma_data).cast::<u8>(),
+            crtc.gamma_size as usize * 4 * 2,
+        ))
+    };
+
+    new_crtc_state.gamma_lut = Some(objects.add_blob(gamma_data.into_vec()));
+
+    let crtc_id = KmsObjectId(data.crtc_id());
+    let crtc = objects.get_crtc(crtc_id)?;
+    let connectors = objects
+        .connector_ids()
+        .into_iter()
+        .copied()
+        .filter(|&connector_id| {
+            objects
+                .get_connector(connector_id)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .state
+                .crtc_id
+                == crtc_id
+        })
+        .collect::<Vec<_>>();
+    adapter.set_crtc(objects, crtc, new_crtc_state.clone(), &connectors)?;
 
     Ok(0)
 }

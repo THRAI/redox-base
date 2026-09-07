@@ -209,6 +209,8 @@ define_properties! {
     // CRTC
     ACTIVE: range { 0,1 } [atomic],
     MODE_ID: blob [atomic],
+    GAMMA_LUT: blob [],
+    GAMMA_LUT_SIZE: range { 0, u64::from(u32::MAX) } [immutable],
 
     // Plane
     type_ "type": enum {

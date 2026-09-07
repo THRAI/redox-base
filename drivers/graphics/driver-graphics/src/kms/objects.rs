@@ -15,8 +15,8 @@ use crate::GraphicsAdapter;
 use crate::kms::connector::{KmsConnector, KmsEncoder};
 use crate::kms::framebuffer::KmsFramebuffer;
 use crate::kms::properties::{
-    ACTIVE, CRTC_H, CRTC_ID, CRTC_W, CRTC_X, CRTC_Y, FB_ID, KmsBlob, KmsProperty, KmsPropertyData,
-    SRC_H, SRC_W, SRC_X, SRC_Y, define_object_props, init_standard_props, type_,
+    ACTIVE, CRTC_H, CRTC_ID, CRTC_W, CRTC_X, CRTC_Y, FB_ID, GAMMA_LUT_SIZE, KmsBlob, KmsProperty,
+    KmsPropertyData, SRC_H, SRC_W, SRC_X, SRC_Y, define_object_props, init_standard_props, type_,
 };
 use crate::kms::rc_object::{KmsRcObject, KmsRcObjectRef};
 
@@ -140,12 +140,13 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
         let crtc_index = self.crtcs.len() as u32;
         let id = self.add(KmsCrtc {
             crtc_index,
-            gamma_size: 0,
+            gamma_size: FIXED_GAMMA_LUT_SIZE,
             properties: KmsCrtc::base_properties(),
             primary_plane,
             cursor_plane,
             state: Mutex::new(KmsCrtcState {
                 mode: None,
+                gamma_lut: None,
                 driver_data: driver_data_state,
             }),
             driver_data,
@@ -312,6 +313,9 @@ impl KmsCrtcDriver for () {
     type State = ();
 }
 
+// Fine to hard code for now. libdrm modetest only supports 256 as gamma lut size anyway.
+const FIXED_GAMMA_LUT_SIZE: u32 = 256;
+
 #[derive(Debug)]
 pub struct KmsCrtc<T: GraphicsAdapter> {
     pub crtc_index: u32,
@@ -326,6 +330,8 @@ pub struct KmsCrtc<T: GraphicsAdapter> {
 #[derive(Debug)]
 pub struct KmsCrtcState<T: GraphicsAdapter> {
     pub mode: Option<drm_mode_modeinfo>,
+    /// Blob of [drm_color_lut; gamma_size]
+    pub gamma_lut: Option<KmsRcObjectRef<KmsBlob>>,
     pub driver_data: <T::Crtc as KmsCrtcDriver>::State,
 }
 
@@ -333,6 +339,7 @@ impl<T: GraphicsAdapter> Clone for KmsCrtcState<T> {
     fn clone(&self) -> Self {
         Self {
             mode: self.mode.clone(),
+            gamma_lut: self.gamma_lut.clone(), // FIXME is cloning this correct?
             driver_data: self.driver_data.clone(),
         }
     }
@@ -341,6 +348,14 @@ impl<T: GraphicsAdapter> Clone for KmsCrtcState<T> {
 define_object_props!(object, KmsCrtc<T: GraphicsAdapter> {
     ACTIVE {
         get => u64::from(object.state.lock().unwrap().mode.is_some()),
+    }
+    // FIXME commented out to force libdrm modetest to use the legacy DRM_IOCTL_MODE_SETGAMMA
+    // instead while we don't support setting properties yet.
+    // GAMMA_LUT {
+    //     get => u64::from(object.state.lock().unwrap().gamma_lut.map_or(0, |blob| blob.id().0)),
+    // }
+    GAMMA_LUT_SIZE {
+        get => u64::from(object.gamma_size * 4),
     }
 });
 
