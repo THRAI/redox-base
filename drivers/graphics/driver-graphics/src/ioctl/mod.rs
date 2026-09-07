@@ -326,6 +326,14 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
         ipc::MODE_CLOSE_FB => ipc::DrmModeClosefb::with(payload, |data| {
             framebuffer::mode_close_fb(objects, vts, data)
         }),
+        ipc::SET_CLIENT_NAME => ipc::DrmSetClientName::with(payload, |data| {
+            if data.name().len() > ipc::DRM_CLIENT_NAME_MAX_LEN as usize {
+                return Err(Error::new(EINVAL));
+            }
+            handle.client_name = [0; _];
+            handle.client_name[..data.name().len()].copy_from_slice(data.name());
+            Ok(0)
+        }),
         _ => return Err(Error::new(EINVAL)),
     }
 }
