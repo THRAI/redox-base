@@ -296,6 +296,7 @@ impl<'a> VirtGpuAdapter<'a> {
     async fn update_cursor(
         &mut self,
         cursor: &VirtGpuFramebuffer,
+        scanout_id: u32,
         x: i32,
         y: i32,
         hot_x: i32,
@@ -318,19 +319,24 @@ impl<'a> VirtGpuAdapter<'a> {
 
         //Update the cursor position
         self.send_request_cursor(
-            Dma::new(UpdateCursor::update_cursor(x, y, hot_x, hot_y, cursor.id)).unwrap(),
+            Dma::new(UpdateCursor::update_cursor(
+                scanout_id, x, y, hot_x, hot_y, cursor.id,
+            ))
+            .unwrap(),
         )
         .await
         .unwrap();
     }
 
-    async fn move_cursor(&mut self, x: i32, y: i32) {
-        self.send_request_cursor(Dma::new(MoveCursor::move_cursor(x, y)).unwrap())
-            .await
-            .unwrap();
+    async fn move_cursor(&mut self, cursor: &VirtGpuFramebuffer, scanout_id: u32, x: i32, y: i32) {
+        self.send_request_cursor(
+            Dma::new(MoveCursor::move_cursor(scanout_id, x, y, cursor.id)).unwrap(),
+        )
+        .await
+        .unwrap();
     }
 
-    async fn disable_cursor(&mut self) {
+    async fn disable_cursor(&mut self, scanout_id: u32) {
         if self.hidden_cursor.is_none() {
             let (width, height) = (64, 64);
             let (cursor, stride) = self.create_dumb_buffer_inner(width, height).await.unwrap();
@@ -345,7 +351,8 @@ impl<'a> VirtGpuAdapter<'a> {
         }
         let hidden_cursor = self.hidden_cursor.as_ref().unwrap().clone();
 
-        self.update_cursor(&hidden_cursor, 0, 0, 0, 0).await;
+        self.update_cursor(&hidden_cursor, scanout_id, 0, 0, 0, 0)
+            .await;
     }
 }
 
@@ -461,39 +468,10 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 .map(|fb_id| objects.get_framebuffer_maybe_closed(fb_id))
                 .transpose()?;
 
-            if plane.driver_data.is_cursor {
-                if let Some(framebuffer) = framebuffer {
-                    if damage.map_or(true, |damage| damage.width != 0 && damage.height != 0)
-                        || plane.state.lock().unwrap().fb_id != new_plane_state.fb_id
-                    {
-                        self.update_cursor(
-                            &framebuffer.buffer,
-                            new_plane_state.crtc_rect.x,
-                            new_plane_state.crtc_rect.y,
-                            new_plane_state.hotspot.unwrap().0,
-                            new_plane_state.hotspot.unwrap().1,
-                        )
-                        .await;
-                    } else {
-                        self.move_cursor(new_plane_state.crtc_rect.x, new_plane_state.crtc_rect.y)
-                            .await;
-                    }
-                } else {
-                    if plane.state.lock().unwrap().fb_id.is_some() {
-                        self.disable_cursor().await;
-                    }
-                }
-
-                *plane.state.lock().unwrap() = new_plane_state;
-
-                return Ok(());
-            }
-
             let Some(crtc_id) = new_plane_state.crtc_id else {
+                // FIXME disable output?
                 return Ok(());
             };
-
-            *plane.state.lock().unwrap() = new_plane_state;
 
             for connector in objects.connectors() {
                 let connector = connector.lock().unwrap();
@@ -503,6 +481,38 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 }
 
                 let scanout_id = connector.driver_data.scanout_id;
+
+                if plane.driver_data.is_cursor {
+                    if let Some(framebuffer) = framebuffer {
+                        if damage.map_or(true, |damage| damage.width != 0 && damage.height != 0)
+                            || plane.state.lock().unwrap().fb_id != new_plane_state.fb_id
+                        {
+                            self.update_cursor(
+                                &framebuffer.buffer,
+                                scanout_id,
+                                new_plane_state.crtc_rect.x,
+                                new_plane_state.crtc_rect.y,
+                                new_plane_state.hotspot.unwrap().0,
+                                new_plane_state.hotspot.unwrap().1,
+                            )
+                            .await;
+                        } else {
+                            self.move_cursor(
+                                &framebuffer.buffer,
+                                scanout_id,
+                                new_plane_state.crtc_rect.x,
+                                new_plane_state.crtc_rect.y,
+                            )
+                            .await;
+                        }
+                    } else {
+                        if plane.state.lock().unwrap().fb_id.is_some() {
+                            self.disable_cursor(scanout_id).await;
+                        }
+                    }
+
+                    continue;
+                }
 
                 let Some(framebuffer) = framebuffer else {
                     let scanout_request = Dma::new(SetScanout::new(
@@ -560,6 +570,8 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 let header = self.send_request(Dma::new(flush).unwrap()).await.unwrap();
                 assert_eq!(header.ty, CommandTy::RespOkNodata);
             }
+
+            *plane.state.lock().unwrap() = new_plane_state;
 
             Ok(())
         })
