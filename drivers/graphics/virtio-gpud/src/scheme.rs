@@ -29,7 +29,7 @@ impl Into<GpuRect> for Damage {
 
 #[derive(Debug)]
 pub struct VirtGpuConnector {
-    display_id: u32,
+    scanout_id: u32,
 }
 
 impl KmsConnectorDriver for VirtGpuConnector {
@@ -370,7 +370,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
             self.update_displays().await.unwrap();
         });
 
-        for display_id in 0..self.config.num_scanouts.get() {
+        for scanout_id in 0..self.config.num_scanouts.get() {
             let (crtc, _primary_plane_id) = objects.add_crtc(
                 (),
                 (),
@@ -379,7 +379,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 Some((VirtGpuPlane { is_cursor: true }, ())),
             );
 
-            objects.add_connector(VirtGpuConnector { display_id }, (), &[crtc]);
+            objects.add_connector(VirtGpuConnector { scanout_id }, (), &[crtc]);
         }
     }
 
@@ -411,7 +411,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
     fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {
         futures::executor::block_on(async {
             let mut connector = objects.get_connector(id).unwrap().lock().unwrap();
-            let display = &self.displays[connector.driver_data.display_id as usize];
+            let display = &self.displays[connector.driver_data.scanout_id as usize];
 
             connector.connection = KmsConnectorStatus::Connected;
 
@@ -502,18 +502,18 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                     continue;
                 }
 
-                let display_id = connector.driver_data.display_id;
+                let scanout_id = connector.driver_data.scanout_id;
 
                 let Some(framebuffer) = framebuffer else {
                     let scanout_request = Dma::new(SetScanout::new(
-                        display_id,
+                        scanout_id,
                         ResourceId::NONE,
                         GpuRect::new(0, 0, 0, 0),
                     ))
                     .unwrap();
                     let header = self.send_request(scanout_request).await.unwrap();
                     assert_eq!(header.ty, CommandTy::RespOkNodata);
-                    self.displays[display_id as usize].active_resource = None;
+                    self.displays[scanout_id as usize].active_resource = None;
                     return Ok(());
                 };
 
@@ -532,17 +532,17 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 assert_eq!(header.ty, CommandTy::RespOkNodata);
 
                 // FIXME once we support resizing we also need to check that the current and target size match
-                if self.displays[display_id as usize].active_resource != Some(framebuffer.buffer.id)
+                if self.displays[scanout_id as usize].active_resource != Some(framebuffer.buffer.id)
                 {
                     let scanout_request = Dma::new(SetScanout::new(
-                        display_id,
+                        scanout_id,
                         framebuffer.buffer.id,
                         GpuRect::new(0, 0, framebuffer.width, framebuffer.height),
                     ))
                     .unwrap();
                     let header = self.send_request(scanout_request).await.unwrap();
                     assert_eq!(header.ty, CommandTy::RespOkNodata);
-                    self.displays[display_id as usize].active_resource =
+                    self.displays[scanout_id as usize].active_resource =
                         Some(framebuffer.buffer.id);
                 }
 
