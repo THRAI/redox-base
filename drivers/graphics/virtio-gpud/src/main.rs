@@ -439,10 +439,17 @@ pub struct UpdateCursor {
 }
 
 impl UpdateCursor {
-    pub fn update_cursor(x: i32, y: i32, hot_x: i32, hot_y: i32, resource_id: ResourceId) -> Self {
+    pub fn update_cursor(
+        scanout_id: u32,
+        x: i32,
+        y: i32,
+        hot_x: i32,
+        hot_y: i32,
+        resource_id: ResourceId,
+    ) -> Self {
         Self {
             header: ControlHeader::with_ty(CommandTy::UpdateCursor),
-            pos: CursorPos::new(0, x, y),
+            pos: CursorPos::new(scanout_id, x, y),
             resource_id,
             hot_x,
             hot_y,
@@ -451,6 +458,8 @@ impl UpdateCursor {
     }
 }
 
+#[derive(Debug)]
+#[repr(C)]
 pub struct MoveCursor {
     pub header: ControlHeader,
     pub pos: CursorPos,
@@ -461,11 +470,15 @@ pub struct MoveCursor {
 }
 
 impl MoveCursor {
-    pub fn move_cursor(x: i32, y: i32) -> Self {
+    /// QEMU QUIRK: This should not have a `resource_id` argument, but
+    /// unfortunately QEMU has a bug where it reads the `resource_id` field from
+    /// the cursor command when calling `qemu_console_set_mouse`, rather than
+    /// reading the stored `resource_id` from the last cursor update command.
+    pub fn move_cursor(scanout_id: u32, x: i32, y: i32, resource_id: ResourceId) -> Self {
         Self {
             header: ControlHeader::with_ty(CommandTy::MoveCursor),
-            pos: CursorPos::new(0, x, y),
-            resource_id: ResourceId(0),
+            pos: CursorPos::new(scanout_id, x, y),
+            resource_id,
             hot_x: 0,
             hot_y: 0,
             _padding: 0,

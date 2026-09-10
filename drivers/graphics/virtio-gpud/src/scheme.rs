@@ -29,7 +29,7 @@ impl Into<GpuRect> for Damage {
 
 #[derive(Debug)]
 pub struct VirtGpuConnector {
-    display_id: u32,
+    scanout_id: u32,
 }
 
 impl KmsConnectorDriver for VirtGpuConnector {
@@ -296,6 +296,7 @@ impl<'a> VirtGpuAdapter<'a> {
     async fn update_cursor(
         &mut self,
         cursor: &VirtGpuFramebuffer,
+        scanout_id: u32,
         x: i32,
         y: i32,
         hot_x: i32,
@@ -318,19 +319,24 @@ impl<'a> VirtGpuAdapter<'a> {
 
         //Update the cursor position
         self.send_request_cursor(
-            Dma::new(UpdateCursor::update_cursor(x, y, hot_x, hot_y, cursor.id)).unwrap(),
+            Dma::new(UpdateCursor::update_cursor(
+                scanout_id, x, y, hot_x, hot_y, cursor.id,
+            ))
+            .unwrap(),
         )
         .await
         .unwrap();
     }
 
-    async fn move_cursor(&mut self, x: i32, y: i32) {
-        self.send_request_cursor(Dma::new(MoveCursor::move_cursor(x, y)).unwrap())
-            .await
-            .unwrap();
+    async fn move_cursor(&mut self, cursor: &VirtGpuFramebuffer, scanout_id: u32, x: i32, y: i32) {
+        self.send_request_cursor(
+            Dma::new(MoveCursor::move_cursor(scanout_id, x, y, cursor.id)).unwrap(),
+        )
+        .await
+        .unwrap();
     }
 
-    async fn disable_cursor(&mut self) {
+    async fn disable_cursor(&mut self, scanout_id: u32) {
         if self.hidden_cursor.is_none() {
             let (width, height) = (64, 64);
             let (cursor, stride) = self.create_dumb_buffer_inner(width, height).await.unwrap();
@@ -345,7 +351,8 @@ impl<'a> VirtGpuAdapter<'a> {
         }
         let hidden_cursor = self.hidden_cursor.as_ref().unwrap().clone();
 
-        self.update_cursor(&hidden_cursor, 0, 0, 0, 0).await;
+        self.update_cursor(&hidden_cursor, scanout_id, 0, 0, 0, 0)
+            .await;
     }
 }
 
@@ -370,7 +377,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
             self.update_displays().await.unwrap();
         });
 
-        for display_id in 0..self.config.num_scanouts.get() {
+        for scanout_id in 0..self.config.num_scanouts.get() {
             let (crtc, _primary_plane_id) = objects.add_crtc(
                 (),
                 (),
@@ -379,7 +386,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 Some((VirtGpuPlane { is_cursor: true }, ())),
             );
 
-            objects.add_connector(VirtGpuConnector { display_id }, (), &[crtc]);
+            objects.add_connector(VirtGpuConnector { scanout_id }, (), &[crtc]);
         }
     }
 
@@ -411,7 +418,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
     fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {
         futures::executor::block_on(async {
             let mut connector = objects.get_connector(id).unwrap().lock().unwrap();
-            let display = &self.displays[connector.driver_data.display_id as usize];
+            let display = &self.displays[connector.driver_data.scanout_id as usize];
 
             connector.connection = KmsConnectorStatus::Connected;
 
@@ -461,39 +468,10 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 .map(|fb_id| objects.get_framebuffer_maybe_closed(fb_id))
                 .transpose()?;
 
-            if plane.driver_data.is_cursor {
-                if let Some(framebuffer) = framebuffer {
-                    if damage.map_or(true, |damage| damage.width != 0 && damage.height != 0)
-                        || plane.state.lock().unwrap().fb_id != new_plane_state.fb_id
-                    {
-                        self.update_cursor(
-                            &framebuffer.buffer,
-                            new_plane_state.crtc_rect.x,
-                            new_plane_state.crtc_rect.y,
-                            new_plane_state.hotspot.unwrap().0,
-                            new_plane_state.hotspot.unwrap().1,
-                        )
-                        .await;
-                    } else {
-                        self.move_cursor(new_plane_state.crtc_rect.x, new_plane_state.crtc_rect.y)
-                            .await;
-                    }
-                } else {
-                    if plane.state.lock().unwrap().fb_id.is_some() {
-                        self.disable_cursor().await;
-                    }
-                }
-
-                *plane.state.lock().unwrap() = new_plane_state;
-
-                return Ok(());
-            }
-
             let Some(crtc_id) = new_plane_state.crtc_id else {
+                // FIXME disable output?
                 return Ok(());
             };
-
-            *plane.state.lock().unwrap() = new_plane_state;
 
             for connector in objects.connectors() {
                 let connector = connector.lock().unwrap();
@@ -502,18 +480,50 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                     continue;
                 }
 
-                let display_id = connector.driver_data.display_id;
+                let scanout_id = connector.driver_data.scanout_id;
+
+                if plane.driver_data.is_cursor {
+                    if let Some(framebuffer) = framebuffer {
+                        if damage.map_or(true, |damage| damage.width != 0 && damage.height != 0)
+                            || plane.state.lock().unwrap().fb_id != new_plane_state.fb_id
+                        {
+                            self.update_cursor(
+                                &framebuffer.buffer,
+                                scanout_id,
+                                new_plane_state.crtc_rect.x,
+                                new_plane_state.crtc_rect.y,
+                                new_plane_state.hotspot.unwrap().0,
+                                new_plane_state.hotspot.unwrap().1,
+                            )
+                            .await;
+                        } else {
+                            self.move_cursor(
+                                &framebuffer.buffer,
+                                scanout_id,
+                                new_plane_state.crtc_rect.x,
+                                new_plane_state.crtc_rect.y,
+                            )
+                            .await;
+                        }
+                    } else {
+                        if plane.state.lock().unwrap().fb_id.is_some() {
+                            self.disable_cursor(scanout_id).await;
+                        }
+                    }
+
+                    continue;
+                }
 
                 let Some(framebuffer) = framebuffer else {
                     let scanout_request = Dma::new(SetScanout::new(
-                        display_id,
+                        scanout_id,
                         ResourceId::NONE,
                         GpuRect::new(0, 0, 0, 0),
                     ))
                     .unwrap();
                     let header = self.send_request(scanout_request).await.unwrap();
                     assert_eq!(header.ty, CommandTy::RespOkNodata);
-                    self.displays[display_id as usize].active_resource = None;
+                    self.displays[scanout_id as usize].active_resource = None;
                     return Ok(());
                 };
 
@@ -532,17 +542,17 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 assert_eq!(header.ty, CommandTy::RespOkNodata);
 
                 // FIXME once we support resizing we also need to check that the current and target size match
-                if self.displays[display_id as usize].active_resource != Some(framebuffer.buffer.id)
+                if self.displays[scanout_id as usize].active_resource != Some(framebuffer.buffer.id)
                 {
                     let scanout_request = Dma::new(SetScanout::new(
-                        display_id,
+                        scanout_id,
                         framebuffer.buffer.id,
                         GpuRect::new(0, 0, framebuffer.width, framebuffer.height),
                     ))
                     .unwrap();
                     let header = self.send_request(scanout_request).await.unwrap();
                     assert_eq!(header.ty, CommandTy::RespOkNodata);
-                    self.displays[display_id as usize].active_resource =
+                    self.displays[scanout_id as usize].active_resource =
                         Some(framebuffer.buffer.id);
                 }
 
@@ -560,6 +570,8 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 let header = self.send_request(Dma::new(flush).unwrap()).await.unwrap();
                 assert_eq!(header.ty, CommandTy::RespOkNodata);
             }
+
+            *plane.state.lock().unwrap() = new_plane_state;
 
             Ok(())
         })
