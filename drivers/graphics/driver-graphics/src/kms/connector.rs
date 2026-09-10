@@ -31,7 +31,9 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
         });
         self.encoders.push(encoder_id);
 
+        let connector_index = self.connectors.len();
         let connector_id = self.add(Mutex::new(KmsConnector {
+            connector_index,
             encoder_id,
             modes: vec![],
             connector_type: DRM_MODE_CONNECTOR_Unknown,
@@ -104,6 +106,7 @@ impl KmsConnectorDriver for () {
 
 #[derive(Debug)]
 pub struct KmsConnector<T: GraphicsAdapter> {
+    pub connector_index: usize,
     pub encoder_id: KmsObjectId,
     pub modes: Vec<drm_mode_modeinfo>,
     pub connector_type: u32,

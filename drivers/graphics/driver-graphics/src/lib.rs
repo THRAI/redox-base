@@ -327,24 +327,16 @@ impl<T: GraphicsAdapter> GraphicsSchemeData<T> {
                 .lock()
                 .unwrap();
             connector.state = connector_state.clone();
+            // FIXME adapter.set_connector()?
         }
 
         for (crtc_idx, crtc_state) in vt_state.crtc_state.iter().enumerate() {
             let crtc_id = self.objects.crtc_ids()[crtc_idx];
             let crtc = self.objects.get_crtc(crtc_id).unwrap();
-            let connector_id = self.objects.connector_ids()[crtc_idx];
 
             self.adapter
                 .set_crtc(&self.objects, crtc, crtc_state.clone())
                 .unwrap();
-
-            self.objects
-                .get_connector(connector_id)
-                .unwrap()
-                .lock()
-                .unwrap()
-                .state
-                .crtc_id = crtc_id;
         }
 
         for (plane_idx, plane_state) in vt_state.plane_state.iter().enumerate() {

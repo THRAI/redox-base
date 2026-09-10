@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use syscall::Error;
 
+use crate::kms::connector::KmsConnector;
 use crate::kms::objects::{KmsObjectId, KmsObjects};
 use crate::{DrmHandle, GraphicsAdapter, VtState};
 
@@ -41,12 +43,12 @@ pub(super) fn set_crtc<T: GraphicsAdapter>(
 ) -> Result<usize, Error> {
     let crtc_id = KmsObjectId(data.crtc_id());
     let crtc = objects.get_crtc(crtc_id)?;
-    let connector_ids: Vec<KmsObjectId> = data
+    let connectors = data
         .set_connectors_ptr()
         .iter()
         .take(data.count_connectors() as usize)
-        .map(|&id| KmsObjectId(id))
-        .collect();
+        .map(|&id| objects.get_connector(KmsObjectId(id)))
+        .collect::<Result<Vec<&Mutex<KmsConnector<T>>>, _>>()?;
     let fb_id = if data.fb_id() != 0 {
         let fb_id = KmsObjectId(data.fb_id());
         objects.get_framebuffer(fb_id)?;
@@ -65,21 +67,23 @@ pub(super) fn set_crtc<T: GraphicsAdapter>(
     let new_crtc_state = &mut vt_state.crtc_state[crtc.crtc_index as usize];
     let new_plane_state = &mut vt_state.plane_state[plane.plane_index as usize];
 
+    for &connector in &connectors {
+        let new_connector_state =
+            &mut vt_state.connector_state[connector.lock().unwrap().connector_index];
+        new_connector_state.crtc_id = crtc_id;
+    }
     new_crtc_state.mode = mode;
     let old_fb_id = new_plane_state.fb_id;
     new_plane_state.fb_id = fb_id;
     new_plane_state.crtc_id = Some(crtc_id);
     if handle.vt == active_vt {
+        for &connector in &connectors {
+            let mut connector = connector.lock().unwrap();
+            connector.state = vt_state.connector_state[connector.connector_index].clone();
+            // FIXME adapter.set_connector()?
+        }
         adapter.set_crtc(&objects, crtc, new_crtc_state.clone())?;
         adapter.set_plane(&objects, plane, new_plane_state.clone(), None)?;
-        for connector in connector_ids {
-            objects
-                .get_connector(connector)?
-                .lock()
-                .unwrap()
-                .state
-                .crtc_id = crtc_id
-        }
     }
 
     if let Some(old_fb_id) = old_fb_id {
