@@ -118,7 +118,6 @@ impl GraphicsAdapter for FbAdapter {
         let Some(crtc_id) = new_plane_state.crtc_id else {
             return Ok(());
         };
-        let crtc = objects.get_crtc(crtc_id).unwrap();
 
         let buffer = new_plane_state
             .fb_id
@@ -130,7 +129,7 @@ impl GraphicsAdapter for FbAdapter {
         for connector in objects.connectors() {
             let connector = connector.lock().unwrap();
 
-            if connector.state.crtc_id != objects.crtc_ids()[crtc.crtc_index as usize] {
+            if connector.state.crtc_id != crtc_id {
                 continue;
             }
 
