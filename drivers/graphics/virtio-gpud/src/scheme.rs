@@ -88,7 +88,6 @@ impl Drop for VirtGpuFramebuffer {
 
 #[derive(Debug, Clone)]
 pub struct Display {
-    enabled: bool,
     width: u32,
     height: u32,
     edid: Vec<u8>,
@@ -122,7 +121,6 @@ impl<'a> VirtGpuAdapter<'a> {
         self.displays.resize(
             raw_displays.len(),
             Display {
-                enabled: false,
                 width: 0,
                 height: 0,
                 edid: vec![],
@@ -136,7 +134,9 @@ impl<'a> VirtGpuAdapter<'a> {
                 info.rect.height
             );
 
-            self.displays[i].enabled = info.enabled != 0;
+            // We must ignore info.enabled. All displays other than the first one are not
+            // enabled at startup according to QEMU, yet we can set a framebuffer for them
+            // just fine.
 
             if info.rect.width == 0 || info.rect.height == 0 {
                 // QEMU gives all displays other than the first a zero width and height, but trying
@@ -144,6 +144,9 @@ impl<'a> VirtGpuAdapter<'a> {
                 // default to 640x480px.
                 self.displays[i].width = 640;
                 self.displays[i].height = 480;
+                // If we fake a size, then the EDID would need to be faked as well,
+                // but we don't have any code to do that.
+                self.has_edid = false;
             } else {
                 self.displays[i].width = info.rect.width;
                 self.displays[i].height = info.rect.height;
@@ -410,11 +413,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
             let mut connector = objects.get_connector(id).unwrap().lock().unwrap();
             let display = &self.displays[connector.driver_data.display_id as usize];
 
-            connector.connection = if display.enabled {
-                KmsConnectorStatus::Connected
-            } else {
-                KmsConnectorStatus::Disconnected
-            };
+            connector.connection = KmsConnectorStatus::Connected;
 
             if self.has_edid {
                 drop(connector);
