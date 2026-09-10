@@ -2015,7 +2015,7 @@ dependencies = [
 [[package]]
 name = "redox-ioctl"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#418033b92b592ce637923eedad1eb8d2c9fc6bb9"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#c0e250aaf7be53a4aa649c4db858b24fda6b703d"
 dependencies = [
  "drm-sys",
  "redox_syscall 0.9.4",

@@ -9,6 +9,7 @@ use std::marker::PhantomData;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use drm_sys::DRM_CLIENT_NAME_MAX_LEN;
 use inputd::{DisplayHandle, VtEvent, VtEventKind};
 use libredox::Fd;
 use redox_scheme::scheme::{SchemeSync, register_scheme_inner};
@@ -326,24 +327,16 @@ impl<T: GraphicsAdapter> GraphicsSchemeData<T> {
                 .lock()
                 .unwrap();
             connector.state = connector_state.clone();
+            // FIXME adapter.set_connector()?
         }
 
         for (crtc_idx, crtc_state) in vt_state.crtc_state.iter().enumerate() {
             let crtc_id = self.objects.crtc_ids()[crtc_idx];
             let crtc = self.objects.get_crtc(crtc_id).unwrap();
-            let connector_id = self.objects.connector_ids()[crtc_idx];
 
             self.adapter
                 .set_crtc(&self.objects, crtc, crtc_state.clone())
                 .unwrap();
-
-            self.objects
-                .get_connector(connector_id)
-                .unwrap()
-                .lock()
-                .unwrap()
-                .state
-                .crtc_id = crtc_id;
         }
 
         for (plane_idx, plane_state) in vt_state.plane_state.iter().enumerate() {
@@ -388,6 +381,7 @@ impl<T: GraphicsAdapter> ResourceSync for SchemeRoot<T> {
 
         let handle = GraphicsResource::DrmHandle(DrmHandle {
             vt,
+            client_name: [0; _],
             unique: None,
             supports_universal_planes: false,
             supports_cursor_hotspot: false,
@@ -432,6 +426,7 @@ impl<T: GraphicsAdapter> ResourceSync for Control<T> {
 #[derive(Debug)]
 struct DrmHandle<T: GraphicsAdapter> {
     vt: usize,
+    client_name: [u8; DRM_CLIENT_NAME_MAX_LEN as usize],
     unique: Option<String>,
     supports_universal_planes: bool,
     supports_cursor_hotspot: bool,
