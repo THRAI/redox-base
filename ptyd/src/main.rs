@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use event::{user_data, EventFlags, EventQueue};
 use libredox::{flag, Fd};
 use redox_scheme::scheme::register_sync_scheme;
@@ -39,10 +41,11 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     let mut time_file =
         Fd::open(&time_path, flag::O_NONBLOCK, 0).expect("pty: failed to open time:");
 
-    let socket = redox_scheme::Socket::nonblock().expect("pty: failed to create pty scheme");
-    let mut handler = ReadinessBased::new(Box::new(socket), 16);
+    let socket =
+        Rc::new(redox_scheme::Socket::nonblock().expect("pty: failed to create pty scheme"));
+    let mut handler = ReadinessBased::new(Rc::clone(&socket), 16);
 
-    let mut scheme = PtyScheme::new();
+    let mut scheme = PtyScheme::new(Rc::clone(&socket));
     register_sync_scheme(handler.socket(), "pty", &mut scheme)
         .expect("ptyd: failed to register scheme to namespace");
     daemon.ready();
@@ -96,7 +99,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     std::process::exit(0);
 }
 
-fn scan_requests(handler: &mut ReadinessBased<Box<Socket>>, scheme: &mut PtyScheme) {
+fn scan_requests(handler: &mut ReadinessBased<Rc<Socket>>, scheme: &mut PtyScheme) {
     handler
         .read_and_process_requests(scheme)
         .expect("pty: failed to read from socket");

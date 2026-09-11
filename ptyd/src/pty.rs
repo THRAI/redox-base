@@ -1,12 +1,14 @@
 use std::collections::VecDeque;
 
+use libredox::protocol::{ProcCall, ProcKillTarget};
 use redox_termios::*;
 use scheme_utils::FpathWriter;
 use syscall::error::Result;
+use syscall::CallFlags;
 
 pub struct Pty {
     pub id: usize,
-    pub pgrp: usize,
+    pub pgrp: usize, // TODO remove when PtyPgrp read and write reimplemented
     pub locked: bool,
     pub stopped: bool,
     pub termios: Termios,
@@ -16,6 +18,7 @@ pub struct Pty {
     pub mosi: VecDeque<Vec<u8>>,
     pub timeout_count: u64,
     pub timeout_character: Option<u64>,
+    pub pgrp_handle: Option<libredox::Fd>,
 }
 
 impl Pty {
@@ -32,6 +35,7 @@ impl Pty {
             mosi: VecDeque::new(),
             timeout_count: 0,
             timeout_character: None,
+            pgrp_handle: None,
         }
     }
 
@@ -50,8 +54,6 @@ impl Pty {
         let cc = self.termios.c_cc;
 
         let is_cc = |b: u8, i: usize| -> bool { b != 0 && b == cc[i] };
-        // TODO: Delete this constant once termios is bumped (it's in termios).
-        const _POSIX_VDISABLE: u8 = 0;
         let is_vdisable = |i: usize| -> bool { cc[i] == _POSIX_VDISABLE };
 
         let inlcr = ifl & INLCR == INLCR;
@@ -155,10 +157,11 @@ impl Pty {
 
             if isig {
                 if is_cc(b, VINTR) && !is_vdisable(VINTR) {
-                    if self.pgrp != 0 {
-                        let _ = libredox::call::kill(
-                            -(self.pgrp as isize) as usize,
-                            libredox::flag::SIGINT as _,
+                    if let Some(fd) = &self.pgrp_handle {
+                        let _ = Pty::kill(
+                            fd,
+                            ProcKillTarget::ThisGroup,
+                            libredox::flag::SIGINT as usize,
                         );
                     }
 
@@ -166,10 +169,11 @@ impl Pty {
                 }
 
                 if is_cc(b, VQUIT) && !is_vdisable(VQUIT) {
-                    if self.pgrp != 0 {
-                        let _ = libredox::call::kill(
-                            -(self.pgrp as isize) as usize,
-                            libredox::flag::SIGQUIT as _,
+                    if let Some(fd) = &self.pgrp_handle {
+                        let _ = Pty::kill(
+                            fd,
+                            ProcKillTarget::ThisGroup,
+                            libredox::flag::SIGQUIT as usize,
                         );
                     }
 
@@ -177,10 +181,11 @@ impl Pty {
                 }
 
                 if is_cc(b, VSUSP) && !is_vdisable(VSUSP) {
-                    if self.pgrp != 0 {
-                        let _ = libredox::call::kill(
-                            -(self.pgrp as isize) as usize,
-                            libredox::flag::SIGTSTP as _,
+                    if let Some(fd) = &self.pgrp_handle {
+                        let _ = Pty::kill(
+                            fd,
+                            ProcKillTarget::ThisGroup,
+                            libredox::flag::SIGTSTP as usize,
                         );
                     }
 
@@ -317,5 +322,15 @@ impl Pty {
 
             self.update();
         }
+    }
+
+    fn kill(fd: &libredox::Fd, target: ProcKillTarget, sig: usize) -> Result<()> {
+        Ok(fd
+            .call_wo(
+                &[],
+                CallFlags::empty(),
+                &[ProcCall::Kill as u64, target.raw() as u64, sig as u64],
+            )
+            .map(|_| ())?)
     }
 }

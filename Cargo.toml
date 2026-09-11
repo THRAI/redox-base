@@ -99,7 +99,7 @@ redox-log = { git = "https://gitlab.redox-os.org/redox-os/redox-log.git" }
 redox-scheme = { version = "0.11.2", default-features = false }
 redox_syscall = { version = "0.9.4",  features = ["std"] }
 redox-rings = { git = "https://gitlab.redox-os.org/redox-os/redox-rings.git", features = ["userspace", "sync"] }
-redox_termios = "0.1.3"
+redox_termios = "0.1.4"
 ron = "0.8.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
