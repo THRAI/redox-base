@@ -1,15 +1,16 @@
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::str;
 
 use libredox::protocol::TtyCall;
 use redox_scheme::scheme::SchemeSync;
-use redox_scheme::{CallerCtx, OpenResult};
+use redox_scheme::{CallerCtx, OpenResult, Socket};
 use syscall::data::Stat;
 use syscall::error::{Error, Result, EACCES, EBADF, EINVAL, ENOENT};
 use syscall::flag::{EventFlags, MODE_CHR};
 use syscall::schemev2::NewFdFlags;
+use syscall::FobtainFdFlags;
 
 use crate::controlterm::PtyControlTerm;
 use crate::pgrp::PtyPgrp;
@@ -30,13 +31,15 @@ pub enum Handle {
 }
 
 pub struct PtyScheme {
+    socket: Rc<Socket>,
     next_id: usize,
     pub handles: BTreeMap<usize, Handle>,
 }
 
 impl PtyScheme {
-    pub fn new() -> Self {
+    pub fn new(socket: Rc<Socket>) -> Self {
         PtyScheme {
+            socket,
             next_id: 0,
             handles: BTreeMap::new(),
         }
@@ -306,6 +309,24 @@ impl SchemeSync for PtyScheme {
                     _ => Err(Error::new(EINVAL)),
                 }
             }
+        }
+    }
+    fn on_sendfd(&mut self, sendfd_request: &redox_scheme::SendFdRequest) -> Result<usize> {
+        let handle = self
+            .handles
+            .get(&sendfd_request.id())
+            .ok_or(Error::new(EBADF))?;
+        match handle {
+            Handle::Resource(resource) => {
+                let mut new_fds = [usize::MAX];
+                sendfd_request.obtain_fd(&self.socket, FobtainFdFlags::empty(), &mut new_fds)?;
+                let object_handle = libredox::Fd::new(new_fds[0]);
+                let pty_lock = resource.pty().upgrade().expect("all resources have a pty");
+                let mut pty: RefMut<Pty> = pty_lock.borrow_mut();
+                pty.pgrp_handle = Some(object_handle);
+                Ok(new_fds.len())
+            }
+            Handle::SchemeRoot => Err(Error::new(EBADF)),
         }
     }
 }

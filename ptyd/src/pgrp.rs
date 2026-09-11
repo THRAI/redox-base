@@ -38,11 +38,12 @@ impl Resource for PtyPgrp {
         }
     }
 
+    // TODO either needs to do a syscall on pty.pgrp_handle or
+    // implement read on procmgr side
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let pty = pty_lock.borrow();
 
-            //println!("READ PGRP {}: {}", pty.id, pty.pgrp);
             let dst_buf = buf
                 .get_mut(..4)
                 .and_then(|b| <&mut [u8; 4]>::try_from(b).ok())
@@ -55,6 +56,8 @@ impl Resource for PtyPgrp {
         }
     }
 
+    // TODO should no longer be used after removal of pty.pgrp
+    // sendfd should be used instead
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let mut pty = pty_lock.borrow_mut();
@@ -65,7 +68,6 @@ impl Resource for PtyPgrp {
                     .ok_or(Error::new(EBADF))?,
             );
             pty.pgrp = new_pgrp as usize;
-            //println!("WRITE PGRP {}: {} => {}", pty.id, pty.pgrp, new_pgrp);
 
             Ok(4)
         } else {

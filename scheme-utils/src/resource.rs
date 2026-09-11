@@ -35,7 +35,7 @@ pub trait ResourceSync: Sized + Debug {
     type SchemeData;
     type ResourceEnum;
 
-    fn openat<'a>(
+    fn openat(
         &mut self,
         scheme_data: &mut Self::SchemeData,
         path: &str,
@@ -61,7 +61,7 @@ pub trait ResourceSync: Sized + Debug {
     }
 
     /* Resource operations */
-    fn dup<'a>(
+    fn dup(
         &mut self,
         scheme_data: &mut Self::SchemeData,
         buf: &[u8],
@@ -249,7 +249,7 @@ pub trait ResourceSync: Sized + Debug {
         Err(Error::new(EOPNOTSUPP))
     }
 
-    fn on_recvfd<'a>(
+    fn on_recvfd(
         &mut self,
         scheme_data: &mut Self::SchemeData,
         recvfd_request: &RecvFdRequest,
