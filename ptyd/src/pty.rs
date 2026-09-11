@@ -163,6 +163,12 @@ impl Pty {
                             ProcKillTarget::ThisGroup,
                             libredox::flag::SIGINT as usize,
                         );
+                    } else if self.pgrp != 0 {
+                        // TODO remove fallback after cap-based migration complete
+                        let _ = libredox::call::kill(
+                            -(self.pgrp as isize) as usize,
+                            libredox::flag::SIGINT as _,
+                        );
                     }
 
                     b = 0;
@@ -175,6 +181,12 @@ impl Pty {
                             ProcKillTarget::ThisGroup,
                             libredox::flag::SIGQUIT as usize,
                         );
+                    } else if self.pgrp != 0 {
+                        // TODO remove fallback after cap-based migration complete
+                        let _ = libredox::call::kill(
+                            -(self.pgrp as isize) as usize,
+                            libredox::flag::SIGQUIT as _,
+                        );
                     }
 
                     b = 0;
@@ -186,6 +198,12 @@ impl Pty {
                             fd,
                             ProcKillTarget::ThisGroup,
                             libredox::flag::SIGTSTP as usize,
+                        );
+                    } else if self.pgrp != 0 {
+                        // TODO remove fallback after cap-based migration complete
+                        let _ = libredox::call::kill(
+                            -(self.pgrp as isize) as usize,
+                            libredox::flag::SIGTSTP as _,
                         );
                     }
 
