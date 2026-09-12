@@ -60,11 +60,11 @@ impl Disk for LiveDisk {
     }
 
     async fn read(&mut self, mut block: u64, buffer: &mut [u8]) -> syscall::Result<usize> {
-        let mut offset = (block as usize) * PAGE_SIZE;
-        if offset + buffer.len() > self.original.len() {
+        if block as usize * PAGE_SIZE + buffer.len() > self.original.len() {
             return Err(syscall::Error::new(EINVAL));
         }
         for chunk in buffer.chunks_mut(PAGE_SIZE) {
+            let offset = block as usize * PAGE_SIZE;
             match self.overlay.get(&block) {
                 Some(overlay) => {
                     chunk.copy_from_slice(&overlay[..chunk.len()]);
@@ -74,26 +74,23 @@ impl Disk for LiveDisk {
                 }
             }
             block += 1;
-            offset += PAGE_SIZE;
         }
         Ok(buffer.len())
     }
 
     async fn write(&mut self, mut block: u64, buffer: &[u8]) -> syscall::Result<usize> {
-        let mut offset = (block as usize) * PAGE_SIZE;
-        if offset + buffer.len() > self.original.len() {
+        if block as usize * PAGE_SIZE + buffer.len() > self.original.len() {
             return Err(syscall::Error::new(EINVAL));
         }
         for chunk in buffer.chunks(PAGE_SIZE) {
             self.overlay.entry(block).or_insert_with(|| {
-                let offset = (block as usize) * PAGE_SIZE;
+                let offset = block as usize * PAGE_SIZE;
                 self.original[offset..offset + PAGE_SIZE]
                     .to_vec()
                     .into_boxed_slice()
             })[..chunk.len()]
                 .copy_from_slice(chunk);
             block += 1;
-            offset += PAGE_SIZE;
         }
         Ok(buffer.len())
     }

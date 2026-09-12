@@ -1,0 +1,16 @@
+[package]
+name = "nbdd"
+description = "Live disk daemon"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow.workspace = true
+libredox.workspace = true
+daemon = { path = "../../../daemon" }
+redox_syscall = { workspace = true, features = ["std"] }
+redox_event.workspace = true
+driver-block = { path = "../driver-block" }
+
+[lints]
+workspace = true
