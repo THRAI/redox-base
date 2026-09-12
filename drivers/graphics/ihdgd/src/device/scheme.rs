@@ -170,7 +170,7 @@ impl GraphicsAdapter for Device {
     ) -> syscall::Result<()> {
         let buffer = new_plane_state
             .fb_id
-            .map(|fb_id| objects.get_framebuffer_maybe_closed(fb_id))
+            .map(|fb_id| objects.get_framebuffer(fb_id))
             .transpose()?;
 
         *plane.state.lock().unwrap() = new_plane_state;

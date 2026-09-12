@@ -466,7 +466,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         futures::executor::block_on(async {
             let framebuffer = new_plane_state
                 .fb_id
-                .map(|fb_id| objects.get_framebuffer_maybe_closed(fb_id))
+                .map(|fb_id| objects.get_framebuffer(fb_id))
                 .transpose()?;
 
             let Some(crtc_id) = new_plane_state.crtc_id else {

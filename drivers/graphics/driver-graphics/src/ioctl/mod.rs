@@ -126,7 +126,9 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             data.set_size(buffer.size() as u64);
 
             handle.next_buffer_id += 1;
-            handle.buffers.insert(handle.next_buffer_id, Arc::new(buffer));
+            handle
+                .buffers
+                .insert(handle.next_buffer_id, Arc::new(buffer));
             data.set_handle(handle.next_buffer_id as u32);
             Ok(0)
         }),

@@ -226,7 +226,7 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
 
     pub fn remove_framebuffer_if_closed(&mut self, id: KmsObjectId) {
         if self
-            .get_framebuffer_maybe_closed(id)
+            .get_framebuffer(id)
             .unwrap()
             .closed
             .load(Ordering::SeqCst)
@@ -240,15 +240,7 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
     }
 
     pub fn get_framebuffer(&self, id: KmsObjectId) -> Result<&KmsFramebuffer<T>> {
-        let fb = self.get::<KmsFramebuffer<T>>(id)?;
-        if fb.closed.load(Ordering::SeqCst) {
-            return Err(Error::new(ENOENT));
-        }
-        Ok(fb)
-    }
-
-    pub fn get_framebuffer_maybe_closed(&self, id: KmsObjectId) -> Result<&KmsFramebuffer<T>> {
-        self.get::<KmsFramebuffer<T>>(id)
+        Ok(self.get::<KmsFramebuffer<T>>(id)?)
     }
 }
 
