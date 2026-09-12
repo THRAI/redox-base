@@ -20,15 +20,15 @@ pub(super) fn mode_get_fb<T: GraphicsAdapter>(
         _ => todo!(),
     };
 
-    handle.next_id += 1;
-    handle.buffers.insert(handle.next_id, fb.buffer.clone());
+    handle.next_buffer_id += 1;
+    handle.buffers.insert(handle.next_buffer_id, fb.buffer.clone());
 
     data.set_width(fb.width);
     data.set_height(fb.height);
     data.set_pitch(fb.pitch);
     data.set_bpp(bpp);
     data.set_depth(depth);
-    data.set_handle(handle.next_id);
+    data.set_handle(handle.next_buffer_id);
     Ok(0)
 }
 
@@ -180,13 +180,15 @@ pub(super) fn mode_get_fb2<T: GraphicsAdapter>(
 ) -> Result<usize, Error> {
     let fb = objects.get_framebuffer_maybe_closed(KmsObjectId(data.fb_id()))?;
 
-    handle.next_id += 1;
-    handle.buffers.insert(handle.next_id, fb.buffer.clone());
+    handle.next_buffer_id += 1;
+    handle
+        .buffers
+        .insert(handle.next_buffer_id, fb.buffer.clone());
 
     data.set_width(fb.width);
     data.set_height(fb.height);
     data.set_pixel_format(fb.pixel_format as u32);
-    data.set_handles([handle.next_id, 0, 0, 0]);
+    data.set_handles([handle.next_buffer_id, 0, 0, 0]);
     data.set_pitches([fb.pitch, 0, 0, 0]);
     data.set_offsets([0; 4]);
     data.set_modifier([0; 4]);
