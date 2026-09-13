@@ -4,7 +4,8 @@ use std::sync::Arc;
 use drm_fourcc::DrmFourcc;
 use syscall::{EINVAL, ENOENT, Error};
 
-use crate::kms::objects::{KmsObjectId, KmsObjects, KmsPlaneType, KmsRect};
+use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
+use crate::kms::plane::KmsPlaneType;
 use crate::{Buffer, DrmHandle, GraphicsAdapter, MAP_FAKE_OFFSET_MULTIPLIER, VtState};
 
 mod crtc;

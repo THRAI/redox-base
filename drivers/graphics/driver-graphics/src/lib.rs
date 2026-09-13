@@ -18,10 +18,9 @@ use syscall::{EINVAL, Error, Result};
 
 use crate::handle::DrmHandle;
 use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState};
-use crate::kms::objects::{
-    KmsCrtc, KmsCrtcDriver, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver,
-    KmsPlaneState,
-};
+use crate::kms::crtc::{KmsCrtc, KmsCrtcDriver, KmsCrtcState};
+use crate::kms::objects::{KmsObjectId, KmsObjects};
+use crate::kms::plane::{KmsPlane, KmsPlaneDriver, KmsPlaneState};
 
 mod handle;
 mod ioctl;

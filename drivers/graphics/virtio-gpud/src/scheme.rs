@@ -5,9 +5,9 @@ use std::sync::Arc;
 use common::dma::Dma;
 use common::sgl;
 use driver_graphics::kms::connector::{KmsConnectorDriver, KmsConnectorStatus};
-use driver_graphics::kms::objects::{
-    KmsCrtc, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver, KmsPlaneState,
-};
+use driver_graphics::kms::crtc::{KmsCrtc, KmsCrtcState};
+use driver_graphics::kms::objects::{KmsObjectId, KmsObjects};
+use driver_graphics::kms::plane::{KmsPlane, KmsPlaneDriver, KmsPlaneState};
 use driver_graphics::{
     Buffer as DrmBuffer, Damage, DumbBufferConfig, GraphicsAdapter, GraphicsScheme,
 };
