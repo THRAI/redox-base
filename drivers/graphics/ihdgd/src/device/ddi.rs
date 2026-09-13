@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use common::io::{Io, MmioPtr, WriteOnly};
 use common::timeout::Timeout;
+use driver_graphics::kms::objects::KmsObjectId;
+use drm_sys::drm_mode_modeinfo;
 use embedded_hal::prelude::*;
 use syscall::error::{Error, Result, EIO};
 
@@ -123,6 +125,7 @@ pub enum PortLane {
 pub struct Ddi {
     pub name: &'static str,
     pub index: usize,
+    pub kms_id: Option<KmsObjectId>,
     pub gttmm: Arc<MmioRegion>,
     pub port_base: Option<usize>,
     pub aux_ctl: MmioPtr<u32>,
@@ -137,7 +140,7 @@ pub struct Ddi {
     pub pwr_well_ctl_ddi_request: u32,
     pub pwr_well_ctl_ddi_state: u32,
     pub sde_interrupt_hotplug: Option<u32>,
-    pub transcoder_index: Option<u32>,
+    pub trans_ddi_select: Option<u32>,
 }
 
 //TODO: verify offsets and count using DeviceKind?
@@ -299,7 +302,7 @@ impl Ddi {
     pub fn voltage_swing_hdmi(
         &mut self,
         gttmm: &MmioRegion,
-        timing: &edid::DetailedTiming,
+        mode: &drm_mode_modeinfo,
     ) -> Result<()> {
         struct Setting {
             dw2_swing_sel: u32,
@@ -491,6 +494,7 @@ impl Ddi {
             ddis.push(Self {
                 name,
                 index: i,
+                kms_id: None,
                 port_base: None, //TODO: port regs
                 gttmm: gttmm.clone(),
                 // IHD-OS-KBL-Vol 2c-1.17 DDI_AUX_CTL
@@ -550,7 +554,7 @@ impl Ddi {
                     _ => None,
                 },
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_CLK_SEL
-                transcoder_index: match *name {
+                trans_ddi_select: match *name {
                     "B" => Some(0b010),
                     "C" => Some(0b011),
                     "D" => Some(0b100),
@@ -579,6 +583,7 @@ impl Ddi {
             ddis.push(Self {
                 name,
                 index: i,
+                kms_id: None,
                 port_base,
                 gttmm: gttmm.clone(),
                 // IHD-OS-TGL-Vol 2c-12.21 DDI_AUX_CTL
@@ -656,7 +661,7 @@ impl Ddi {
                     _ => None,
                 },
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_CLK_SEL
-                transcoder_index: Some((i + 1) as u32),
+                trans_ddi_select: Some((i + 1) as u32),
             })
         }
         Ok(ddis)
@@ -677,6 +682,7 @@ impl Ddi {
             ddis.push(Self {
                 name,
                 index: i,
+                kms_id: None,
                 port_base,
                 gttmm: gttmm.clone(),
                 // IHD-OS-ACM-Vol 2c-3.23 DDI_AUX_CTL
@@ -750,7 +756,7 @@ impl Ddi {
                     _ => None,
                 },
                 // IHD-OS-ACM-Vol 2c-3.23 TRANS_CLK_SEL
-                transcoder_index: Some((i + 1) as u32),
+                trans_ddi_select: Some((i + 1) as u32),
             })
         }
         Ok(ddis)

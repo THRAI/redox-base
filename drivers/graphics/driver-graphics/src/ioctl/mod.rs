@@ -88,7 +88,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             data.set_connector_type_id(data.connector_type_id());
             data.set_connection(connector.connection as u32);
             data.set_mm_width(connector.mm_width);
-            data.set_mm_height(connector.mm_width);
+            data.set_mm_height(connector.mm_height);
             data.set_subpixel(connector.subpixel as u32);
             drop(connector);
             let (props, prop_vals) =

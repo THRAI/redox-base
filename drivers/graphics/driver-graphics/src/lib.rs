@@ -115,6 +115,7 @@ pub trait GraphicsAdapter: Sized + Debug {
         objects: &KmsObjects<Self>,
         crtc: &KmsCrtc<Self>,
         new_state: KmsCrtcState<Self>,
+        connector_ids: &[KmsObjectId],
     ) -> syscall::Result<()>;
 
     fn set_plane(
@@ -318,6 +319,7 @@ impl<T: GraphicsAdapter> GraphicsSchemeData<T> {
 
         let vt_state = GraphicsSchemeData::get_or_create_vt(&self.objects, &mut self.vts, vt);
 
+        let mut connectors_by_crtc = HashMap::<KmsObjectId, Vec<KmsObjectId>>::new();
         for (connector_idx, connector_state) in vt_state.connector_state.iter().enumerate() {
             let connector_id = self.objects.connector_ids()[connector_idx];
             let mut connector = self
@@ -327,6 +329,10 @@ impl<T: GraphicsAdapter> GraphicsSchemeData<T> {
                 .lock()
                 .unwrap();
             connector.state = connector_state.clone();
+            connectors_by_crtc
+                .entry(connector.state.crtc_id)
+                .or_default()
+                .push(connector_id);
             // FIXME adapter.set_connector()?
         }
 
@@ -335,7 +341,12 @@ impl<T: GraphicsAdapter> GraphicsSchemeData<T> {
             let crtc = self.objects.get_crtc(crtc_id).unwrap();
 
             self.adapter
-                .set_crtc(&self.objects, crtc, crtc_state.clone())
+                .set_crtc(
+                    &self.objects,
+                    crtc,
+                    crtc_state.clone(),
+                    connectors_by_crtc.entry(crtc_id).or_default(),
+                )
                 .unwrap();
         }
 

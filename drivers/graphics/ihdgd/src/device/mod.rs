@@ -1,13 +1,12 @@
-use std::collections::VecDeque;
-use std::sync::atomic::AtomicBool;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{fmt, mem};
 
 use common::io::{Io, MmioPtr};
 use common::timeout::Timeout;
-use driver_graphics::kms::connector::KmsConnectorStatus;
-use driver_graphics::kms::objects::{KmsFramebuffer, KmsObjects};
-use drm_fourcc::DrmFourcc;
+use driver_graphics::kms::connector::{modeinfo_for_size, KmsConnectorStatus};
+use driver_graphics::kms::objects::KmsObjects;
+use drm_sys::drm_mode_modeinfo;
 use pcid_interface::{PciFunction, PciFunctionHandle};
 use range_alloc::RangeAllocator;
 use syscall::error::{Error, Result, EIO, ENODEV, ERANGE};
@@ -450,61 +449,115 @@ impl Device {
         })
     }
 
-    fn add_kms_pipe(objects: &mut KmsObjects<Self>, pipe_idx: usize, fb: KmsFramebuffer<Self>) {
-        let (crtc_id, primary_plane_id) = objects.add_crtc(
-            Crtc { pipe_idx },
-            (),
-            scheme::Plane {
-                pipe_idx,
-                plane_idx: 0,
-            },
-            (),
-            None,
-        );
-
-        // FIXME add cursor plane
-
-        let (width, height) = (fb.width, fb.height);
-
-        let fb_id = objects.add_framebuffer(fb);
-
-        let connector_id = objects.add_connector((), (), &[crtc_id]);
-        let mut connector = objects.get_connector(connector_id).unwrap().lock().unwrap();
-        connector.connection = KmsConnectorStatus::Connected;
-        connector.update_from_size(width, height);
-        drop(connector);
-
-        objects
-            .get_plane(primary_plane_id)
-            .unwrap()
-            .state
-            .lock()
-            .unwrap()
-            .fb_id = Some(fb_id);
-    }
-
     pub fn init_inner(&mut self, objects: &mut KmsObjects<Self>) {
+        // Add static objects
+        let mut free_crtc_ids = VecDeque::new();
+        let mut assigned_crtc_ids = HashMap::new();
+        for (transcoder, pipe) in self.transcoders.iter_mut().zip(self.pipes.iter_mut()) {
+            let (crtc_id, primary_plane_id) = objects.add_crtc(
+                Crtc {
+                    transcoder_idx: transcoder.index,
+                    pipe_idx: pipe.index,
+                },
+                (),
+                scheme::Plane {
+                    pipe_idx: pipe.index,
+                    plane_idx: 0,
+                },
+                (),
+                //TODO: cursor plane
+                None,
+            );
+            pipe.planes[0].kms_id = Some(primary_plane_id);
+            //TODO: support other planes
+            let ddi_select = transcoder.ddi_select();
+            if ddi_select == 0 {
+                free_crtc_ids.push_back(crtc_id);
+            } else {
+                if let Some(other_id) = assigned_crtc_ids.insert(ddi_select, crtc_id) {
+                    panic!(
+                        "ddi select {:#x} used for CRTC {:?} and {:?}",
+                        ddi_select, other_id, crtc_id
+                    )
+                }
+            }
+        }
+        for ddi in self.ddis.iter_mut() {
+            //TODO: console-draw and orbital don't work well with multiple CRTCs per connector
+            let Some(crtc_id) = ddi
+                .trans_ddi_select
+                .and_then(|ddi_select| assigned_crtc_ids.get(&ddi_select).cloned())
+                .or_else(|| free_crtc_ids.pop_front())
+            else {
+                log::warn!("no CRTC available for DDI {}", ddi.name);
+                continue;
+            };
+            let connector_id = objects.add_connector(
+                Connector {
+                    ddi_idx: ddi.index,
+                    ddi_name: ddi.name,
+                    edid: None,
+                },
+                (),
+                &[crtc_id],
+            );
+            {
+                let mut connector = objects.get_connector(connector_id).unwrap().lock().unwrap();
+                connector.connection = KmsConnectorStatus::Disconnected;
+                connector.state.crtc_id = crtc_id;
+            }
+            ddi.kms_id = Some(connector_id);
+        }
+
         // Discover current framebuffers
-        for pipe in self.pipes.iter() {
+        for crtc_id in objects.crtc_ids().to_vec() {
+            let driver_data = objects.get_crtc(crtc_id).unwrap().driver_data;
+            let pipe = &self.pipes[driver_data.pipe_idx];
+            let transcoder = &self.transcoders[driver_data.transcoder_idx];
             for plane in pipe.planes.iter() {
                 if plane.ctl.readf(PLANE_CTL_ENABLE) {
                     plane.fetch_modeset(&mut self.alloc_buffers);
 
                     let fb = plane.fetch_framebuffer(&self.gm, &mut self.ggtt);
 
-                    Self::add_kms_pipe(objects, pipe.index, fb);
+                    //TODO: use EDID for firmware mode instead of modeinfo_for_size
+                    objects
+                        .get_crtc(crtc_id)
+                        .unwrap()
+                        .state
+                        .lock()
+                        .unwrap()
+                        .mode = Some(modeinfo_for_size(fb.width, fb.height));
+
+                    let ddi_select = transcoder.ddi_select();
+                    if let Some(ddi) = self
+                        .ddis
+                        .iter_mut()
+                        .find(|ddi| ddi.trans_ddi_select == Some(ddi_select))
+                    {
+                        let mut connector = objects
+                            .get_connector(ddi.kms_id.unwrap())
+                            .unwrap()
+                            .lock()
+                            .unwrap();
+                        connector.connection = KmsConnectorStatus::Connected;
+                        connector.update_from_size(fb.width, fb.height);
+                    }
+
+                    let fb_id = objects.add_framebuffer(fb);
+
+                    objects
+                        .get_plane(plane.kms_id.unwrap())
+                        .unwrap()
+                        .state
+                        .lock()
+                        .unwrap()
+                        .fb_id = Some(fb_id);
                 }
             }
         }
 
-        // Probe all DDIs
-        let ddi_names: Vec<&str> = self.ddis.iter().map(|ddi| ddi.name).collect();
-        for ddi_name in ddi_names {
-            self.probe_ddi(objects, ddi_name)
-                .expect("failed to probe DDI");
-        }
-
-        self.dump();
+        //self.dump();
 
         log::info!(
             "device initialized with {} framebuffers",
@@ -576,7 +629,14 @@ impl Device {
             return Err(Error::new(EIO));
         };
 
+        //TODO: probing repeatedly is causing loss of EDID information
+        let connector = objects.get_connector(ddi.kms_id.unwrap()).unwrap();
+        if connector.lock().unwrap().driver_data.edid.is_some() {
+            return Ok(true);
+        }
+
         // Enable DDI power well
+        //TODO: turn off wells later if not used
         self.power_wells.enable_well_by_ddi(ddi.name)?;
 
         let Some((source, edid_data)) =
@@ -585,10 +645,22 @@ impl Device {
             return Ok(false);
         };
 
-        let edid = match edid::parse(&edid_data).to_full_result() {
+        // Return if EDID all zeroes, reduces logging from parsing errors below
+        if edid_data.iter().all(|x| *x == 0) {
+            log::debug!(
+                "DDI {} failed to read EDID from {}: all zeroes",
+                ddi.name,
+                source,
+            );
+            return Ok(false);
+        }
+
+        match edid::parse(&edid_data).to_full_result() {
             Ok(edid) => {
                 log::info!("DDI {} EDID from {}: {:?}", ddi.name, source, edid);
-                edid
+                connector.lock().unwrap().driver_data.edid = Some(edid);
+                objects.set_connector_edid(ddi.kms_id.unwrap(), edid_data.to_vec());
+                Ok(true)
             }
             Err(err) => {
                 log::warn!(
@@ -598,23 +670,35 @@ impl Device {
                     err
                 );
                 // Will try again but not fail the driver
-                return Ok(false);
+                Ok(false)
             }
+        }
+    }
+
+    pub fn modeset_ddi(
+        &mut self,
+        objects: &KmsObjects<Self>,
+        name: &str,
+        mode: drm_mode_modeinfo,
+    ) -> Result<bool> {
+        let Some(ddi) = self.ddis.iter_mut().find(|ddi| ddi.name == name) else {
+            log::warn!("DDI {} not found", name);
+            return Err(Error::new(EIO));
         };
 
-        let timing_opt = edid.descriptors.iter().find_map(|desc| match desc {
-            edid::Descriptor::DetailedTiming(timing) => Some(timing),
-            _ => None,
-        });
-        let Some(timing) = timing_opt else {
-            log::warn!(
-                "DDI {} EDID from {} missing detailed timing",
-                ddi.name,
-                source
-            );
-            // Will try again but not fail the driver
-            return Ok(false);
-        };
+        let edid_video_input = objects
+            .get_connector(ddi.kms_id.unwrap())
+            .unwrap()
+            .lock()
+            .unwrap()
+            .driver_data
+            .edid
+            .as_ref()
+            .map_or(0, |x| x.display.video_input);
+
+        // Enable DDI power well
+        //TODO: turn off wells later if not used
+        self.power_wells.enable_well_by_ddi(ddi.name)?;
 
         let mut modeset = |ddi: &mut Ddi, input: VideoInput| -> Result<()> {
             // IHD-OS-TGL-Vol 12-1.22-Rev2.0 "Sequences for HDMI and DVI"
@@ -664,7 +748,7 @@ impl Device {
                         dpll.ssc.writef(DPLL_SSC_ENABLE, false);
 
                         // Configure DPLL frequency
-                        dpll.set_freq_hdmi(self.ref_freq, &timing)?;
+                        dpll.set_freq_hdmi(self.ref_freq, &mode)?;
                     }
                     VideoInput::Dp => {
                         log::warn!("DPLL for DisplayPort not implemented");
@@ -757,49 +841,32 @@ impl Device {
                 };
 
                 // Enable pipe and transcoder power wells
+                //TODO: turn off wells later if not used
                 self.power_wells.enable_well_by_pipe(pipe.name)?;
                 self.power_wells
                     .enable_well_by_transcoder(transcoder.name)?;
 
                 // Configure transcoder clock select
-                if let Some(transcoder_index) = ddi.transcoder_index {
+                if let Some(trans_ddi_select) = ddi.trans_ddi_select {
                     transcoder
                         .clk_sel
-                        .write(transcoder_index << transcoder.clk_sel_shift);
+                        .write(trans_ddi_select << transcoder.clk_sel_shift);
                 }
 
                 // Set pipe bottom color to blue for debugging
                 pipe.bottom_color.write(0x3FF);
 
                 // Configure and enable planes
-                //TODO: THIS IS HACKY
                 if let Some(plane) = pipe.planes.first_mut() {
-                    let width = timing.horizontal_active_pixels as u32;
-                    let height = timing.vertical_active_lines as u32;
-
-                    let (buffer, stride) =
-                        GpuBuffer::alloc_dumb(&self.gm, &mut self.ggtt, width, height)?;
-
-                    let fb = KmsFramebuffer {
-                        closed: AtomicBool::new(true),
-                        width,
-                        height,
-                        pixel_format: DrmFourcc::Argb8888,
-                        pitch: stride,
-                        buffer: Arc::new(buffer),
-                        driver_data: (),
-                    };
-
                     plane.modeset(&mut self.alloc_buffers)?;
-                    plane.set_framebuffer(Some(&fb));
-
-                    Self::add_kms_pipe(objects, pipe.index, fb);
+                    // Framebuffer will be set later
+                    plane.set_framebuffer(None);
                 }
 
                 //TODO: VGA and panel fitter steps?
 
                 // Configure transcoder timings and other pipe and transcoder settings
-                transcoder.modeset(pipe, &timing);
+                transcoder.modeset(pipe, &mode);
 
                 // Configure and enable TRANS_DDI_FUNC_CTL
                 {
@@ -809,8 +876,8 @@ impl Device {
                         //TODO: correct port width selection
                         TRANS_DDI_FUNC_CTL_PORT_WIDTH_4;
 
-                    if let Some(transcoder_index) = ddi.transcoder_index {
-                        ddi_func_ctl |= transcoder_index << transcoder.ddi_func_ctl_ddi_shift;
+                    if let Some(trans_ddi_select) = ddi.trans_ddi_select {
+                        ddi_func_ctl |= trans_ddi_select << transcoder.ddi_func_ctl_ddi_shift;
                     }
 
                     match input {
@@ -818,7 +885,7 @@ impl Device {
                             ddi_func_ctl |= TRANS_DDI_FUNC_CTL_MODE_HDMI;
 
                             // Set HDMI scrambling and high TMDS char rate based on symbol rate > 340 MHz
-                            if timing.pixel_clock > 340_000 {
+                            if mode.clock > 340_000 {
                                 ddi_func_ctl |= transcoder.ddi_func_ctl_hdmi_scrambling
                                     | transcoder.ddi_func_ctl_high_tmds_char_rate;
                             }
@@ -829,19 +896,12 @@ impl Device {
                         }
                     }
 
-                    match (timing.features >> 3) & 0b11 {
-                        // Digital sync, separate
-                        0b11 => {
-                            if (timing.features & (1 << 2)) != 0 {
-                                ddi_func_ctl |= TRANS_DDI_FUNC_CTL_SYNC_POLARITY_VSHIGH;
-                            }
-                            if (timing.features & (1 << 1)) != 0 {
-                                ddi_func_ctl |= TRANS_DDI_FUNC_CTL_SYNC_POLARITY_HSHIGH;
-                            }
-                        }
-                        unsupported => {
-                            log::warn!("unsupported sync {:#x}", unsupported);
-                        }
+                    // Sync polarity
+                    if (mode.flags & drm_sys::DRM_MODE_FLAG_PVSYNC) != 0 {
+                        ddi_func_ctl |= TRANS_DDI_FUNC_CTL_SYNC_POLARITY_VSHIGH;
+                    }
+                    if (mode.flags & drm_sys::DRM_MODE_FLAG_PHSYNC) != 0 {
+                        ddi_func_ctl |= TRANS_DDI_FUNC_CTL_SYNC_POLARITY_HSHIGH;
                     }
 
                     transcoder.ddi_func_ctl.write(ddi_func_ctl);
@@ -873,7 +933,7 @@ impl Device {
                 // Configure voltage swing and related IO settings
                 match input {
                     VideoInput::Hdmi => {
-                        ddi.voltage_swing_hdmi(&self.gttmm, &timing)?;
+                        ddi.voltage_swing_hdmi(&self.gttmm, &mode)?;
                     }
                     VideoInput::Dp => {
                         //TODO ddi.voltage_swing_dp(&self.gttmm)?;
@@ -916,7 +976,7 @@ impl Device {
             const EDID_VIDEO_INPUT_HDMI_B: u8 = (1 << 7) | 0b0011;
             const EDID_VIDEO_INPUT_DP: u8 = (1 << 7) | 0b0101;
             const EDID_VIDEO_INPUT_MASK: u8 = (1 << 7) | 0b1111;
-            let input = match edid_data[20] & EDID_VIDEO_INPUT_MASK {
+            let input = match edid_video_input & EDID_VIDEO_INPUT_MASK {
                 //TODO: how to accurately discover input type?
                 //TODO: HDMI often shows up as undefined, do others?
                 EDID_VIDEO_INPUT_UNDEFINED
@@ -941,6 +1001,7 @@ impl Device {
                 }
             }
         } else {
+            //TODO: allow changing modes at runtime
             log::info!("DDI {} already active", ddi.name);
         }
 

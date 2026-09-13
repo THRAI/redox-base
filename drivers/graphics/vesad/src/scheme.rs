@@ -103,6 +103,7 @@ impl GraphicsAdapter for FbAdapter {
         _objects: &KmsObjects<Self>,
         crtc: &KmsCrtc<Self>,
         state: KmsCrtcState<Self>,
+        _connector_ids: &[KmsObjectId],
     ) -> syscall::Result<()> {
         *crtc.state.lock().unwrap() = state;
         Ok(())

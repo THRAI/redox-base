@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use common::io::{Io, MmioPtr};
-use driver_graphics::kms::objects::KmsFramebuffer;
+use driver_graphics::kms::objects::{KmsFramebuffer, KmsObjectId};
 use drm_fourcc::DrmFourcc;
 use range_alloc::RangeAllocator;
 use syscall::error::Result;
@@ -19,6 +19,7 @@ pub const PLANE_WM_LINES_SHIFT: u32 = 14;
 pub struct Plane {
     pub name: &'static str,
     pub index: usize,
+    pub kms_id: Option<KmsObjectId>,
     pub buf_cfg: MmioPtr<u32>,
     pub color_ctl: Option<MmioPtr<u32>>,
     pub color_ctl_gamma_disable: u32,
@@ -174,6 +175,7 @@ impl Pipe {
                 planes.push(Plane {
                     name,
                     index: j,
+                    kms_id: None,
                     // IHD-OS-KBL-Vol 2c-1.17 PLANE_BUF_CFG
                     buf_cfg: unsafe { gttmm.mmio(0x7027C + i * 0x1000 + j * 0x100)? },
                     // N/A
@@ -231,6 +233,7 @@ impl Pipe {
                 planes.push(Plane {
                     name,
                     index: j,
+                    kms_id: None,
                     // IHD-OS-TGL-Vol 2c-12.21 PLANE_BUF_CFG
                     buf_cfg: unsafe { gttmm.mmio(0x7027C + i * 0x1000 + j * 0x100)? },
                     // IHD-OS-TGL-Vol 2c-12.21 PLANE_COLOR_CTL
@@ -288,6 +291,7 @@ impl Pipe {
                 planes.push(Plane {
                     name,
                     index: j,
+                    kms_id: None,
                     // IHD-OS-ACM-Vol 2c-3.23 PLANE_BUF_CFG
                     buf_cfg: unsafe { gttmm.mmio(0x7057C + i * 0x1000 + j * 0x100)? },
                     // IHD-OS-ACM-Vol 2c-3.23 PLANE_COLOR_CTL

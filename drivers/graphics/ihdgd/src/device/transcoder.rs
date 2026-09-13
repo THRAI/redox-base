@@ -1,4 +1,6 @@
 use common::io::{Io, MmioPtr};
+use driver_graphics::kms::objects::KmsObjectId;
+use drm_sys::drm_mode_modeinfo;
 use syscall::error::Result;
 
 use super::{MmioRegion, Pipe};
@@ -35,6 +37,7 @@ pub struct Transcoder {
     pub clk_sel_shift: u32,
     pub conf: MmioPtr<u32>,
     pub ddi_func_ctl: MmioPtr<u32>,
+    pub ddi_func_ctl_ddi_mask: u32,
     pub ddi_func_ctl_ddi_shift: u32,
     pub ddi_func_ctl_hdmi_scrambling: u32,
     pub ddi_func_ctl_high_tmds_char_rate: u32,
@@ -111,15 +114,19 @@ impl Transcoder {
         eprintln!();
     }
 
-    pub fn modeset(&mut self, pipe: &mut Pipe, timing: &edid::DetailedTiming) {
-        let hactive = (timing.horizontal_active_pixels as u32) - 1;
-        let htotal = hactive + (timing.horizontal_blanking_pixels as u32);
-        let hsync_start = hactive + (timing.horizontal_front_porch as u32);
-        let hsync_end = hsync_start + (timing.horizontal_sync_width as u32);
-        let vactive = (timing.vertical_active_lines as u32) - 1;
-        let vtotal = vactive + (timing.vertical_blanking_lines as u32);
-        let vsync_start = vactive + (timing.vertical_front_porch as u32);
-        let vsync_end = vsync_start + (timing.vertical_sync_width as u32);
+    pub fn ddi_select(&self) -> u32 {
+        (self.ddi_func_ctl.read() & self.ddi_func_ctl_ddi_mask) >> self.ddi_func_ctl_ddi_shift
+    }
+
+    pub fn modeset(&mut self, pipe: &mut Pipe, mode: &drm_mode_modeinfo) {
+        let hactive = (mode.hdisplay - 1) as u32;
+        let htotal = (mode.htotal - 1) as u32;
+        let hsync_start = (mode.hsync_start - 1) as u32;
+        let hsync_end = (mode.hsync_end - 1) as u32;
+        let vactive = (mode.vdisplay - 1) as u32;
+        let vtotal = (mode.vtotal - 1) as u32;
+        let vsync_start = (mode.vsync_start - 1) as u32;
+        let vsync_end = (mode.vsync_end - 1) as u32;
 
         // Configure horizontal sync
         self.htotal.write(hactive | (htotal << 16));
@@ -149,6 +156,7 @@ impl Transcoder {
                 conf: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_DDI_FUNC_CTL
                 ddi_func_ctl: unsafe { gttmm.mmio(0x60400 + i * 0x1000)? },
+                ddi_func_ctl_ddi_mask: 0b111 << 28,
                 ddi_func_ctl_ddi_shift: 28,
                 // HDMI scrambling not supported on Kaby Lake
                 ddi_func_ctl_hdmi_scrambling: 0,
@@ -206,6 +214,7 @@ impl Transcoder {
                 conf: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_DDI_FUNC_CTL
                 ddi_func_ctl: unsafe { gttmm.mmio(0x60400 + i * 0x1000)? },
+                ddi_func_ctl_ddi_mask: 0b1111 << 27,
                 ddi_func_ctl_ddi_shift: 27,
                 ddi_func_ctl_hdmi_scrambling: 1 << 0,
                 ddi_func_ctl_high_tmds_char_rate: 1 << 4,
