@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::rc::Rc;
-use std::{io, mem, ptr};
+use std::{cmp, io, mem, ptr};
 
 pub use alacritty_terminal;
 use alacritty_terminal::event::{Event, EventListener};
@@ -273,11 +273,15 @@ impl TextScreen {
         font: &ConsoleFont,
         default_colors: &Colors,
         term_content: &RenderableContent,
+        screen_lines: usize,
         cell: Indexed<&Cell>,
     ) -> Option<Point<usize>> {
         let Some(point) = point_to_viewport(term_content.display_offset, cell.point) else {
             return None;
         };
+        if point.line >= screen_lines {
+            return None;
+        }
 
         let x = point.column.0 * font.width;
         let y = point.line * font.height;
@@ -337,9 +341,9 @@ impl TextScreen {
     }
 
     fn redraw(&mut self, map: &mut DisplayMap) -> ClipRect {
-        let mut min_changed_x = map.width;
+        let mut min_changed_x = map.width / self.font.width;
         let mut max_changed_x = 0;
-        let mut min_changed_y = map.height;
+        let mut min_changed_y = map.height / self.font.height;
         let mut max_changed_y = 0;
         let mut col_changed = |col| {
             if col < min_changed_x {
@@ -367,6 +371,7 @@ impl TextScreen {
         };
 
         let term_content = self.term.renderable_content();
+        let screen_lines = self.term.grid().screen_lines();
         for line in changed_lines {
             let last_column = self.term.grid().last_column();
             for cell in self
@@ -380,9 +385,14 @@ impl TextScreen {
                 ))
                 .take(self.term.grid().columns())
             {
-                if let Some(point) =
-                    Self::draw_cell(map, &self.font, &self.colors, &term_content, cell)
-                {
+                if let Some(point) = Self::draw_cell(
+                    map,
+                    &self.font,
+                    &self.colors,
+                    &term_content,
+                    screen_lines,
+                    cell,
+                ) {
                     col_changed(point.column.0);
                     line_changed(point.line);
                 }
@@ -399,6 +409,7 @@ impl TextScreen {
                 &self.font,
                 &self.colors,
                 &term_content,
+                screen_lines,
                 Indexed { point, cell },
             ) {
                 col_changed(point.column.0);
@@ -415,6 +426,7 @@ impl TextScreen {
                 &self.font,
                 &self.colors,
                 &term_content,
+                screen_lines,
                 Indexed { point, cell: &cell },
             ) {
                 col_changed(point.column.0);
@@ -426,8 +438,10 @@ impl TextScreen {
         ClipRect::new(
             u16::try_from(min_changed_x).unwrap() * self.font.width as u16,
             u16::try_from(min_changed_y).unwrap() * self.font.height as u16,
-            u16::try_from(max_changed_x + 1).unwrap() * self.font.width as u16,
-            u16::try_from(max_changed_y + 1).unwrap() * self.font.height as u16,
+            u16::try_from(cmp::max(min_changed_x, max_changed_x + 1)).unwrap()
+                * self.font.width as u16,
+            u16::try_from(cmp::max(min_changed_y, max_changed_y + 1)).unwrap()
+                * self.font.height as u16,
         )
     }
 
