@@ -31,7 +31,17 @@ pub struct V2DisplayMap {
 
 impl V2DisplayMap {
     pub fn new(display_handle: DrmHandle) -> io::Result<Self> {
-        let connector_info = display_handle.first_display()?;
+        let resource_handles = display_handle.resource_handles()?;
+
+        let connector_info = resource_handles
+            .connectors()
+            .iter()
+            .map(|&connector| display_handle.get_connector(connector, true))
+            .find(|info| {
+                info.as_ref()
+                    .map_or(true, |info| info.state() == connector::State::Connected)
+            })
+            .ok_or_else(|| io::Error::other("No connected display"))??;
 
         let Some(&mode) = connector_info.modes().get(0) else {
             return Err(io::Error::other("Unable to get first display connector"));
@@ -42,9 +52,7 @@ impl V2DisplayMap {
         };
 
         // FIXME do something smarter that avoids conflicts
-        let Some(&crtc) = display_handle
-            .resource_handles()
-            .unwrap()
+        let Some(&crtc) = resource_handles
             .filter_crtcs(display_handle.get_encoder(encoder)?.possible_crtcs())
             .get(0)
         else {

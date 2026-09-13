@@ -3,7 +3,6 @@ use std::os::fd::{AsFd, BorrowedFd};
 use std::{io, mem, ptr};
 
 use drm::buffer::Buffer;
-use drm::control::connector::{self, State};
 use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
 use drm::control::Device as _;
 use drm::{Device as _, DriverCapability};
@@ -27,16 +26,6 @@ impl DrmHandle {
         let handle = DrmHandle { file };
         assert!(handle.get_driver_capability(DriverCapability::DumbBuffer)? == 1);
         Ok(handle)
-    }
-
-    pub fn first_display(&self) -> io::Result<connector::Info> {
-        for &connector in self.resource_handles().unwrap().connectors() {
-            let info = self.get_connector(connector, true)?;
-            if info.state() == State::Connected {
-                return Ok(info);
-            }
-        }
-        Err(io::Error::other("no connected display"))
     }
 }
 
