@@ -1,8 +1,7 @@
 use driver_graphics::kms::connector::{KmsConnectorDriver, KmsConnectorStatus};
-use driver_graphics::kms::objects::{
-    KmsCrtc, KmsCrtcDriver, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver,
-    KmsPlaneState,
-};
+use driver_graphics::kms::crtc::{KmsCrtc, KmsCrtcDriver, KmsCrtcState};
+use driver_graphics::kms::objects::{KmsObjectId, KmsObjects};
+use driver_graphics::kms::plane::{KmsPlane, KmsPlaneDriver, KmsPlaneState};
 use driver_graphics::{Buffer, Damage, DumbBufferConfig, GraphicsAdapter};
 
 use super::buffer::GpuBuffer;

@@ -1,31 +1,28 @@
 #![feature(macro_metavar_expr)]
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
 use std::marker::PhantomData;
 use std::ops::ControlFlow;
-use std::sync::Arc;
 
-use drm_sys::DRM_CLIENT_NAME_MAX_LEN;
 use inputd::{DisplayHandle, VtEvent, VtEventKind};
 use libredox::Fd;
 use redox_scheme::scheme::{SchemeSync, register_scheme_inner};
 use redox_scheme::{CallerCtx, Socket};
 use scheme_utils::{Blocking, FpathWriter, ResourceOpenResult, ResourceSync, resource_scheme};
 use syscall::schemev2::NewFdFlags;
-use syscall::{EINVAL, Error, MapFlags, Result};
+use syscall::{EINVAL, Error, Result};
 
+use crate::handle::DrmHandle;
 use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState};
-use crate::kms::framebuffer::{KmsFramebuffer, disable_planes_with_fb};
-use crate::kms::objects::{
-    KmsCrtc, KmsCrtcDriver, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver,
-    KmsPlaneState,
-};
-use crate::kms::rc_object::KmsRcObjectRef;
+use crate::kms::crtc::{KmsCrtc, KmsCrtcDriver, KmsCrtcState};
+use crate::kms::objects::{KmsObjectId, KmsObjects};
+use crate::kms::plane::{KmsPlane, KmsPlaneDriver, KmsPlaneState};
 
+mod handle;
 mod ioctl;
 pub mod kms;
 
@@ -377,16 +374,7 @@ impl<T: GraphicsAdapter> ResourceSync for SchemeRoot<T> {
         // Ensure the VT exists such that the rest of the methods can freely access it.
         GraphicsSchemeData::get_or_create_vt(&scheme_data.objects, &mut scheme_data.vts, vt);
 
-        let handle = GraphicsResource::DrmHandle(DrmHandle {
-            vt,
-            client_name: [0; _],
-            unique: None,
-            supports_universal_planes: false,
-            supports_cursor_hotspot: false,
-            fbs: BTreeMap::new(),
-            next_buffer_id: 0,
-            buffers: HashMap::new(),
-        });
+        let handle = GraphicsResource::DrmHandle(DrmHandle::new(vt));
 
         Ok(ResourceOpenResult::ThisScheme {
             data: handle,
@@ -419,92 +407,6 @@ impl<T: GraphicsAdapter> ResourceSync for Control<T> {
             VtEventKind::Activate => scheme_data.activate_vt(vt_event.vt),
         }
         Ok(0)
-    }
-}
-
-#[derive(Debug)]
-struct DrmHandle<T: GraphicsAdapter> {
-    vt: usize,
-    client_name: [u8; DRM_CLIENT_NAME_MAX_LEN as usize],
-    unique: Option<String>,
-    supports_universal_planes: bool,
-    supports_cursor_hotspot: bool,
-    fbs: BTreeMap<KmsObjectId, KmsRcObjectRef<KmsFramebuffer<T>>>,
-    next_buffer_id: u32,
-    buffers: HashMap<u32, Arc<T::Buffer>>,
-}
-
-impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
-    type SchemeData = GraphicsSchemeData<T>;
-    type ResourceEnum = GraphicsResource<T>;
-
-    fn fstat(
-        &mut self,
-        _scheme_data: &mut Self::SchemeData,
-        stat: &mut syscall::Stat,
-    ) -> Result<()> {
-        stat.st_dev = 226 /*DRM_MAJOR*/ << 8;
-        Ok(())
-    }
-
-    fn fpath(
-        &mut self,
-        _scheme_data: &mut Self::SchemeData,
-        w: &mut FpathWriter,
-    ) -> syscall::Result<()> {
-        write!(w, "{}", self.vt).unwrap();
-        Ok(())
-    }
-
-    fn call(
-        &mut self,
-        scheme_data: &mut Self::SchemeData,
-        payload: &mut [u8],
-        metadata: &[u64],
-        _ctx: &CallerCtx,
-    ) -> Result<usize> {
-        let res = ioctl::call_ioctl(
-            &mut scheme_data.adapter,
-            &mut scheme_data.objects,
-            scheme_data.active_vt,
-            &mut scheme_data.vts,
-            self,
-            metadata[0],
-            payload,
-        );
-        scheme_data.objects.remove_all_deferred();
-        res
-    }
-
-    fn mmap_prep(
-        &mut self,
-        scheme_data: &mut Self::SchemeData,
-        offset: u64,
-        _size: usize,
-        _flags: MapFlags,
-    ) -> syscall::Result<usize> {
-        // log::trace!("KSMSG MMAP {} {:?} {} {}", id, _flags, _offset, _size);
-        let framebuffer = self
-            .buffers
-            .get(&((offset as usize / MAP_FAKE_OFFSET_MULTIPLIER) as u32))
-            .ok_or(Error::new(EINVAL))
-            .unwrap();
-        let offset = offset & (MAP_FAKE_OFFSET_MULTIPLIER as u64 - 1);
-        let ptr = T::map_dumb_buffer(&mut scheme_data.adapter, framebuffer);
-        Ok(unsafe { ptr.add(offset as usize) } as usize)
-    }
-
-    fn on_close(self, scheme_data: &mut Self::SchemeData) {
-        for &fb_id in self.fbs.keys() {
-            disable_planes_with_fb(
-                &mut scheme_data.adapter,
-                &mut scheme_data.objects,
-                scheme_data.active_vt,
-                &mut scheme_data.vts,
-                fb_id,
-            );
-        }
-        scheme_data.objects.remove_all_deferred();
     }
 }
 

@@ -3,9 +3,9 @@ use std::convert::TryInto;
 use std::ptr::{self, NonNull};
 
 use driver_graphics::kms::connector::{KmsConnectorDriver, KmsConnectorStatus};
-use driver_graphics::kms::objects::{
-    KmsCrtc, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneState,
-};
+use driver_graphics::kms::crtc::{KmsCrtc, KmsCrtcState};
+use driver_graphics::kms::objects::{KmsObjectId, KmsObjects};
+use driver_graphics::kms::plane::{KmsPlane, KmsPlaneState};
 use driver_graphics::{Buffer, Damage, DumbBufferConfig, GraphicsAdapter};
 use syscall::PAGE_SIZE;
 
