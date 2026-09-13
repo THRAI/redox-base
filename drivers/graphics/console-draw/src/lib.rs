@@ -22,11 +22,11 @@ use graphics_ipc::{CpuBackedBuffer, DrmHandle};
 use orbclient::FONT;
 
 pub struct V2DisplayMap {
-    pub display_handle: DrmHandle,
-    pub connector: connector::Handle,
+    display_handle: DrmHandle,
+    connector: connector::Handle,
     crtc: crtc::Handle,
     fb: framebuffer::Handle,
-    pub buffer: CpuBackedBuffer,
+    buffer: CpuBackedBuffer,
 }
 
 impl V2DisplayMap {
@@ -74,6 +74,10 @@ impl V2DisplayMap {
             fb,
             buffer,
         })
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        self.buffer.buffer().size()
     }
 
     unsafe fn console_map(&mut self) -> DisplayMap {

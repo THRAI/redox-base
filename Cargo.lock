@@ -850,7 +850,6 @@ dependencies = [
  "common",
  "console-draw",
  "daemon",
- "drm",
  "graphics-ipc",
  "inputd",
  "libredox",
