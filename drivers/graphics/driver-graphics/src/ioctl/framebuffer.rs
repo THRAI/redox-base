@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use drm_fourcc::DrmFourcc;
 use syscall::{EINVAL, ENOENT, Error};
@@ -57,19 +56,19 @@ pub(super) fn mode_add_fb<T: GraphicsAdapter>(
 
     // FIXME enforce driver reported framebuffer size requirements
 
-    let fb = adapter.create_framebuffer(buffer);
-
-    let id = objects.add_framebuffer(KmsFramebuffer {
-        closed: AtomicBool::new(false),
+    let driver_data = adapter.create_framebuffer(buffer);
+    let fb = objects.add_framebuffer(KmsFramebuffer {
         width: data.width(),
         height: data.height(),
         pixel_format,
         pitch: data.pitch(),
         buffer: buffer.clone(),
-        driver_data: fb,
+        driver_data,
     });
+    let fb_id = fb.id();
+    handle.fbs.insert(fb_id, fb);
 
-    data.set_fb_id(id.0);
+    data.set_fb_id(fb_id.0);
 
     Ok(0)
 }
@@ -79,10 +78,14 @@ pub(super) fn mode_rm_fb<T: GraphicsAdapter>(
     objects: &mut KmsObjects<T>,
     active_vt: usize,
     vts: &mut HashMap<usize, VtState<T>>,
+    handle: &mut DrmHandle<T>,
     data: redox_ioctl::drm::StandinForUint<'_>,
 ) -> Result<usize, Error> {
     let fb_id = KmsObjectId(data.inner());
-    objects.remove_framebuffer(fb_id)?;
+
+    if handle.fbs.remove(&fb_id).is_none() {
+        return Err(Error::new(ENOENT));
+    }
 
     disable_planes_with_fb(adapter, objects, active_vt, vts, fb_id);
 
@@ -96,7 +99,8 @@ pub(super) fn mode_dirtyfb<T: GraphicsAdapter>(
     handle: &mut DrmHandle<T>,
     data: redox_ioctl::drm::DrmModeFbDirtyCmd<'_>,
 ) -> Result<usize, Error> {
-    let fb = objects.get_framebuffer(KmsObjectId(data.fb_id()))?;
+    let fb_id = KmsObjectId(data.fb_id());
+    let fb = objects.get_framebuffer(fb_id)?;
 
     let damage = data
         .clips_ptr()
@@ -119,7 +123,7 @@ pub(super) fn mode_dirtyfb<T: GraphicsAdapter>(
     if handle.vt == active_vt {
         for plane in objects.planes() {
             let state = plane.state.lock().unwrap().clone();
-            if state.fb_id == Some(KmsObjectId(data.fb_id())) {
+            if state.fb.as_ref() == Some(&fb) {
                 adapter.set_plane(&objects, plane, state, Some(damage))?;
             }
         }
@@ -143,19 +147,19 @@ pub(super) fn mode_add_fb2<T: GraphicsAdapter>(
 
     // FIXME enforce driver reported framebuffer size requirements
 
-    let fb = adapter.create_framebuffer(buffer);
-
-    let id = objects.add_framebuffer(KmsFramebuffer {
-        closed: AtomicBool::new(false),
+    let driver_data = adapter.create_framebuffer(buffer);
+    let fb = objects.add_framebuffer(KmsFramebuffer {
         width: data.width(),
         height: data.height(),
         pixel_format: DrmFourcc::try_from(data.pixel_format()).map_err(|_| Error::new(EINVAL))?,
         pitch: data.pitches()[0],
         buffer: buffer.clone(),
-        driver_data: fb,
+        driver_data,
     });
+    let fb_id = fb.id();
+    handle.fbs.insert(fb_id, fb);
 
-    data.set_fb_id(id.0);
+    data.set_fb_id(fb_id.0);
 
     Ok(0)
 }
@@ -183,19 +187,13 @@ pub(super) fn mode_get_fb2<T: GraphicsAdapter>(
 }
 
 pub(super) fn mode_close_fb<T: GraphicsAdapter>(
-    objects: &mut KmsObjects<T>,
-    vts: &mut HashMap<usize, VtState<T>>,
+    handle: &mut DrmHandle<T>,
     data: redox_ioctl::drm::DrmModeClosefb<'_>,
 ) -> Result<usize, Error> {
     let fb_id = KmsObjectId(data.fb_id());
-    let fb = objects.get_framebuffer(fb_id)?;
 
-    if fb.closed.swap(true, Ordering::SeqCst) {
+    if handle.fbs.remove(&fb_id).is_none() {
         return Err(Error::new(ENOENT));
-    }
-
-    if !VtState::fb_has_any_use(vts, fb_id) {
-        objects.remove_framebuffer(fb_id).unwrap();
     }
 
     Ok(0)

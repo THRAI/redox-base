@@ -110,7 +110,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             framebuffer::mode_add_fb(adapter, objects, handle, data)
         }),
         ipc::MODE_RM_FB => ipc::StandinForUint::with(payload, |data| {
-            framebuffer::mode_rm_fb(adapter, objects, active_vt, vts, data)
+            framebuffer::mode_rm_fb(adapter, objects, active_vt, vts, handle, data)
         }),
         ipc::MODE_DIRTYFB => ipc::DrmModeFbDirtyCmd::with(payload, |data| {
             framebuffer::mode_dirtyfb(adapter, objects, active_vt, handle, data)
@@ -199,15 +199,12 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
 
             let new_state =
                 &mut vts.get_mut(&handle.vt).unwrap().plane_state[plane.plane_index as usize];
-            let fb_id = if data.fb_id() != 0 {
-                let fb_id = KmsObjectId(data.fb_id());
-                objects.get_framebuffer(fb_id)?;
-                Some(fb_id)
+            let fb = if data.fb_id() != 0 {
+                Some(objects.get_framebuffer(KmsObjectId(data.fb_id()))?)
             } else {
                 None
             };
-            let old_fb_id = new_state.fb_id;
-            new_state.fb_id = fb_id;
+            new_state.fb = fb;
             new_state.crtc_id = Some(crtc_id);
             new_state.src_rect = KmsRect {
                 x: data.src_x(),
@@ -226,12 +223,6 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
                 adapter.set_plane(&objects, plane, new_state.clone(), None)?;
             }
 
-            if let Some(old_fb_id) = old_fb_id {
-                if !VtState::fb_has_any_use(vts, old_fb_id) {
-                    objects.remove_framebuffer_if_closed(old_fb_id);
-                }
-            }
-
             Ok(0)
         }),
         ipc::MODE_GET_PLANE => ipc::DrmModeGetPlane::with(payload, |mut data| {
@@ -239,7 +230,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
             let state = plane.state.lock().unwrap();
 
             data.set_crtc_id(state.crtc_id.map_or(0, |id| id.0));
-            data.set_fb_id(state.fb_id.unwrap_or(KmsObjectId::INVALID).0);
+            data.set_fb_id(state.fb.as_ref().map_or(0, |fb| fb.id().0));
             data.set_possible_crtcs(plane.possible_crtcs);
             data.set_format_type_ptr(&[DrmFourcc::Argb8888 as u32]);
             Ok(0)
@@ -256,9 +247,9 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
         ipc::MODE_GET_FB2 => ipc::DrmModeFbCmd2::with(payload, |data| {
             framebuffer::mode_get_fb2(objects, handle, data)
         }),
-        ipc::MODE_CLOSE_FB => ipc::DrmModeClosefb::with(payload, |data| {
-            framebuffer::mode_close_fb(objects, vts, data)
-        }),
+        ipc::MODE_CLOSE_FB => {
+            ipc::DrmModeClosefb::with(payload, |data| framebuffer::mode_close_fb(handle, data))
+        }
         ipc::SET_CLIENT_NAME => ipc::DrmSetClientName::with(payload, |data| {
             if data.name().len() > ipc::DRM_CLIENT_NAME_MAX_LEN as usize {
                 return Err(Error::new(EINVAL));

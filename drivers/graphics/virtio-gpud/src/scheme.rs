@@ -471,11 +471,6 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         damage: Option<Damage>,
     ) -> syscall::Result<()> {
         futures::executor::block_on(async {
-            let framebuffer = new_plane_state
-                .fb_id
-                .map(|fb_id| objects.get_framebuffer(fb_id))
-                .transpose()?;
-
             let Some(crtc_id) = new_plane_state.crtc_id else {
                 // FIXME disable output?
                 return Ok(());
@@ -491,12 +486,12 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                 let scanout_id = connector.driver_data.scanout_id;
 
                 if plane.driver_data.is_cursor {
-                    if let Some(framebuffer) = framebuffer {
+                    if let Some(new_fb) = &new_plane_state.fb {
                         if damage.map_or(true, |damage| damage.width != 0 && damage.height != 0)
-                            || plane.state.lock().unwrap().fb_id != new_plane_state.fb_id
+                            || plane.state.lock().unwrap().fb.as_ref() != Some(new_fb)
                         {
                             self.update_cursor(
-                                &framebuffer.buffer,
+                                &new_fb.buffer,
                                 scanout_id,
                                 new_plane_state.crtc_rect.x,
                                 new_plane_state.crtc_rect.y,
@@ -506,7 +501,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                             .await;
                         } else {
                             self.move_cursor(
-                                &framebuffer.buffer,
+                                &new_fb.buffer,
                                 scanout_id,
                                 new_plane_state.crtc_rect.x,
                                 new_plane_state.crtc_rect.y,
@@ -514,7 +509,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                             .await;
                         }
                     } else {
-                        if plane.state.lock().unwrap().fb_id.is_some() {
+                        if plane.state.lock().unwrap().fb.is_some() {
                             self.disable_cursor(scanout_id).await;
                         }
                     }
@@ -522,7 +517,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
                     continue;
                 }
 
-                let Some(framebuffer) = framebuffer else {
+                let Some(framebuffer) = &new_plane_state.fb else {
                     let scanout_request = Dma::new(SetScanout::new(
                         scanout_id,
                         ResourceId::NONE,

@@ -544,7 +544,7 @@ impl Device {
                         connector.update_from_size(fb.width, fb.height);
                     }
 
-                    let fb_id = objects.add_framebuffer(fb);
+                    let fb = objects.add_framebuffer(fb);
 
                     objects
                         .get_plane(plane.kms_id.unwrap())
@@ -552,7 +552,7 @@ impl Device {
                         .state
                         .lock()
                         .unwrap()
-                        .fb_id = Some(fb_id);
+                        .fb = Some(fb);
                 }
             }
         }

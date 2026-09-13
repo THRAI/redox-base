@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Mutex;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use drm_sys::{
     DRM_MODE_OBJECT_BLOB, DRM_MODE_OBJECT_CONNECTOR, DRM_MODE_OBJECT_CRTC, DRM_MODE_OBJECT_ENCODER,
@@ -17,28 +18,34 @@ use crate::kms::properties::{
     ACTIVE, CRTC_H, CRTC_ID, CRTC_W, CRTC_X, CRTC_Y, FB_ID, KmsBlob, KmsProperty, KmsPropertyData,
     SRC_H, SRC_W, SRC_X, SRC_Y, define_object_props, init_standard_props, type_,
 };
+use crate::kms::rc_object::{KmsRcObject, KmsRcObjectRef};
 
 #[derive(Debug)]
 pub struct KmsObjects<T: GraphicsAdapter> {
     next_id: KmsObjectId,
+    pub(super) remove_tx: Sender<KmsObjectId>,
+    pub(super) remove_rx: Receiver<KmsObjectId>,
     pub(super) connectors: Vec<KmsObjectId>,
     pub(super) encoders: Vec<KmsObjectId>,
     crtcs: Vec<KmsObjectId>,
     planes: Vec<KmsObjectId>,
-    pub(super) framebuffers: Vec<KmsObjectId>,
+    pub(super) framebuffers: BTreeSet<KmsObjectId>,
     pub(super) objects: HashMap<KmsObjectId, KmsObject<T>>,
     _marker: PhantomData<T>,
 }
 
 impl<T: GraphicsAdapter> KmsObjects<T> {
     pub(crate) fn new() -> Self {
+        let (remove_tx, remove_rx) = mpsc::channel();
         let mut objects = KmsObjects {
             next_id: KmsObjectId(1),
+            remove_tx,
+            remove_rx,
             connectors: vec![],
             encoders: vec![],
             crtcs: vec![],
             planes: vec![],
-            framebuffers: vec![],
+            framebuffers: BTreeSet::new(),
             objects: HashMap::new(),
             _marker: PhantomData,
         };
@@ -50,8 +57,18 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
         let id = self.next_id;
         self.objects.insert(id, data.into_object());
         self.next_id.0 += 1;
-
         id
+    }
+
+    pub(super) fn add_with<U: KmsObjectKind<T>, V>(
+        &mut self,
+        data: impl FnOnce(KmsObjectId) -> (U, V),
+    ) -> (KmsObjectId, V) {
+        let id = self.next_id;
+        let (data, ret) = data(id);
+        self.objects.insert(id, data.into_object());
+        self.next_id.0 += 1;
+        (id, ret)
     }
 
     pub(super) fn get<U: KmsObjectKind<T>>(&self, id: KmsObjectId) -> Result<&U> {
@@ -73,6 +90,27 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
         self.objects.remove(&id).unwrap();
 
         Ok(())
+    }
+
+    /// Remove all objects which had their last [`KmsRcObjectRef`] dropped.
+    pub(crate) fn remove_all_deferred(&mut self) {
+        while let Ok(id) = self.remove_rx.try_recv() {
+            let obj = self.objects.remove(&id).unwrap();
+            match obj {
+                KmsObject::Crtc(_)
+                | KmsObject::Connector(_)
+                | KmsObject::Encoder(_)
+                | KmsObject::Property(_)
+                | KmsObject::Plane(_) => {
+                    unreachable!("object shouldn't use deferred remove")
+                }
+                KmsObject::Framebuffer(fb) => {
+                    self.framebuffers.remove(&id);
+                    KmsRcObject::assert_removed(fb);
+                }
+                KmsObject::Blob(_) => todo!(),
+            }
+        }
     }
 
     pub(crate) fn object_type(&self, id: KmsObjectId) -> Result<u32> {
@@ -175,7 +213,7 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
             plane_type,
             properties: KmsPlane::base_properties(),
             state: Mutex::new(KmsPlaneState {
-                fb_id: None,
+                fb: None,
                 crtc_id: None,
                 src_rect: KmsRect {
                     x: 0u32,
@@ -214,7 +252,7 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct KmsObjectId(pub(crate) u32);
 
 impl KmsObjectId {
@@ -272,7 +310,7 @@ define_object_kinds! { <T>
     Encoder(KmsEncoder) = DRM_MODE_OBJECT_ENCODER,
     Property(KmsProperty) = DRM_MODE_OBJECT_PROPERTY,
     Plane(KmsPlane<T>) = DRM_MODE_OBJECT_PLANE,
-    Framebuffer(KmsFramebuffer<T>) = DRM_MODE_OBJECT_FB,
+    Framebuffer(KmsRcObject<KmsFramebuffer<T>>) = DRM_MODE_OBJECT_FB,
     Blob(KmsBlob) = DRM_MODE_OBJECT_BLOB,
 }
 
@@ -336,7 +374,7 @@ pub struct KmsPlane<T: GraphicsAdapter> {
 
 #[derive(Debug)]
 pub struct KmsPlaneState<T: GraphicsAdapter> {
-    pub fb_id: Option<KmsObjectId>,
+    pub fb: Option<KmsRcObjectRef<KmsFramebuffer<T>>>,
     pub crtc_id: Option<KmsObjectId>,
     pub src_rect: KmsRect<u32>,
     pub crtc_rect: KmsRect<i32>,
@@ -347,7 +385,7 @@ pub struct KmsPlaneState<T: GraphicsAdapter> {
 impl<T: GraphicsAdapter> Clone for KmsPlaneState<T> {
     fn clone(&self) -> Self {
         Self {
-            fb_id: self.fb_id.clone(),
+            fb: self.fb.clone(),
             crtc_id: self.crtc_id.clone(),
             src_rect: self.src_rect.clone(),
             crtc_rect: self.crtc_rect.clone(),
@@ -362,7 +400,7 @@ define_object_props!(object, KmsPlane<T: GraphicsAdapter> {
         get => object.plane_type as u64,
     }
     FB_ID {
-        get => u64::from(object.state.lock().unwrap().fb_id.map_or(0, |id| id.0)),
+        get => u64::from(object.state.lock().unwrap().fb.as_ref().map_or(0, |fb| fb.id().0)),
     }
     CRTC_ID {
         get => u64::from(object.state.lock().unwrap().crtc_id.map_or(0, |id| id.0)),

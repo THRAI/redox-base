@@ -120,13 +120,6 @@ impl GraphicsAdapter for FbAdapter {
             return Ok(());
         };
 
-        let buffer = new_plane_state
-            .fb_id
-            .map(|fb_id| objects.get_framebuffer(fb_id))
-            .transpose()?;
-
-        *plane.state.lock().unwrap() = new_plane_state;
-
         for connector in objects.connectors() {
             let connector = connector.lock().unwrap();
 
@@ -137,7 +130,7 @@ impl GraphicsAdapter for FbAdapter {
             let framebuffer_id = connector.driver_data.framebuffer_id;
             let framebuffer = &mut self.framebuffers[framebuffer_id];
 
-            if let Some(buffer) = buffer {
+            if let Some(buffer) = &new_plane_state.fb {
                 buffer.buffer.sync(framebuffer, damage)
             } else {
                 let onscreen_ptr = framebuffer.onscreen as *mut u32; // FIXME use as_mut_ptr once stable
@@ -152,6 +145,8 @@ impl GraphicsAdapter for FbAdapter {
                 }
             }
         }
+
+        *plane.state.lock().unwrap() = new_plane_state;
 
         Ok(())
     }

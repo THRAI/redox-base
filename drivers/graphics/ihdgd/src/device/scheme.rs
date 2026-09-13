@@ -163,24 +163,19 @@ impl GraphicsAdapter for Device {
 
     fn set_plane(
         &mut self,
-        objects: &KmsObjects<Self>,
+        _objects: &KmsObjects<Self>,
         plane: &KmsPlane<Self>,
         new_plane_state: KmsPlaneState<Self>,
         _damage: Option<Damage>,
     ) -> syscall::Result<()> {
-        let buffer = new_plane_state
-            .fb_id
-            .map(|fb_id| objects.get_framebuffer(fb_id))
-            .transpose()?;
-
-        *plane.state.lock().unwrap() = new_plane_state;
-
         if let Some(plane_hw) = self.pipes[plane.driver_data.pipe_idx]
             .planes
             .get_mut(plane.driver_data.plane_idx)
         {
-            plane_hw.set_framebuffer(buffer);
+            plane_hw.set_framebuffer(new_plane_state.fb.as_deref());
         }
+
+        *plane.state.lock().unwrap() = new_plane_state;
 
         Ok(())
     }

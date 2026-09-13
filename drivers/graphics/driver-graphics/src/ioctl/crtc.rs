@@ -19,7 +19,7 @@ pub(super) fn get_crtc<T: GraphicsAdapter>(
         .state
         .lock()
         .unwrap();
-    data.set_fb_id(primary_plane_state.fb_id.unwrap_or(KmsObjectId::INVALID).0);
+    data.set_fb_id(primary_plane_state.fb.as_ref().map_or(0, |fb| fb.id().0));
     data.set_x(primary_plane_state.src_rect.x >> 16);
     data.set_y(primary_plane_state.src_rect.y >> 16);
     data.set_gamma_size(crtc.gamma_size);
@@ -53,10 +53,8 @@ pub(super) fn set_crtc<T: GraphicsAdapter>(
         .iter()
         .map(|&id| objects.get_connector(id))
         .collect::<Result<Vec<&Mutex<KmsConnector<T>>>, _>>()?;
-    let fb_id = if data.fb_id() != 0 {
-        let fb_id = KmsObjectId(data.fb_id());
-        objects.get_framebuffer(fb_id)?;
-        Some(fb_id)
+    let fb = if data.fb_id() != 0 {
+        Some(objects.get_framebuffer(KmsObjectId(data.fb_id()))?)
     } else {
         None
     };
@@ -77,8 +75,7 @@ pub(super) fn set_crtc<T: GraphicsAdapter>(
         new_connector_state.crtc_id = crtc_id;
     }
     new_crtc_state.mode = mode;
-    let old_fb_id = new_plane_state.fb_id;
-    new_plane_state.fb_id = fb_id;
+    new_plane_state.fb = fb;
     new_plane_state.crtc_id = Some(crtc_id);
     if handle.vt == active_vt {
         for &connector in &connectors {
@@ -88,12 +85,6 @@ pub(super) fn set_crtc<T: GraphicsAdapter>(
         }
         adapter.set_crtc(&objects, crtc, new_crtc_state.clone(), &connector_ids)?;
         adapter.set_plane(&objects, plane, new_plane_state.clone(), None)?;
-    }
-
-    if let Some(old_fb_id) = old_fb_id {
-        if !VtState::fb_has_any_use(vts, old_fb_id) {
-            objects.remove_framebuffer_if_closed(old_fb_id);
-        }
     }
 
     Ok(0)
