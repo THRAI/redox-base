@@ -94,7 +94,7 @@ impl V2DisplayMap {
         }
     }
 
-    pub fn dirty_fb(&mut self, damage: ClipRect) -> io::Result<()> {
+    fn dirty_fb(&mut self, damage: ClipRect) -> io::Result<()> {
         self.buffer.sync_rect(
             u32::from(damage.x1()),
             u32::from(damage.y1()),
@@ -323,17 +323,12 @@ impl TextScreen {
         Some(point)
     }
 
-    pub fn write(
-        &mut self,
-        map: &mut V2DisplayMap,
-        buf: &[u8],
-        input: &mut VecDeque<u8>,
-    ) -> ClipRect {
-        let map = unsafe { &mut map.console_map() };
+    pub fn write(&mut self, map: &mut V2DisplayMap, buf: &[u8], input: &mut VecDeque<u8>) {
+        let console_map = unsafe { &mut map.console_map() };
 
         self.term.resize(TermSize::new(
-            map.width / self.font.width,
-            map.height / self.font.height,
+            console_map.width / self.font.width,
+            console_map.height / self.font.height,
         ));
 
         self.vte_parser.advance(&mut self.term, buf);
@@ -341,7 +336,9 @@ impl TextScreen {
 
         input.extend(self.term_input.borrow_mut().drain(..));
 
-        self.redraw(map)
+        let damage = self.redraw(console_map);
+
+        map.dirty_fb(damage).unwrap();
     }
 
     fn redraw(&mut self, map: &mut DisplayMap) -> ClipRect {

@@ -166,8 +166,7 @@ impl TextScreen {
                 }
             }
 
-            let damage = self.inner.write(map, buf, &mut self.input);
-            map.dirty_fb(damage).unwrap();
+            self.inner.write(map, buf, &mut self.input);
         }
 
         Ok(buf.len())

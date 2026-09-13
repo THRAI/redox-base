@@ -191,8 +191,7 @@ impl Fbbootlog {
             _ => return,
         }
         if let Some(map) = &mut self.display_map {
-            let damage = self.text_screen.write(map, &[], &mut VecDeque::new());
-            map.dirty_fb(damage).unwrap();
+            self.text_screen.write(map, &[], &mut VecDeque::new());
         }
     }
 
@@ -207,8 +206,7 @@ impl Fbbootlog {
                 }
             }
 
-            let damage = self.text_screen.write(map, buf, &mut VecDeque::new());
-            map.dirty_fb(damage).unwrap();
+            self.text_screen.write(map, buf, &mut VecDeque::new());
         }
     }
 }
