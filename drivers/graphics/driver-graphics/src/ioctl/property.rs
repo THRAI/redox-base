@@ -83,7 +83,7 @@ pub(super) fn mode_get_prop_blob<T: GraphicsAdapter>(
     mut data: redox_ioctl::drm::DrmModeGetBlob<'_>,
 ) -> Result<usize, Error> {
     let blob = objects.get_blob(KmsObjectId(data.blob_id()))?;
-    data.set_data(&blob);
+    data.set_data(blob.data());
     Ok(0)
 }
 

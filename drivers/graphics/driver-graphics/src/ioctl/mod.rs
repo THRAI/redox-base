@@ -67,6 +67,9 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
         ipc::MODE_CURSOR => ipc::DrmModeCursor::with(payload, |data| {
             cursor::mode_cursor(adapter, objects, active_vt, vts, handle, data)
         }),
+        ipc::MODE_SETGAMMA => ipc::DrmModeCrtcLut::with(payload, |data| {
+            crtc::set_gamma(adapter, objects, vts, handle, data)
+        }),
         ipc::MODE_GET_ENCODER => ipc::DrmModeGetEncoder::with(payload, |mut data| {
             let encoder = objects.get_encoder(KmsObjectId(data.encoder_id()))?;
             data.set_crtc_id(encoder.crtc_id.0);
