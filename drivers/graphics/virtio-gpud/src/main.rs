@@ -581,6 +581,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
                 scheme
                     .tick()
                     .expect("virtio-gpud: failed to process scheme events");
+                futures::executor::block_on(scheme.adapter().unref_all_delayed());
             }
             Source::Interrupt => loop {
                 let before_gen = device.transport.config_generation();

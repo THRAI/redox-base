@@ -1,7 +1,7 @@
 #![feature(macro_metavar_expr)]
 
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
@@ -19,10 +19,12 @@ use syscall::schemev2::NewFdFlags;
 use syscall::{EINVAL, Error, MapFlags, Result};
 
 use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState};
+use crate::kms::framebuffer::{KmsFramebuffer, disable_planes_with_fb};
 use crate::kms::objects::{
     KmsCrtc, KmsCrtcDriver, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver,
     KmsPlaneState,
 };
+use crate::kms::rc_object::KmsRcObjectRef;
 
 mod ioctl;
 pub mod kms;
@@ -267,21 +269,6 @@ struct VtState<T: GraphicsAdapter> {
     plane_state: Vec<KmsPlaneState<T>>,
 }
 
-impl<T: GraphicsAdapter> VtState<T> {
-    fn fb_has_any_use(vts: &HashMap<usize, Self>, fb_id: KmsObjectId) -> bool {
-        let mut has_any_use = false;
-        for vt_data in vts.values() {
-            for plane_state in vt_data.plane_state.iter() {
-                if plane_state.fb_id == Some(fb_id) {
-                    has_any_use = true;
-                    break;
-                }
-            }
-        }
-        has_any_use
-    }
-}
-
 impl<T: GraphicsAdapter> GraphicsSchemeData<T> {
     fn get_or_create_vt<'a>(
         objects: &KmsObjects<T>,
@@ -396,7 +383,8 @@ impl<T: GraphicsAdapter> ResourceSync for SchemeRoot<T> {
             unique: None,
             supports_universal_planes: false,
             supports_cursor_hotspot: false,
-            next_id: 0,
+            fbs: BTreeMap::new(),
+            next_buffer_id: 0,
             buffers: HashMap::new(),
         });
 
@@ -441,7 +429,8 @@ struct DrmHandle<T: GraphicsAdapter> {
     unique: Option<String>,
     supports_universal_planes: bool,
     supports_cursor_hotspot: bool,
-    next_id: u32,
+    fbs: BTreeMap<KmsObjectId, KmsRcObjectRef<KmsFramebuffer<T>>>,
+    next_buffer_id: u32,
     buffers: HashMap<u32, Arc<T::Buffer>>,
 }
 
@@ -474,7 +463,7 @@ impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
         metadata: &[u64],
         _ctx: &CallerCtx,
     ) -> Result<usize> {
-        ioctl::call_ioctl(
+        let res = ioctl::call_ioctl(
             &mut scheme_data.adapter,
             &mut scheme_data.objects,
             scheme_data.active_vt,
@@ -482,7 +471,9 @@ impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
             self,
             metadata[0],
             payload,
-        )
+        );
+        scheme_data.objects.remove_all_deferred();
+        res
     }
 
     fn mmap_prep(
@@ -501,6 +492,19 @@ impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
         let offset = offset & (MAP_FAKE_OFFSET_MULTIPLIER as u64 - 1);
         let ptr = T::map_dumb_buffer(&mut scheme_data.adapter, framebuffer);
         Ok(unsafe { ptr.add(offset as usize) } as usize)
+    }
+
+    fn on_close(self, scheme_data: &mut Self::SchemeData) {
+        for &fb_id in self.fbs.keys() {
+            disable_planes_with_fb(
+                &mut scheme_data.adapter,
+                &mut scheme_data.objects,
+                scheme_data.active_vt,
+                &mut scheme_data.vts,
+                fb_id,
+            );
+        }
+        scheme_data.objects.remove_all_deferred();
     }
 }
 

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
 
 use drm_fourcc::DrmFourcc;
 use drm_sys::{DRM_MODE_CURSOR_BO, DRM_MODE_CURSOR_MOVE};
 use syscall::{EINVAL, ENXIO, Error};
 
-use crate::kms::objects::{KmsFramebuffer, KmsObjectId, KmsObjects, KmsRect};
+use crate::kms::framebuffer::KmsFramebuffer;
+use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
 use crate::{Damage, DrmHandle, GraphicsAdapter, VtState};
 
 pub(super) fn mode_cursor<T: GraphicsAdapter>(
@@ -83,26 +83,24 @@ fn cursor_inner<T: GraphicsAdapter>(
     };
     let plane_index = objects.get_plane(plane).unwrap().plane_index as usize;
     let new_state = &mut vts.get_mut(&handle.vt).unwrap().plane_state[plane_index];
-    let old_fb_id = new_state.fb_id;
     new_state.crtc_id = Some(crtc_id);
 
     if flags & DRM_MODE_CURSOR_BO != 0 {
         if handle_id == 0 {
-            new_state.fb_id = None;
+            new_state.fb = None;
         } else {
             let buffer = handle.buffers.get(&handle_id).ok_or(Error::new(EINVAL))?;
-            let fb = adapter.create_framebuffer(buffer);
-            let fb_id = objects.add_framebuffer(KmsFramebuffer {
-                closed: AtomicBool::new(true),
+            let driver_data = adapter.create_framebuffer(buffer);
+            let fb = objects.add_framebuffer(KmsFramebuffer {
                 width,
                 height,
                 pixel_format: DrmFourcc::Argb8888,
                 pitch: width * 4,
                 buffer: buffer.clone(),
-                driver_data: fb,
+                driver_data,
             });
 
-            new_state.fb_id = Some(fb_id);
+            new_state.fb = Some(fb);
             new_state.src_rect = KmsRect {
                 x: 0,
                 y: 0,
@@ -131,12 +129,6 @@ fn cursor_inner<T: GraphicsAdapter>(
             Some(Damage { x: 0, y: 0, width: 0, height: 0 })
         };
         adapter.set_plane(&objects, plane, new_state.clone(), damage)?;
-    }
-
-    if let Some(old_fb_id) = old_fb_id {
-        if !VtState::fb_has_any_use(vts, old_fb_id) {
-            objects.remove_framebuffer_if_closed(old_fb_id);
-        }
     }
 
     Ok(0)
