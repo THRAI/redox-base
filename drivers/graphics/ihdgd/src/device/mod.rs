@@ -109,6 +109,34 @@ pub struct InterruptRegs {
     pub ier: MmioPtr<u32>,
 }
 
+impl InterruptRegs {
+    pub unsafe fn new(gttmm: &MmioRegion, base: usize) -> Result<Self> {
+        Ok(InterruptRegs {
+            isr: unsafe { gttmm.mmio(base + 0x0)? },
+            imr: unsafe { gttmm.mmio(base + 0x4)? },
+            iir: unsafe { gttmm.mmio(base + 0x8)? },
+            ier: unsafe { gttmm.mmio(base + 0xC)? },
+        })
+    }
+
+    /// Enable interrupts with mask
+    pub fn enable(&mut self, mask: u32) {
+        // Set interrupt enable mask
+        self.ier.write(mask);
+        // Clear identity register
+        self.iir.write(self.iir.read());
+        // Unmask all interrupts
+        self.imr.write(0);
+    }
+
+    /// Read pending interrupts
+    pub fn pending(&mut self) -> u32 {
+        let mask = self.iir.read();
+        self.iir.write(mask);
+        mask
+    }
+}
+
 pub struct Interrupter {
     change_detects: Vec<ChangeDetect>,
     display_int_ctl: MmioPtr<u32>,
@@ -334,12 +362,7 @@ impl Device {
                     gfx_mstr_intr: None,
                     gfx_mstr_intr_display: 0,
                     gfx_mstr_intr_enable: 0,
-                    sde_interrupt: InterruptRegs {
-                        isr: unsafe { gttmm.mmio(0xC4000)? },
-                        imr: unsafe { gttmm.mmio(0xC4004)? },
-                        iir: unsafe { gttmm.mmio(0xC4008)? },
-                        ier: unsafe { gttmm.mmio(0xC400C)? },
-                    },
+                    sde_interrupt: unsafe { InterruptRegs::new(&gttmm, 0xC4000)? },
                 };
 
                 // IHD-OS-KBL-Vol 12-1.17
@@ -383,12 +406,7 @@ impl Device {
                     gfx_mstr_intr: Some(unsafe { gttmm.mmio(0x190010)? }),
                     gfx_mstr_intr_display: 1 << 16,
                     gfx_mstr_intr_enable: 1 << 31,
-                    sde_interrupt: InterruptRegs {
-                        isr: unsafe { gttmm.mmio(0xC4000)? },
-                        imr: unsafe { gttmm.mmio(0xC4004)? },
-                        iir: unsafe { gttmm.mmio(0xC4008)? },
-                        ier: unsafe { gttmm.mmio(0xC400C)? },
-                    },
+                    sde_interrupt: unsafe { InterruptRegs::new(&gttmm, 0xC4000)? },
                 };
             }
         }
@@ -572,13 +590,12 @@ impl Device {
                     mask |= sde_interrupt_hotplug;
                 }
             }
-            let sde_int = &mut self.int.sde_interrupt;
             // Enable DDI hotplug interrupts
-            sde_int.ier.write(mask);
-            // Clear identity register
-            sde_int.iir.write(sde_int.iir.read());
-            // Unmask all interrupts
-            sde_int.imr.write(0);
+            self.int.sde_interrupt.enable(mask);
+        }
+        // Enable pipe vblank interrupts
+        for pipe in self.pipes.iter_mut() {
+            pipe.interrupt.enable(1);
         }
         // Enable display interrupts
         self.int
@@ -1011,17 +1028,22 @@ impl Device {
     pub fn handle_display_irq(&mut self) -> bool {
         let display_ints = self.int.display_int_ctl.read() & !self.int.display_int_ctl_enable;
         if display_ints != 0 {
-            log::info!("  display ints {:08X}", display_ints);
+            log::debug!("  display ints {:08X}", display_ints);
             if display_ints & self.int.display_int_ctl_sde != 0 {
-                let sde_ints = self.int.sde_interrupt.iir.read();
-                self.int.sde_interrupt.iir.write(sde_ints);
-                log::info!("    south display engine ints {:08X}", sde_ints);
+                let sde_ints = self.int.sde_interrupt.pending();
+                log::debug!("    south display engine ints {:08X}", sde_ints);
                 for ddi in self.ddis.iter() {
                     if let Some(sde_interrupt_hotplug) = ddi.sde_interrupt_hotplug {
                         if sde_ints & sde_interrupt_hotplug == sde_interrupt_hotplug {
                             self.events.push_back(Event::DdiHotplug(ddi.name));
                         }
                     }
+                }
+            }
+            for pipe in self.pipes.iter_mut() {
+                if display_ints & pipe.display_int_ctl_pending != 0 {
+                    let pipe_ints = pipe.interrupt.pending();
+                    log::debug!("    pipe {} ints {:08X}", pipe.name, pipe_ints);
                 }
             }
             true
@@ -1034,8 +1056,8 @@ impl Device {
         let had_irq = if let Some(gfx_mstr_intr) = &mut self.int.gfx_mstr_intr {
             let gfx_ints = gfx_mstr_intr.read() & !self.int.gfx_mstr_intr_enable;
             if gfx_ints != 0 {
-                log::info!("gfx ints {:08X}", gfx_ints);
                 gfx_mstr_intr.write(gfx_ints | self.int.gfx_mstr_intr_enable);
+                log::debug!("gfx ints {:08X}", gfx_ints);
 
                 if gfx_ints & self.int.gfx_mstr_intr_display != 0 {
                     self.handle_display_irq();

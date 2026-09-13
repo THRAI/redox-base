@@ -10,6 +10,7 @@ use syscall::{Error, EIO};
 
 use super::buffer::GpuBuffer;
 use super::{Device, GlobalGtt, MmioRegion};
+use crate::device::InterruptRegs;
 
 pub const PLANE_CTL_ENABLE: u32 = 1 << 31;
 
@@ -152,6 +153,8 @@ pub struct Pipe {
     pub index: usize,
     pub planes: Vec<Plane>,
     pub bottom_color: MmioPtr<u32>,
+    pub display_int_ctl_pending: u32,
+    pub interrupt: InterruptRegs,
     pub misc: MmioPtr<u32>,
     pub srcsz: MmioPtr<u32>,
 }
@@ -214,6 +217,10 @@ impl Pipe {
                 planes,
                 // IHD-OS-KBL-Vol 2c-1.17 PIPE_BOTTOM_COLOR
                 bottom_color: unsafe { gttmm.mmio(0x70034 + i * 0x1000)? },
+                // IHD-OS-KBL-Vol 2c-1.17 MASTER_INT_CTL
+                display_int_ctl_pending: 1 << (16 + i as u32),
+                // IHD-OS-KBL-Vol 2c-1.17 DE_PIPE_INTERRUPT
+                interrupt: unsafe { InterruptRegs::new(gttmm, 0x44400 + i * 0x10)? },
                 // IHD-OS-KBL-Vol 2c-1.17 PIPE_MISC
                 misc: unsafe { gttmm.mmio(0x70030 + i * 0x1000)? },
                 // IHD-OS-KBL-Vol 2c-1.17 PIPE_SRCSZ
@@ -272,6 +279,10 @@ impl Pipe {
                 planes,
                 // IHD-OS-TGL-Vol 2c-12.21 PIPE_BOTTOM_COLOR
                 bottom_color: unsafe { gttmm.mmio(0x70034 + i * 0x1000)? },
+                // IHD-OS-TGL-Vol 2c-12.21 DISPLAY_INT_CTL
+                display_int_ctl_pending: 1 << (16 + i as u32),
+                // IHD-OS-TGL-Vol 2c-12.21 DE_PIPE_INTERRUPT
+                interrupt: unsafe { InterruptRegs::new(gttmm, 0x44400 + i * 0x10)? },
                 // IHD-OS-TGL-Vol 2c-12.21 PIPE_MISC
                 misc: unsafe { gttmm.mmio(0x70030 + i * 0x1000)? },
                 // IHD-OS-TGL-Vol 2c-12.21 PIPE_SRCSZ
@@ -330,6 +341,10 @@ impl Pipe {
                 planes,
                 // IHD-OS-ACM-Vol 2c-3.23 PIPE_BOTTOM_COLOR
                 bottom_color: unsafe { gttmm.mmio(0x70034 + i * 0x1000)? },
+                // IHD-OS-ACM-Vol 2c-3.23 DISPLAY_INT_CTL
+                display_int_ctl_pending: 1 << (16 + i as u32),
+                // IHD-OS-ACM-Vol 2c-3.23 DE_PIPE_INTERRUPT
+                interrupt: unsafe { InterruptRegs::new(gttmm, 0x44400 + i * 0x10)? },
                 // IHD-OS-ACM-Vol 2c-3.23 PIPE_MISC
                 misc: unsafe { gttmm.mmio(0x70030 + i * 0x1000)? },
                 // IHD-OS-ACM-Vol 2c-3.23 PIPE_SRCSZ
