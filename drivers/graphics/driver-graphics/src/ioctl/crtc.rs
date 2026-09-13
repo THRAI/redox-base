@@ -43,11 +43,15 @@ pub(super) fn set_crtc<T: GraphicsAdapter>(
 ) -> Result<usize, Error> {
     let crtc_id = KmsObjectId(data.crtc_id());
     let crtc = objects.get_crtc(crtc_id)?;
-    let connectors = data
+    let connector_ids = data
         .set_connectors_ptr()
         .iter()
         .take(data.count_connectors() as usize)
-        .map(|&id| objects.get_connector(KmsObjectId(id)))
+        .map(|&id| KmsObjectId(id))
+        .collect::<Vec<KmsObjectId>>();
+    let connectors = connector_ids
+        .iter()
+        .map(|&id| objects.get_connector(id))
         .collect::<Result<Vec<&Mutex<KmsConnector<T>>>, _>>()?;
     let fb_id = if data.fb_id() != 0 {
         let fb_id = KmsObjectId(data.fb_id());
@@ -82,7 +86,7 @@ pub(super) fn set_crtc<T: GraphicsAdapter>(
             connector.state = vt_state.connector_state[connector.connector_index].clone();
             // FIXME adapter.set_connector()?
         }
-        adapter.set_crtc(&objects, crtc, new_crtc_state.clone())?;
+        adapter.set_crtc(&objects, crtc, new_crtc_state.clone(), &connector_ids)?;
         adapter.set_plane(&objects, plane, new_plane_state.clone(), None)?;
     }
 

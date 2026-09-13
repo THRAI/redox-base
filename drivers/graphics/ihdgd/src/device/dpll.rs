@@ -1,4 +1,5 @@
 use common::io::{Io, MmioPtr};
+use drm_sys::drm_mode_modeinfo;
 use syscall::error::{Error, Result, EIO};
 
 use super::MmioRegion;
@@ -51,11 +52,7 @@ impl Dpll {
         eprintln!();
     }
 
-    pub fn set_freq_hdmi(
-        &mut self,
-        mut ref_freq: u64,
-        timing: &edid::DetailedTiming,
-    ) -> Result<()> {
+    pub fn set_freq_hdmi(&mut self, mut ref_freq: u64, mode: &drm_mode_modeinfo) -> Result<()> {
         // IHD-OS-TGL-Vol 12-1.22-Rev2.0 "Formula for HDMI Mode DPLL Programming"
         const KHZ: u64 = 1_000;
         const MHZ: u64 = KHZ * 1_000;
@@ -69,7 +66,7 @@ impl Dpll {
         }
 
         //TODO: this symbol frequency is only valid for RGB 8 bits per color
-        let symbol_freq = (timing.pixel_clock as u64) * KHZ;
+        let symbol_freq = (mode.clock as u64) * KHZ;
         let pll_freq = symbol_freq * 5;
 
         #[derive(Debug)]

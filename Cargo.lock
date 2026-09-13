@@ -1195,6 +1195,7 @@ dependencies = [
  "daemon",
  "driver-graphics",
  "drm-fourcc",
+ "drm-sys",
  "edid",
  "embedded-hal",
  "libredox",

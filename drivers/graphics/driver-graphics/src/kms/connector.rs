@@ -182,17 +182,11 @@ impl<T: GraphicsAdapter> KmsConnector<T> {
         self.modes = edid
             .descriptors
             .iter()
-            .filter_map(|descriptor| {
-                match descriptor {
-                    edid::Descriptor::DetailedTiming(detailed_timing) => {
-                        // FIXME extract full information
-                        Some(modeinfo_for_size(
-                            u32::from(detailed_timing.horizontal_active_pixels),
-                            u32::from(detailed_timing.vertical_active_lines),
-                        ))
-                    }
-                    _ => None,
+            .filter_map(|descriptor| match descriptor {
+                edid::Descriptor::DetailedTiming(detailed_timing) => {
+                    Some(modeinfo_for_detailed_timing(detailed_timing))
                 }
+                _ => None,
             })
             .collect::<Vec<_>>();
 
@@ -203,7 +197,77 @@ impl<T: GraphicsAdapter> KmsConnector<T> {
     }
 }
 
-fn modeinfo_for_size(width: u32, height: u32) -> drm_mode_modeinfo {
+pub fn modeinfo_for_detailed_timing(timing: &edid::DetailedTiming) -> drm_mode_modeinfo {
+    let hdisplay = timing.horizontal_active_pixels;
+    let htotal = hdisplay + timing.horizontal_blanking_pixels;
+    let hsync_start = hdisplay + timing.horizontal_front_porch;
+    let hsync_end = hsync_start + timing.horizontal_sync_width;
+    let vdisplay = timing.vertical_active_lines;
+    let vtotal = vdisplay + timing.vertical_blanking_lines;
+    let vsync_start = vdisplay + timing.vertical_front_porch;
+    let vsync_end = vsync_start + timing.vertical_sync_width;
+
+    let clock = timing.pixel_clock;
+    let vrefresh = (clock * 1000) / ((htotal as u32) * (vtotal as u32));
+
+    let mut flags = 0;
+    match (timing.features >> 3) & 0b11 {
+        // Digital sync, separate
+        0b11 => {
+            if (timing.features & (1 << 2)) != 0 {
+                // vsync is positive polarity
+                flags |= drm_sys::DRM_MODE_FLAG_PVSYNC;
+            } else {
+                // vsync is negative polarity
+                flags |= drm_sys::DRM_MODE_FLAG_NVSYNC;
+            }
+            if (timing.features & (1 << 1)) != 0 {
+                // hsync is positive polarity
+                flags |= drm_sys::DRM_MODE_FLAG_PHSYNC;
+            } else {
+                // hsync is negative polarity
+                flags |= drm_sys::DRM_MODE_FLAG_NHSYNC;
+            }
+        }
+        unsupported => {
+            log::warn!("unsupported sync {:#x}", unsupported);
+        }
+    }
+
+    let mut modeinfo = drm_mode_modeinfo {
+        // The actual visible display size
+        hdisplay,
+        vdisplay,
+
+        // These are used to calculate the refresh rate
+        clock,
+        htotal,
+        vtotal,
+        vscan: 0,
+        vrefresh,
+
+        type_: drm_sys::DRM_MODE_TYPE_DRIVER | drm_sys::DRM_MODE_TYPE_PREFERRED,
+        name: [0; 32],
+
+        // These only matter when modesetting physical display adapters. For
+        // those we should be able to parse the EDID blob.
+        hsync_start,
+        hsync_end,
+        hskew: 0,
+        vsync_start,
+        vsync_end,
+        flags,
+    };
+
+    let name = format!("{hdisplay}x{vdisplay}@{vrefresh}").into_bytes();
+    for (to, from) in modeinfo.name.iter_mut().zip(name) {
+        *to = from as c_char;
+    }
+
+    modeinfo
+}
+
+pub fn modeinfo_for_size(width: u32, height: u32) -> drm_mode_modeinfo {
     let mut modeinfo = drm_mode_modeinfo {
         // The actual visible display size
         hdisplay: width as u16,

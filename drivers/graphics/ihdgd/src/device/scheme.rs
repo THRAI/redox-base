@@ -1,4 +1,4 @@
-use driver_graphics::kms::connector::KmsConnectorStatus;
+use driver_graphics::kms::connector::{KmsConnectorDriver, KmsConnectorStatus};
 use driver_graphics::kms::objects::{
     KmsCrtc, KmsCrtcDriver, KmsCrtcState, KmsObjectId, KmsObjects, KmsPlane, KmsPlaneDriver,
     KmsPlaneState,
@@ -9,18 +9,30 @@ use super::buffer::GpuBuffer;
 use super::Device;
 
 #[derive(Debug)]
+pub struct Connector {
+    pub ddi_idx: usize,
+    pub ddi_name: &'static str,
+    pub edid: Option<edid::EDID>,
+}
+
+impl KmsConnectorDriver for Connector {
+    type State = ();
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Crtc {
+    pub transcoder_idx: usize,
     pub pipe_idx: usize,
+}
+
+impl KmsCrtcDriver for Crtc {
+    type State = ();
 }
 
 #[derive(Debug)]
 pub struct Plane {
     pub pipe_idx: usize,
     pub plane_idx: usize,
-}
-
-impl KmsCrtcDriver for Crtc {
-    type State = ();
 }
 
 impl KmsPlaneDriver for Plane {
@@ -34,7 +46,7 @@ impl Buffer for GpuBuffer {
 }
 
 impl GraphicsAdapter for Device {
-    type Connector = ();
+    type Connector = Connector;
     type Crtc = Crtc;
     type Plane = Plane;
 
@@ -73,9 +85,26 @@ impl GraphicsAdapter for Device {
     }
 
     fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {
-        let mut connector = objects.get_connector(id).unwrap().lock().unwrap();
-        connector.connection = KmsConnectorStatus::Connected;
-        // FIXME fetch EDID
+        let ddi_name = {
+            let connector = objects.get_connector(id).unwrap().lock().unwrap();
+            connector.driver_data.ddi_name
+        };
+        log::info!("probe connector {:?}: DDI {}", id, ddi_name);
+        let connection = match self.probe_ddi(objects, ddi_name) {
+            Ok(true) => KmsConnectorStatus::Connected,
+            Ok(false) => {
+                log::warn!("timeout probing {}", ddi_name);
+                KmsConnectorStatus::Disconnected
+            }
+            Err(err) => {
+                log::warn!("failed to probe {}: {}", ddi_name, err);
+                KmsConnectorStatus::Disconnected
+            }
+        };
+        {
+            let mut connector = objects.get_connector(id).unwrap().lock().unwrap();
+            connector.connection = connection;
+        }
     }
 
     fn create_dumb_buffer(&mut self, width: u32, height: u32) -> (Self::Buffer, u32) {
@@ -92,10 +121,42 @@ impl GraphicsAdapter for Device {
 
     fn set_crtc(
         &mut self,
-        _objects: &KmsObjects<Self>,
+        objects: &KmsObjects<Self>,
         crtc: &KmsCrtc<Self>,
         state: KmsCrtcState<Self>,
+        connector_ids: &[KmsObjectId],
     ) -> syscall::Result<()> {
+        match state.mode {
+            Some(mode) => {
+                log::debug!(
+                    "set crtc {}: {:?} {:?}",
+                    crtc.crtc_index,
+                    unsafe { std::ffi::CStr::from_ptr(mode.name.as_ptr()) },
+                    mode
+                );
+                let mut ddi_name_opt = None;
+                for &connector_id in connector_ids {
+                    let (crtc_id, ddi_name) = {
+                        let connector_mtx = objects.get_connector(connector_id)?;
+                        let connector = connector_mtx.lock().unwrap();
+                        (connector.state.crtc_id, connector.driver_data.ddi_name)
+                    };
+                    let conn_crtc = objects.get_crtc(crtc_id)?;
+                    if conn_crtc.crtc_index == crtc.crtc_index {
+                        ddi_name_opt = Some(ddi_name);
+                        break;
+                    }
+                }
+                if let Some(ddi_name) = ddi_name_opt {
+                    self.modeset_ddi(objects, ddi_name, mode)?;
+                } else {
+                    log::warn!("set crtc {}: could not find DDI", crtc.crtc_index);
+                }
+            }
+            None => {
+                log::debug!("set crtc {}: no mode", crtc.crtc_index);
+            }
+        }
         *crtc.state.lock().unwrap() = state;
         Ok(())
     }
