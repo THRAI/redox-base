@@ -5,7 +5,8 @@ use drm_fourcc::DrmFourcc;
 use drm_sys::{DRM_MODE_CURSOR_BO, DRM_MODE_CURSOR_MOVE};
 use syscall::{EINVAL, ENXIO, Error};
 
-use crate::kms::objects::{KmsFramebuffer, KmsObjectId, KmsObjects, KmsRect};
+use crate::kms::framebuffer::KmsFramebuffer;
+use crate::kms::objects::{KmsObjectId, KmsObjects, KmsRect};
 use crate::{Damage, DrmHandle, GraphicsAdapter, VtState};
 
 pub(super) fn mode_cursor<T: GraphicsAdapter>(

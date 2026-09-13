@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use drm_fourcc::DrmFourcc;
 use syscall::{EINVAL, ENOENT, Error};
 
-use crate::kms::objects::{KmsFramebuffer, KmsObjectId, KmsObjects};
+use crate::kms::framebuffer::{KmsFramebuffer, disable_planes_with_fb};
+use crate::kms::objects::{KmsObjectId, KmsObjects};
 use crate::{Damage, DrmHandle, GraphicsAdapter, VtState};
 
 pub(super) fn mode_get_fb<T: GraphicsAdapter>(
@@ -83,23 +84,7 @@ pub(super) fn mode_rm_fb<T: GraphicsAdapter>(
     let fb_id = KmsObjectId(data.inner());
     objects.remove_framebuffer(fb_id)?;
 
-    // Disable planes that use this framebuffer.
-    for (vt, vt_data) in vts {
-        for (plane_idx, plane_state) in vt_data.plane_state.iter_mut().enumerate() {
-            if plane_state.fb_id != Some(fb_id) {
-                continue;
-            }
-            plane_state.fb_id = None;
-
-            if *vt != active_vt {
-                continue;
-            }
-            let plane = objects.planes().nth(plane_idx).unwrap();
-            adapter
-                .set_plane(&objects, plane, plane_state.clone(), None)
-                .unwrap();
-        }
-    }
+    disable_planes_with_fb(adapter, objects, active_vt, vts, fb_id);
 
     Ok(0)
 }

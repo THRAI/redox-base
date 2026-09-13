@@ -2,7 +2,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use common::io::{Io, MmioPtr};
-use driver_graphics::kms::objects::{KmsFramebuffer, KmsObjectId};
+use driver_graphics::kms::framebuffer::KmsFramebuffer;
+use driver_graphics::kms::objects::KmsObjectId;
 use drm_fourcc::DrmFourcc;
 use range_alloc::RangeAllocator;
 use syscall::error::Result;

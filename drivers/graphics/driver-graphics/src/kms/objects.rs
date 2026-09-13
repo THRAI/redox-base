@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use drm_fourcc::DrmFourcc;
 use drm_sys::{
     DRM_MODE_OBJECT_BLOB, DRM_MODE_OBJECT_CONNECTOR, DRM_MODE_OBJECT_CRTC, DRM_MODE_OBJECT_ENCODER,
     DRM_MODE_OBJECT_FB, DRM_MODE_OBJECT_PLANE, DRM_MODE_OBJECT_PROPERTY, DRM_PLANE_TYPE_CURSOR,
@@ -14,6 +12,7 @@ use syscall::{ENOENT, Error, Result};
 
 use crate::GraphicsAdapter;
 use crate::kms::connector::{KmsConnector, KmsEncoder};
+use crate::kms::framebuffer::KmsFramebuffer;
 use crate::kms::properties::{
     ACTIVE, CRTC_H, CRTC_ID, CRTC_W, CRTC_X, CRTC_Y, FB_ID, KmsBlob, KmsProperty, KmsPropertyData,
     SRC_H, SRC_W, SRC_X, SRC_Y, define_object_props, init_standard_props, type_,
@@ -26,7 +25,7 @@ pub struct KmsObjects<T: GraphicsAdapter> {
     pub(super) encoders: Vec<KmsObjectId>,
     crtcs: Vec<KmsObjectId>,
     planes: Vec<KmsObjectId>,
-    framebuffers: Vec<KmsObjectId>,
+    pub(super) framebuffers: Vec<KmsObjectId>,
     pub(super) objects: HashMap<KmsObjectId, KmsObject<T>>,
     _marker: PhantomData<T>,
 }
@@ -212,35 +211,6 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
 
     pub fn get_plane(&self, id: KmsObjectId) -> Result<&KmsPlane<T>> {
         self.get(id)
-    }
-
-    pub fn add_framebuffer(&mut self, fb: KmsFramebuffer<T>) -> KmsObjectId {
-        let id = self.add(fb);
-        self.framebuffers.push(id);
-        id
-    }
-
-    pub fn remove_framebuffer(&mut self, id: KmsObjectId) -> Result<()> {
-        self.remove::<KmsFramebuffer<T>>(id)
-    }
-
-    pub fn remove_framebuffer_if_closed(&mut self, id: KmsObjectId) {
-        if self
-            .get_framebuffer(id)
-            .unwrap()
-            .closed
-            .load(Ordering::SeqCst)
-        {
-            self.remove::<KmsFramebuffer<T>>(id).unwrap();
-        }
-    }
-
-    pub fn fb_ids(&self) -> &[KmsObjectId] {
-        &self.framebuffers
-    }
-
-    pub fn get_framebuffer(&self, id: KmsObjectId) -> Result<&KmsFramebuffer<T>> {
-        Ok(self.get::<KmsFramebuffer<T>>(id)?)
     }
 }
 
@@ -438,23 +408,4 @@ pub struct KmsRect<T> {
     pub y: T,
     pub width: u32,
     pub height: u32,
-}
-
-#[derive(Debug)]
-pub struct KmsFramebuffer<T: GraphicsAdapter> {
-    /// Was this framebuffer closed using the CLOSEFB ioctl or implicitly
-    /// created by the CURSOR or CURSOR2 ioctls or similar?
-    ///
-    /// A closed framebuffer will be destroyed as soon as the last plane that
-    /// uses it switches to a different framebuffer. In the mean time the GETFB
-    /// and GETFB2 ioctls still function on it, but anything else will result
-    /// in ENOENT, including another CLOSEFB call.
-    pub closed: AtomicBool,
-
-    pub width: u32,
-    pub height: u32,
-    pub pixel_format: DrmFourcc,
-    pub pitch: u32,
-    pub buffer: Arc<T::Buffer>,
-    pub driver_data: T::Framebuffer,
 }
