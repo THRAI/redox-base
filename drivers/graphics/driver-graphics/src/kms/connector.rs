@@ -10,7 +10,10 @@ use syscall::Result;
 
 use crate::GraphicsAdapter;
 use crate::kms::objects::{KmsObjectId, KmsObjects};
-use crate::kms::properties::{CRTC_ID, DPMS, EDID, KmsPropertyData, TILE, define_object_props};
+use crate::kms::properties::{
+    CRTC_ID, DPMS, EDID, KmsBlob, KmsPropertyData, TILE, define_object_props,
+};
+use crate::kms::rc_object::KmsRcObjectRef;
 
 impl<T: GraphicsAdapter> KmsObjects<T> {
     pub fn add_connector(
@@ -43,7 +46,7 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
             mm_height: 0,
             subpixel: DrmSubpixelOrder::Unknown,
             properties: KmsConnector::base_properties(),
-            edid: KmsObjectId::INVALID,
+            edid: None,
             state: KmsConnectorState {
                 dpms: KmsDpms::On,
                 crtc_id: KmsObjectId::INVALID,
@@ -73,18 +76,17 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
     pub fn set_connector_edid(&mut self, id: KmsObjectId, edid: Vec<u8>) {
         let mut connector = self.get_connector(id).unwrap().lock().unwrap();
         connector.update_from_edid(&edid);
-        let old_edid = connector.edid;
-        drop(connector);
 
-        if old_edid != KmsObjectId::INVALID {
-            if self.get_blob(old_edid).unwrap() == edid {
+        let old_edid = &connector.edid;
+        if let Some(old_edid) = old_edid {
+            if old_edid.data() == edid {
                 return; // EDID is unchanged; nothing to do
             }
-            self.remove_blob(old_edid).unwrap();
         }
+        drop(connector);
 
         let blob = self.add_blob(edid);
-        self.get_connector(id).unwrap().lock().unwrap().edid = blob;
+        self.get_connector(id).unwrap().lock().unwrap().edid = Some(blob);
     }
 
     pub fn encoder_ids(&self) -> &[KmsObjectId] {
@@ -116,7 +118,7 @@ pub struct KmsConnector<T: GraphicsAdapter> {
     pub mm_height: u32,
     pub subpixel: DrmSubpixelOrder,
     pub properties: Vec<KmsPropertyData<Self>>,
-    pub edid: KmsObjectId,
+    pub edid: Option<KmsRcObjectRef<KmsBlob>>,
     pub state: KmsConnectorState<T>,
     pub driver_data: T::Connector,
 }
@@ -140,7 +142,7 @@ impl<T: GraphicsAdapter> Clone for KmsConnectorState<T> {
 
 define_object_props!(object, KmsConnector<T: GraphicsAdapter> {
     EDID {
-        get => u64::from(object.edid.0),
+        get => u64::from(object.edid.as_ref().map_or(0, |blob| blob.id().0)),
     }
     DPMS {
         get => object.state.dpms as u64,

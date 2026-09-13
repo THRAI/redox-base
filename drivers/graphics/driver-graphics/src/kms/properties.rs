@@ -11,6 +11,7 @@ use syscall::{ENOENT, Error, Result};
 
 use crate::GraphicsAdapter;
 use crate::kms::objects::{KmsObject, KmsObjectId, KmsObjects};
+use crate::kms::rc_object::{KmsRcObject, KmsRcObjectRef};
 
 impl<T: GraphicsAdapter> KmsObjects<T> {
     pub fn add_property(
@@ -80,16 +81,12 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
         }
     }
 
-    pub fn add_blob(&mut self, data: Vec<u8>) -> KmsObjectId {
-        self.add(KmsBlob { data })
+    pub fn add_blob(&mut self, data: Vec<u8>) -> KmsRcObjectRef<KmsBlob> {
+        KmsRcObject::new(self, KmsBlob { data })
     }
 
-    pub fn remove_blob(&mut self, id: KmsObjectId) -> Result<()> {
-        self.remove::<KmsBlob>(id)
-    }
-
-    pub fn get_blob(&self, id: KmsObjectId) -> Result<&[u8]> {
-        Ok(&self.get::<KmsBlob>(id)?.data)
+    pub fn get_blob(&self, id: KmsObjectId) -> Result<KmsRcObjectRef<KmsBlob>> {
+        KmsRcObject::lookup(self, id)
     }
 }
 
@@ -145,6 +142,12 @@ pub struct KmsPropertyData<T> {
 #[derive(Debug)]
 pub struct KmsBlob {
     data: Vec<u8>,
+}
+
+impl KmsBlob {
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
 }
 
 macro_rules! define_properties {

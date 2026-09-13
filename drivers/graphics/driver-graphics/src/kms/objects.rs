@@ -80,18 +80,6 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
         }
     }
 
-    pub(super) fn remove<U: KmsObjectKind<T>>(&mut self, id: KmsObjectId) -> Result<()> {
-        let Some(object) = self.objects.get(&id) else {
-            return Err(Error::new(ENOENT));
-        };
-        let Some(_) = U::try_from_object(object) else {
-            return Err(Error::new(ENOENT));
-        };
-        self.objects.remove(&id).unwrap();
-
-        Ok(())
-    }
-
     /// Remove all objects which had their last [`KmsRcObjectRef`] dropped.
     pub(crate) fn remove_all_deferred(&mut self) {
         while let Ok(id) = self.remove_rx.try_recv() {
@@ -108,7 +96,9 @@ impl<T: GraphicsAdapter> KmsObjects<T> {
                     self.framebuffers.remove(&id);
                     KmsRcObject::assert_removed(fb);
                 }
-                KmsObject::Blob(_) => todo!(),
+                KmsObject::Blob(blob) => {
+                    KmsRcObject::assert_removed(blob);
+                }
             }
         }
     }
@@ -311,7 +301,7 @@ define_object_kinds! { <T>
     Property(KmsProperty) = DRM_MODE_OBJECT_PROPERTY,
     Plane(KmsPlane<T>) = DRM_MODE_OBJECT_PLANE,
     Framebuffer(KmsRcObject<KmsFramebuffer<T>>) = DRM_MODE_OBJECT_FB,
-    Blob(KmsBlob) = DRM_MODE_OBJECT_BLOB,
+    Blob(KmsRcObject<KmsBlob>) = DRM_MODE_OBJECT_BLOB,
 }
 
 pub trait KmsCrtcDriver: Debug {
