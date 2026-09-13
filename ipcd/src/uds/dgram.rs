@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{BTreeSet, VecDeque};
+use std::convert::TryInto;
 use std::rc::Rc;
 
 use libc::{AF_UNIX, SO_DOMAIN, SO_PASSCRED};
@@ -16,7 +17,7 @@ use syscall::{Error, FobtainFdFlags};
 use super::scheme::{MsgFlags, UdsScheme};
 use super::{
     get_uid_gid_from_pid, path_buf_to_str, read_msghdr_info, read_num, AncillaryData, Credential,
-    DataPacket, MsgWriter, MAX_DGRAM_MSG_LEN,
+    DataPacket, MsgWriter, MAX_DGRAM_MSG_LEN, SOCK_MIN_SNDBUF,
 };
 
 pub type UdsDgramScheme<'sock> = UdsScheme<'sock, Socket>;
@@ -32,6 +33,7 @@ pub struct Socket {
     fds: VecDeque<usize>,
     flags: usize,
     issued_token: Option<u64>,
+    snd_buf_size: usize,
 }
 
 impl Socket {
@@ -161,6 +163,25 @@ impl Socket {
             Credential::new(pid as i32, uid as i32, gid as i32),
         )?;
         let payload_len = message.len();
+
+        if payload_len > socket.snd_buf_size {
+            eprintln!("sendmsg_inner: msg_stream is longer than SO_SNDBUF.");
+        }
+
+        let space_left = socket
+            .messages
+            .iter()
+            .try_fold(socket.snd_buf_size, |acc, msg| acc.checked_sub(msg.len()))
+            .unwrap_or_default();
+
+        if space_left == 0 {
+            return if (socket.flags as usize) & O_NONBLOCK == O_NONBLOCK {
+                Err(Error::new(EAGAIN))
+            } else {
+                Err(Error::new(EWOULDBLOCK))
+            };
+        }
+
         socket.messages.push_back(message);
 
         Ok(payload_len)
@@ -195,6 +216,8 @@ impl super::scheme::Socket for Socket {
         let mut new = Socket::default();
         new.flags = flags;
         new.primary_id = new_id;
+        // FIXME: Use wmem_default when it's available.
+        new.snd_buf_size = usize::MAX;
 
         scheme.insert_socket(new_id, Rc::new(RefCell::new(new)));
         scheme.next_id += 1;
@@ -273,6 +296,14 @@ impl super::scheme::Socket for Socket {
                 }
                 Ok(value_slice.len())
             }
+            libc::SO_SNDBUF => {
+                let value = read_num::<i32>(value_slice)?;
+                let value = value.try_into().unwrap_or(usize::MAX);
+                // TODO: Select min between the value and wmem_max when it's there.
+                let value = cmp::min(value, SOCK_MIN_SNDBUF);
+                socket.snd_buf_size = value;
+                Ok(0)
+            }
             _ => {
                 eprintln!(
                     "handle_setsockopt(id: {}): Unsupported option: {}",
@@ -284,7 +315,7 @@ impl super::scheme::Socket for Socket {
     }
 
     fn handle_getsockopt(
-        _scheme: &mut UdsScheme<Self>,
+        scheme: &mut UdsScheme<Self>,
         id: usize,
         option: i32,
         payload: &mut [u8],
@@ -303,6 +334,30 @@ impl super::scheme::Socket for Socket {
                 let domain = AF_UNIX.to_le_bytes();
                 payload[..domain.len()].copy_from_slice(&domain);
                 Ok(domain.len())
+            }
+            libc::SO_SNDBUF => {
+                payload.fill(0);
+                if payload.len() < size_of::<i32>() {
+                    eprintln!(
+                        "handle_getsockopt(id: {}): SO_SNDBUF payload buffer is too small. len: {}",
+                        id,
+                        payload.len()
+                    );
+                    return Err(Error::new(ENOBUFS));
+                }
+
+                let socket_rc = scheme.get_socket(id)?;
+                let socket = socket_rc.borrow();
+                let sndbuf: i32 = socket.snd_buf_size.try_into().unwrap_or_else(|_| {
+                    eprintln!(
+                        "handle_getsockopt(id: {}): SO_SNDBUF value overflows the payload buffer.",
+                        id,
+                    );
+                    return i32::MAX;
+                });
+                let sndbuf = sndbuf.to_le_bytes();
+                payload[..sndbuf.len()].copy_from_slice(&sndbuf);
+                Ok(0)
             }
             _ => {
                 eprintln!(
