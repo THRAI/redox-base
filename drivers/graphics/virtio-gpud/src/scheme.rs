@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 
 use common::dma::Dma;
@@ -46,7 +47,7 @@ impl KmsPlaneDriver for VirtGpuPlane {
 }
 
 pub struct VirtGpuFramebuffer {
-    queue: Arc<Queue>,
+    unref_tx: Sender<ResourceId>,
     id: ResourceId,
     sgl: sgl::Sgl,
     width: u32,
@@ -72,17 +73,7 @@ impl DrmBuffer for VirtGpuFramebuffer {
 
 impl Drop for VirtGpuFramebuffer {
     fn drop(&mut self) {
-        futures::executor::block_on(async {
-            let request = Dma::new(ResourceUnref::new(self.id)).unwrap();
-
-            let header = Dma::new(ControlHeader::default()).unwrap();
-            let command = ChainBuilder::new()
-                .chain(Buffer::new(&request))
-                .chain(Buffer::new(&header).flags(DescriptorFlags::WRITE_ONLY))
-                .build();
-
-            self.queue.send(command).await;
-        });
+        let _ = self.unref_tx.send(self.id);
     }
 }
 
@@ -101,6 +92,8 @@ pub struct VirtGpuAdapter<'a> {
     cursor_queue: Arc<Queue>,
     transport: Arc<dyn Transport>,
     has_edid: bool,
+    unref_tx: Sender<ResourceId>,
+    unref_rx: Receiver<ResourceId>,
     displays: Vec<Display>,
     hidden_cursor: Option<Arc<VirtGpuFramebuffer>>,
 }
@@ -188,6 +181,20 @@ impl<'a> VirtGpuAdapter<'a> {
         let command = ChainBuilder::new().chain(Buffer::new(&request)).build();
         self.cursor_queue.send(command).await;
         Ok(())
+    }
+
+    pub(crate) async fn unref_all_delayed(&self) {
+        while let Ok(resource_id) = self.unref_rx.try_recv() {
+            let request = Dma::new(ResourceUnref::new(resource_id)).unwrap();
+
+            let header = Dma::new(ControlHeader::default()).unwrap();
+            let command = ChainBuilder::new()
+                .chain(Buffer::new(&request))
+                .chain(Buffer::new(&header).flags(DescriptorFlags::WRITE_ONLY))
+                .build();
+
+            self.control_queue.send(command).await;
+        }
     }
 
     async fn get_display_info(&self) -> Result<Dma<GetDisplayInfo>, Error> {
@@ -283,7 +290,7 @@ impl<'a> VirtGpuAdapter<'a> {
 
         Ok((
             VirtGpuFramebuffer {
-                queue: self.control_queue.clone(),
+                unref_tx: self.unref_tx.clone(),
                 id: res_id,
                 sgl,
                 width,
@@ -590,6 +597,7 @@ impl<'a> GpuScheme {
         transport: Arc<dyn Transport>,
         has_edid: bool,
     ) -> Result<GraphicsScheme<VirtGpuAdapter<'a>>, Error> {
+        let (unref_tx, unref_rx) = mpsc::channel();
         let adapter = VirtGpuAdapter {
             unique,
             config,
@@ -597,6 +605,8 @@ impl<'a> GpuScheme {
             cursor_queue,
             transport,
             has_edid,
+            unref_tx,
+            unref_rx,
             displays: vec![],
             hidden_cursor: None,
         };
