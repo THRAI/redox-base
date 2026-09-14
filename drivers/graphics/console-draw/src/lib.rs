@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::convert::TryFrom;
 use std::rc::Rc;
 use std::{cmp, io, mem, ptr};
@@ -17,93 +17,168 @@ use alacritty_terminal::term::{
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use alacritty_terminal::{vte, Term};
 use drm::buffer::{Buffer, DrmFourcc};
-use drm::control::{connector, crtc, framebuffer, ClipRect, Device};
+use drm::control::{connector, crtc, framebuffer, ClipRect, Device, Mode, RawResourceHandle};
 use graphics_ipc::{CpuBackedBuffer, DrmHandle};
 use orbclient::FONT;
 
 pub struct V2DisplayMap {
-    pub display_handle: DrmHandle,
-    pub connector: connector::Handle,
-    crtc: crtc::Handle,
-    fb: framebuffer::Handle,
-    pub buffer: CpuBackedBuffer,
+    display_handle: DrmHandle,
+    displays: Vec<(crtc::Handle, framebuffer::Handle, CpuBackedBuffer)>,
 }
 
 impl V2DisplayMap {
+    fn map_connectors_to_crtcs(
+        display_handle: &DrmHandle,
+        force_probe: bool,
+    ) -> Result<BTreeMap<RawResourceHandle, (connector::Info, Mode)>, io::Error> {
+        let resource_handles = display_handle.resource_handles()?;
+
+        let active_connectors = resource_handles
+            .connectors()
+            .iter()
+            .map(|&connector| display_handle.get_connector(connector, force_probe))
+            .filter(|info| {
+                info.as_ref()
+                    .map_or(true, |info| info.state() == connector::State::Connected)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut crtc_connector_map = BTreeMap::new();
+        for connector_info in active_connectors {
+            let &preferred_mode = connector_info
+                .modes()
+                .get(0)
+                .ok_or_else(|| io::Error::other("Unable to get preferred mode"))?;
+
+            let encoders = connector_info
+                .encoders()
+                .iter()
+                .map(|&encoder| display_handle.get_encoder(encoder))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let possible_crtcs = encoders.into_iter().flat_map(|encoder_info| {
+                resource_handles.filter_crtcs(encoder_info.possible_crtcs())
+            });
+
+            for crtc in possible_crtcs {
+                // FIXME support cloning a CRTC across connectors if mode matches
+                #![allow(clippy::map_entry)] // Matching on Entry is uglier
+                if !crtc_connector_map.contains_key(&RawResourceHandle::from(crtc)) {
+                    crtc_connector_map.insert(
+                        RawResourceHandle::from(crtc),
+                        (connector_info, preferred_mode),
+                    );
+                    break;
+                }
+            }
+        }
+        Ok(crtc_connector_map)
+    }
+
     pub fn new(display_handle: DrmHandle) -> io::Result<Self> {
-        let connector_info = display_handle.first_display()?;
-
-        let Some(&mode) = connector_info.modes().get(0) else {
-            return Err(io::Error::other("Unable to get first display connector"));
-        };
-        let (width, height) = mode.size();
-        let Some(&encoder) = connector_info.encoders().get(0) else {
-            return Err(io::Error::other("Unable to get first display encoder"));
-        };
-
-        // FIXME do something smarter that avoids conflicts
-        let Some(&crtc) = display_handle
-            .resource_handles()
-            .unwrap()
-            .filter_crtcs(display_handle.get_encoder(encoder)?.possible_crtcs())
-            .get(0)
-        else {
-            return Err(io::Error::other("Unable to get first display ctrc"));
-        };
-
-        let buffer = CpuBackedBuffer::new(
+        let crtc_connector_map = Self::map_connectors_to_crtcs(
             &display_handle,
-            (width.into(), height.into()),
-            DrmFourcc::Argb8888,
-            32,
+            true, // force_probe
         )?;
-        let fb = display_handle.add_framebuffer(buffer.buffer(), 32, 32)?;
 
-        display_handle.set_crtc(
-            crtc,
-            Some(fb),
-            (0, 0),
-            &[connector_info.handle()],
-            Some(mode),
-        )?;
+        let mut displays = vec![];
+        for (crtc, (connector_info, preferred_mode)) in crtc_connector_map {
+            let crtc = crtc::Handle::from(crtc);
+            let (width, height) = preferred_mode.size();
+            let mut buffer = CpuBackedBuffer::new(
+                &display_handle,
+                (width.into(), height.into()),
+                DrmFourcc::Argb8888,
+                32,
+            )?;
+            buffer.shadow_buf().fill(0);
+            let fb = display_handle.add_framebuffer(buffer.buffer(), 32, 32)?;
+
+            display_handle.set_crtc(
+                crtc,
+                Some(fb),
+                (0, 0),
+                &[connector_info.handle()],
+                Some(preferred_mode),
+            )?;
+
+            displays.push((crtc, fb, buffer));
+        }
+
+        if displays.is_empty() {
+            return Err(io::Error::other("No connected display"));
+        }
 
         Ok(Self {
             display_handle,
-            connector: connector_info.handle(),
-            crtc,
-            fb,
-            buffer,
+            displays,
         })
     }
 
-    unsafe fn console_map(&mut self) -> DisplayMap {
-        let size = self.buffer.buffer().size();
-        let shadow_buf = self.buffer.shadow_buf();
+    fn with_console_map(&mut self, f: impl FnOnce(DisplayMap) -> ClipRect) -> ClipRect {
+        let min_width = self
+            .displays
+            .iter()
+            .map(|(_crtc, _fb, buffer)| buffer.buffer().size().0)
+            .min()
+            .unwrap() as usize;
+        let min_height = self
+            .displays
+            .iter()
+            .map(|(_crtc, _fb, buffer)| buffer.buffer().size().1)
+            .min()
+            .unwrap() as usize;
 
-        DisplayMap {
+        let ((_crtc, _fb, buffer), secondary_displays) = self.displays.split_first_mut().unwrap();
+
+        let (stride, _) = buffer.buffer().size();
+        let shadow_buf = buffer.shadow_buf();
+        let damage = f(DisplayMap {
             offscreen: ptr::slice_from_raw_parts_mut(
                 shadow_buf.as_mut_ptr() as *mut u32,
                 shadow_buf.len() / 4,
             ),
-            width: size.0 as usize,
-            height: size.1 as usize,
+            stride: stride as usize,
+            width: min_width,
+            height: min_height,
+        });
+
+        let strip = |stride: u32, y: u16, x1: u16, x2: u16| {
+            (y as usize * stride as usize + x1 as usize) * 4
+                ..(y as usize * stride as usize + x2 as usize) * 4
+        };
+
+        for (_crtc, _fb, to_buffer) in secondary_displays {
+            let (to_stride, _) = to_buffer.buffer().size();
+            for y in damage.y1()..damage.y2() {
+                to_buffer.shadow_buf()[strip(to_stride, y, damage.x1(), damage.x2())]
+                    .copy_from_slice(
+                        &buffer.shadow_buf()[strip(stride, y, damage.x1(), damage.x2())],
+                    );
+            }
         }
+
+        damage
     }
 
-    pub fn dirty_fb(&mut self, damage: ClipRect) -> io::Result<()> {
-        self.buffer.sync_rect(
-            u32::from(damage.x1()),
-            u32::from(damage.y1()),
-            u32::from(damage.x2() - damage.x1()),
-            u32::from(damage.y2() - damage.y1()),
-        );
+    fn dirty_fb(&mut self, damage: ClipRect) -> io::Result<()> {
+        for (_crtc, fb, buffer) in &mut self.displays {
+            buffer.sync_rect(
+                u32::from(damage.x1()),
+                u32::from(damage.y1()),
+                u32::from(damage.x2() - damage.x1()),
+                u32::from(damage.y2() - damage.y1()),
+            );
 
-        self.display_handle.dirty_framebuffer(self.fb, &[damage])
+            self.display_handle.dirty_framebuffer(*fb, &[damage])?;
+        }
+
+        Ok(())
     }
 }
 
 struct DisplayMap {
     offscreen: *mut [u32],
+    stride: usize,
     width: usize,
     height: usize,
 }
@@ -298,7 +373,7 @@ impl TextScreen {
         let c = if cell.c == '\t' { ' ' } else { cell.c };
 
         if x + font.width <= map.width && y + font.height <= map.height {
-            let mut dst = map.offscreen as *mut u8 as usize + (y * map.width + x) * 4;
+            let mut dst = map.offscreen as *mut u8 as usize + (y * map.stride + x) * 4;
 
             let font_i = font.height * (c as usize);
             if font_i + font.height <= font.glyphs.len() {
@@ -311,7 +386,7 @@ impl TextScreen {
                             unsafe { *((dst + col * 4) as *mut u32) = bg_color };
                         }
                     }
-                    dst += map.width * 4;
+                    dst += map.stride * 4;
                 }
             }
         }
@@ -319,25 +394,21 @@ impl TextScreen {
         Some(point)
     }
 
-    pub fn write(
-        &mut self,
-        map: &mut V2DisplayMap,
-        buf: &[u8],
-        input: &mut VecDeque<u8>,
-    ) -> ClipRect {
-        let map = unsafe { &mut map.console_map() };
+    pub fn write(&mut self, map: &mut V2DisplayMap, buf: &[u8], input: &mut VecDeque<u8>) {
+        let damage = map.with_console_map(|mut console_map| {
+            self.term.resize(TermSize::new(
+                console_map.width / self.font.width,
+                console_map.height / self.font.height,
+            ));
 
-        self.term.resize(TermSize::new(
-            map.width / self.font.width,
-            map.height / self.font.height,
-        ));
+            self.vte_parser.advance(&mut self.term, buf);
+            self.vte_parser.stop_sync(&mut self.term); // FIXME
 
-        self.vte_parser.advance(&mut self.term, buf);
-        self.vte_parser.stop_sync(&mut self.term); // FIXME
+            input.extend(self.term_input.borrow_mut().drain(..));
 
-        input.extend(self.term_input.borrow_mut().drain(..));
-
-        self.redraw(map)
+            self.redraw(&mut console_map)
+        });
+        map.dirty_fb(damage).unwrap();
     }
 
     fn redraw(&mut self, map: &mut DisplayMap) -> ClipRect {
@@ -446,55 +517,65 @@ impl TextScreen {
     }
 
     pub fn resize_to_preferred(&mut self, map: &mut V2DisplayMap) -> io::Result<bool> {
-        let mode = match map
-            .display_handle
-            .get_connector(map.connector, false)
-            .and_then(|info| {
-                info.modes()
-                    .get(0)
-                    .map(|m| *m)
-                    .ok_or(io::Error::other("unable to get default mode for connector"))
-            }) {
-            Ok(mode) => mode,
-            Err(err) => {
-                return Err(io::Error::other(format!(
-                    "failed to get display size: {}",
-                    err
-                )));
-            }
-        };
+        let crtc_connector_map = V2DisplayMap::map_connectors_to_crtcs(
+            &map.display_handle,
+            false, // force_probe
+        )?;
 
-        if (u32::from(mode.size().0), u32::from(mode.size().1)) == map.buffer.buffer().size() {
+        let preferred_sizes =
+            crtc_connector_map
+                .iter()
+                .map(|(_crtc, (_connector, preferred_mode))| {
+                    (
+                        u32::from(preferred_mode.size().0),
+                        u32::from(preferred_mode.size().1),
+                    )
+                });
+        let current_sizes = map
+            .displays
+            .iter()
+            .map(|(_crtc, _fb, buffer)| buffer.buffer().size());
+        if preferred_sizes.eq(current_sizes) {
             return Ok(false);
         }
 
-        let mut new_buffer = CpuBackedBuffer::new(
-            &map.display_handle,
-            (u32::from(mode.size().0), u32::from(mode.size().1)),
-            DrmFourcc::Argb8888,
-            32,
-        )?;
-        let new_fb = map
-            .display_handle
-            .add_framebuffer(new_buffer.buffer(), 24, 32)?;
+        let mut new_displays = vec![];
+        let mut new_mapping = vec![];
+        for (crtc, (connector_info, preferred_mode)) in crtc_connector_map {
+            let crtc = crtc::Handle::from(crtc);
+            let (width, height) = preferred_mode.size();
+            let mut buffer = CpuBackedBuffer::new(
+                &map.display_handle,
+                (width.into(), height.into()),
+                DrmFourcc::Argb8888,
+                32,
+            )?;
+            buffer.shadow_buf().fill(0);
+            let fb = map
+                .display_handle
+                .add_framebuffer(buffer.buffer(), 32, 32)?;
 
-        new_buffer.shadow_buf().fill(0);
+            new_displays.push((crtc, fb, buffer));
+            new_mapping.push((crtc, fb, connector_info.handle(), preferred_mode));
+        }
 
-        let old_buffer = mem::replace(&mut map.buffer, new_buffer);
-        let old_fb = mem::replace(&mut map.fb, new_fb);
+        let old_displays = mem::replace(&mut map.displays, new_displays);
+        map.with_console_map(|mut console_map| self.redraw(&mut console_map));
 
-        self.redraw(&mut unsafe { map.console_map() });
+        for (crtc, fb, connector, preferred_mode) in new_mapping {
+            map.display_handle.set_crtc(
+                crtc,
+                Some(fb),
+                (0, 0),
+                &[connector],
+                Some(preferred_mode),
+            )?;
+        }
 
-        map.display_handle.set_crtc(
-            map.crtc,
-            Some(map.fb),
-            (0, 0),
-            &[map.connector],
-            Some(mode),
-        )?;
-
-        old_buffer.destroy(&map.display_handle)?;
-        let _ = map.display_handle.destroy_framebuffer(old_fb);
+        for (_crtc, fb, buffer) in old_displays {
+            buffer.destroy(&map.display_handle)?;
+            let _ = map.display_handle.destroy_framebuffer(fb);
+        }
 
         Ok(true)
     }
