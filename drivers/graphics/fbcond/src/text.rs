@@ -46,14 +46,7 @@ impl TextScreen {
         log::debug!("fbcond: Opened new display");
 
         match V2DisplayMap::new(new_display_handle) {
-            Ok(map) => {
-                log::debug!(
-                    "fbcond: Mapped new display with size {}x{}",
-                    map.size().0,
-                    map.size().1,
-                );
-                self.map = Some(map)
-            }
+            Ok(map) => self.map = Some(map),
             Err(err) => {
                 log::error!("fbcond: failed to map new display: {err}");
                 return;
