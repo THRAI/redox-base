@@ -61,6 +61,7 @@ impl V2DisplayMap {
 
             for crtc in possible_crtcs {
                 // FIXME support cloning a CRTC across connectors if mode matches
+                #![allow(clippy::map_entry)] // Matching on Entry is uglier
                 if !crtc_connector_map.contains_key(&RawResourceHandle::from(crtc)) {
                     crtc_connector_map.insert(
                         RawResourceHandle::from(crtc),
