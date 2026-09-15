@@ -220,7 +220,7 @@ fn read_msghdr_info(stream: &mut [u8]) -> Result<(usize, usize, usize)> {
     let prepared_msg_controllen = read_num::<usize>(&stream[cursor..])?;
     cursor += size_of::<usize>();
     // Clear the stream buffer
-    stream[..cursor].copy_from_slice(&[0u8; size_of::<usize>() * 3]);
+    stream[..cursor].fill(0u8);
     Ok((
         prepared_name_len,
         prepared_whole_iov_size,
