@@ -25,6 +25,10 @@ const PID_SIZE: usize = size_of::<i32>();
 const UID_SIZE: usize = size_of::<i32>();
 const GID_SIZE: usize = size_of::<i32>();
 
+// The man7 pages say that the default is doubled and equal to 2048,
+// but the Linux kernel defines it this way plus alignments.
+const SOCK_MIN_SNDBUF: usize = 2048 * 2;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Credential {
     pid: i32,
