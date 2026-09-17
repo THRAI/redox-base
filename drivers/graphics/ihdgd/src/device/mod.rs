@@ -1053,9 +1053,13 @@ impl Device {
     }
 
     pub fn handle_irq(&mut self) -> bool {
+        // NOTE: Disabling the master interrupt control for the duration of the interrupt handler
+        // is very important to ensure we don't get into situation where we failed to acknowledge
+        // all interrupts and no longer get any PCI interrupts.
         let had_irq = if let Some(gfx_mstr_intr) = &mut self.int.gfx_mstr_intr {
+            gfx_mstr_intr.write(0);
             let gfx_ints = gfx_mstr_intr.read() & !self.int.gfx_mstr_intr_enable;
-            if gfx_ints != 0 {
+            let res = if gfx_ints != 0 {
                 gfx_mstr_intr.write(gfx_ints | self.int.gfx_mstr_intr_enable);
                 log::debug!("gfx ints {:08X}", gfx_ints);
 
@@ -1066,9 +1070,20 @@ impl Device {
                 true
             } else {
                 false
-            }
+            };
+            self.int
+                .gfx_mstr_intr
+                .as_mut()
+                .unwrap()
+                .write(self.int.gfx_mstr_intr_enable);
+            res
         } else {
-            self.handle_display_irq()
+            self.int.display_int_ctl.write(0);
+            let res = self.handle_display_irq();
+            self.int
+                .display_int_ctl
+                .write(self.int.display_int_ctl_enable);
+            res
         };
 
         if had_irq {
