@@ -864,10 +864,10 @@ impl Device {
                     .enable_well_by_transcoder(transcoder.name)?;
 
                 // Configure transcoder clock select
-                if let Some(trans_ddi_select) = ddi.trans_ddi_select {
+                if let Some(clock_select) = ddi.trans_clock_select {
                     transcoder
                         .clk_sel
-                        .write(trans_ddi_select << transcoder.clk_sel_shift);
+                        .write(clock_select << transcoder.clk_sel_shift);
                 }
 
                 // Set pipe bottom color to blue for debugging
@@ -893,8 +893,8 @@ impl Device {
                         //TODO: correct port width selection
                         TRANS_DDI_FUNC_CTL_PORT_WIDTH_4;
 
-                    if let Some(trans_ddi_select) = ddi.trans_ddi_select {
-                        ddi_func_ctl |= trans_ddi_select << transcoder.ddi_func_ctl_ddi_shift;
+                    if let Some(ddi_select) = ddi.trans_ddi_select {
+                        ddi_func_ctl |= ddi_select << transcoder.ddi_func_ctl_ddi_shift;
                     }
 
                     match input {
