@@ -140,6 +140,7 @@ pub struct Ddi {
     pub pwr_well_ctl_ddi_request: u32,
     pub pwr_well_ctl_ddi_state: u32,
     pub sde_interrupt_hotplug: Option<u32>,
+    pub trans_clock_select: Option<u32>,
     pub trans_ddi_select: Option<u32>,
 }
 
@@ -554,11 +555,19 @@ impl Ddi {
                     _ => None,
                 },
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_CLK_SEL
-                trans_ddi_select: match *name {
+                trans_clock_select: match *name {
                     "B" => Some(0b010),
                     "C" => Some(0b011),
                     "D" => Some(0b100),
                     "E" => Some(0b101),
+                    _ => None,
+                },
+                // IHD-OS-KBL-Vol 2c-1.17 TRANS_DDI_FUNC_CTL
+                trans_ddi_select: match *name {
+                    "B" => Some(0b001),
+                    "C" => Some(0b010),
+                    "D" => Some(0b011),
+                    "E" => Some(0b100),
                     _ => None,
                 },
             });
@@ -661,6 +670,8 @@ impl Ddi {
                     _ => None,
                 },
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_CLK_SEL
+                trans_clock_select: Some((i + 1) as u32),
+                // IHD-OS-TGL-Vol 2c-12.21 TRANS_DDI_FUNC_CTL
                 trans_ddi_select: Some((i + 1) as u32),
             })
         }
@@ -756,6 +767,19 @@ impl Ddi {
                     _ => None,
                 },
                 // IHD-OS-ACM-Vol 2c-3.23 TRANS_CLK_SEL
+                trans_clock_select: match *name {
+                    "A" => Some(0b0001),
+                    "B" => Some(0b0010),
+                    "C" => Some(0b0011),
+                    "D" => Some(0b0100),
+                    "E" => Some(0b0101),
+                    "USBC1" => Some(0b0110),
+                    "USBC2" => Some(0b0111),
+                    "USBC3" => Some(0b1000),
+                    "USBC4" => Some(0b1001),
+                    _ => None,
+                },
+                // IHD-OS-ACM-Vol 2c-3.23 TRANS_DDI_FUNC_CTL
                 trans_ddi_select: Some((i + 1) as u32),
             })
         }

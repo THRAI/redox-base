@@ -229,6 +229,7 @@ pub fn allocate_first_msi_interrupt_on_bsp(pcid_handle: &mut PciFunctionHandle) 
     interrupt_handle
 }
 
+#[derive(Debug)]
 pub struct InterruptVector {
     irq_handle: File,
     vector: u16,
@@ -324,6 +325,7 @@ impl Msix {
     }
 }
 
+#[derive(Debug)]
 enum InterruptVectorKind {
     Legacy,
     Msi,
