@@ -316,8 +316,8 @@ where
         }?;
 
         let mut timeout = match op {
-            Op::Read(_) => write_timeout,
-            Op::Write(_) => read_timeout,
+            Op::Read(_) => read_timeout,
+            Op::Write(_) => write_timeout,
             _ => None,
         };
 
