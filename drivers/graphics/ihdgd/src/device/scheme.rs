@@ -86,6 +86,10 @@ impl GraphicsAdapter for Device {
     fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {
         let ddi_name = {
             let connector = objects.get_connector(id).unwrap().lock().unwrap();
+            if !matches!(connector.connection, KmsConnectorStatus::Unknown) {
+                //TODO: fix probing on every frame
+                return;
+            }
             connector.driver_data.ddi_name
         };
         log::info!("probe connector {:?}: DDI {}", id, ddi_name);

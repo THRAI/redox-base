@@ -521,7 +521,7 @@ impl Device {
             );
             {
                 let mut connector = objects.get_connector(connector_id).unwrap().lock().unwrap();
-                connector.connection = KmsConnectorStatus::Disconnected;
+                connector.connection = KmsConnectorStatus::Unknown;
                 connector.state.crtc_id = crtc_id;
             }
             ddi.kms_id = Some(connector_id);
