@@ -950,7 +950,7 @@ impl Device {
                 // Configure voltage swing and related IO settings
                 match input {
                     VideoInput::Hdmi => {
-                        ddi.voltage_swing_hdmi(&self.gttmm, &mode)?;
+                        ddi.voltage_swing_hdmi()?;
                     }
                     VideoInput::Dp => {
                         //TODO ddi.voltage_swing_dp(&self.gttmm)?;
