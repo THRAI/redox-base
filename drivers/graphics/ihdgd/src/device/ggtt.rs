@@ -69,7 +69,7 @@ impl GlobalGtt {
             dsm_size / 1024 / 1024,
         );
 
-        let gm_alloc = RangeAllocator::new(0..gm_size / 4096);
+        let gm_alloc = RangeAllocator::new(0..gm_size / GTT_PAGE_SIZE);
 
         GlobalGtt {
             gttmm,
@@ -129,6 +129,6 @@ impl GlobalGtt {
         }
         mem::forget(sgl);
 
-        Ok(range.start * 4096)
+        Ok(range.start * GTT_PAGE_SIZE)
     }
 }

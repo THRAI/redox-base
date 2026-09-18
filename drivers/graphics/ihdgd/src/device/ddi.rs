@@ -3,7 +3,6 @@ use std::sync::Arc;
 use common::io::{Io, MmioPtr, WriteOnly};
 use common::timeout::Timeout;
 use driver_graphics::kms::objects::KmsObjectId;
-use drm_sys::drm_mode_modeinfo;
 use embedded_hal::prelude::*;
 use syscall::error::{Error, Result, EIO};
 
@@ -300,11 +299,7 @@ impl Ddi {
         Ok(None)
     }
 
-    pub fn voltage_swing_hdmi(
-        &mut self,
-        gttmm: &MmioRegion,
-        mode: &drm_mode_modeinfo,
-    ) -> Result<()> {
+    pub fn voltage_swing_hdmi(&mut self) -> Result<()> {
         struct Setting {
             dw2_swing_sel: u32,
             dw7_n_scalar: u32,

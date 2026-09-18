@@ -91,7 +91,9 @@ impl ChangeDetect {
 pub enum DeviceKind {
     KabyLake,
     TigerLake,
+    AlderLakeP,
     Alchemist,
+    MeteorLakeP,
 }
 
 pub enum Event {
@@ -263,6 +265,13 @@ impl Device {
             (0x8086, 0x9A78) => {
                 DeviceKind::TigerLake
             }
+            // Alder Lake-P
+            //TODO: add more IDs
+            (0x8086, 0x46a6) | // Alder Lake-P GT2
+            (0x8086, 0x46a8)   // Alder Lake-UP3 GT2
+            => {
+                DeviceKind::AlderLakeP
+            }
             // Alchemist
             (0x8086, 0x5690) | // A770M
             (0x8086, 0x5691) | // A730M
@@ -284,11 +293,24 @@ impl Device {
             => {
                 DeviceKind::Alchemist
             }
+            // Meteor Lake-P
+            //TODO: add more IDs
+            (0x8086, 0x7d45)   // Meteor Lake-P
+            => {
+                DeviceKind::MeteorLakeP
+            }
             (vendor_id, device_id) => {
                 log::error!("unsupported ID {:04X}:{:04X}", vendor_id, device_id);
                 return Err(Error::new(ENODEV));
             }
         };
+
+        log::info!(
+            "{:04X}:{:04X}: {:?}",
+            func.full_device_id.vendor_id,
+            func.full_device_id.device_id,
+            kind
+        );
 
         let gttmm = {
             Arc::new(unsafe {
@@ -368,8 +390,12 @@ impl Device {
                 // IHD-OS-KBL-Vol 12-1.17
                 ref_freq = 24_000_000;
             }
-            DeviceKind::TigerLake | DeviceKind::Alchemist => {
+            DeviceKind::TigerLake
+            | DeviceKind::AlderLakeP
+            | DeviceKind::Alchemist
+            | DeviceKind::MeteorLakeP => {
                 // TigerLake: IHD-OS-TGL-Vol 2c-12.21
+                //TODO: Alder Lake-P support is from inspecting MIT-licensed DRM driver
                 // Alchemist: IHD-OS-ACM-Vol 2c-3.23
 
                 dpclka_cfgcr0 = Some(unsafe { gttmm.mmio(0x164280)? });
@@ -394,7 +420,7 @@ impl Device {
                 int = Interrupter {
                     change_detects: vec![
                         ChangeDetect::new("de_hpd_interrupt", unsafe { gttmm.mmio(0x44470)? }),
-                        ChangeDetect::new("de_port_interrupt", unsafe { gttmm.mmio(0x44440)? }),
+                        //TODO: spurious interrupts: ChangeDetect::new("de_port_interrupt", unsafe { gttmm.mmio(0x44440)? }),
                         ChangeDetect::new("shotplug_ctl_ddi", unsafe { gttmm.mmio(0xC4030)? }),
                         ChangeDetect::new("shotplug_ctl_tc", unsafe { gttmm.mmio(0xC4034)? }),
                         ChangeDetect::new("tbt_hotplug_ctl", unsafe { gttmm.mmio(0x44030)? }),
@@ -411,6 +437,7 @@ impl Device {
             }
         }
 
+        let buffers;
         let ddis;
         let dplls;
         let pipes;
@@ -418,6 +445,7 @@ impl Device {
         let transcoders;
         match kind {
             DeviceKind::KabyLake => {
+                buffers = 1024;
                 ddis = Ddi::kabylake(&gttmm)?;
                 //TODO: kaby lake dplls
                 dplls = Vec::new();
@@ -426,26 +454,26 @@ impl Device {
                 transcoders = Transcoder::kabylake(&gttmm)?;
             }
             DeviceKind::TigerLake => {
+                buffers = 2048;
                 ddis = Ddi::tigerlake(&gttmm)?;
                 dplls = Dpll::tigerlake(&gttmm)?;
                 pipes = Pipe::tigerlake(&gttmm)?;
                 power_wells = PowerWells::tigerlake(&gttmm)?;
                 transcoders = Transcoder::tigerlake(&gttmm)?;
             }
-            DeviceKind::Alchemist => {
-                // Many registers are identical to tigerlake
+            //TODO: ensure Alder Lake-P (XE_LPD) and Meteor Lake-P (XE_LPDP) match Alchemist
+            DeviceKind::AlderLakeP | DeviceKind::Alchemist | DeviceKind::MeteorLakeP => {
+                // Some registers are identical to tigerlake
+                buffers = 2048;
                 dplls = Dpll::tigerlake(&gttmm)?;
-                pipes = Pipe::alchemist(&gttmm)?;
-                // FIXME transcoders are probably different too
+                pipes = Pipe::tigerlake(&gttmm)?;
                 transcoders = Transcoder::tigerlake(&gttmm)?;
-                // Power wells are distinct
+                // DDIs and power wells are distinct
                 ddis = Ddi::alchemist(&gttmm)?;
                 power_wells = PowerWells::alchemist(&gttmm)?;
             }
         }
 
-        //TODO: get number of available buffers
-        let buffers = 1024;
         Ok(Self {
             unique: format!("pci:{}", pcid_handle.config().func.addr),
             kind,
@@ -527,6 +555,8 @@ impl Device {
             ddi.kms_id = Some(connector_id);
         }
 
+        self.dump();
+
         // Discover current framebuffers
         for crtc_id in objects.crtc_ids().to_vec() {
             let driver_data = objects.get_crtc(crtc_id).unwrap().driver_data;
@@ -537,6 +567,7 @@ impl Device {
                     plane.fetch_modeset(&mut self.alloc_buffers);
 
                     let fb = plane.fetch_framebuffer(&self.gm, &mut self.ggtt);
+                    log::info!("plane {}{}: {:?}", plane.name, pipe.name, fb);
 
                     //TODO: use EDID for firmware mode instead of modeinfo_for_size
                     objects
@@ -574,8 +605,6 @@ impl Device {
                 }
             }
         }
-
-        //self.dump();
 
         log::info!(
             "device initialized with {} framebuffers",
@@ -950,7 +979,7 @@ impl Device {
                 // Configure voltage swing and related IO settings
                 match input {
                     VideoInput::Hdmi => {
-                        ddi.voltage_swing_hdmi(&self.gttmm, &mode)?;
+                        ddi.voltage_swing_hdmi()?;
                     }
                     VideoInput::Dp => {
                         //TODO ddi.voltage_swing_dp(&self.gttmm)?;

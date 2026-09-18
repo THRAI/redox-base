@@ -251,7 +251,7 @@ impl PowerWells {
                 transcoders: &["A"],
                 request: 1 << 1,
                 state: 1 << 0,
-                fuse_status: 1 >> 26,
+                fuse_status: 1 << 26,
             },
             // Audio playback, Transcoder WD, VGA, DDI C-E, Type-C, KVMR
             PowerWell {

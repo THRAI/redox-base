@@ -1,5 +1,4 @@
 use common::io::{Io, MmioPtr};
-use driver_graphics::kms::objects::KmsObjectId;
 use drm_sys::drm_mode_modeinfo;
 use syscall::error::Result;
 
