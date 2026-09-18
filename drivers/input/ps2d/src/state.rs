@@ -1,6 +1,7 @@
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::process;
 use std::time::Duration;
 
 use inputd::ProducerHandle;
@@ -60,7 +61,13 @@ pub struct Ps2d {
 impl Ps2d {
     pub fn new(input: ProducerHandle, time_file: File) -> Self {
         let mut ps2 = Ps2::new();
-        ps2.init().expect("failed to initialize");
+        match ps2.init() {
+            Ok(()) => {}
+            Err(err) => {
+                log::error!("failed to initialize: {:?}", err);
+                process::exit(1);
+            }
+        }
 
         // FIXME add an option for orbital to disable this when an app captures the mouse.
         let vmmouse_relative = false;
