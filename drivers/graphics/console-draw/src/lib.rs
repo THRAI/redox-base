@@ -130,7 +130,7 @@ impl V2DisplayMap {
 
         let ((_crtc, _fb, buffer), secondary_displays) = self.displays.split_first_mut().unwrap();
 
-        let (stride, _) = buffer.buffer().size();
+        let stride = buffer.buffer().pitch() / 4;
         let shadow_buf = buffer.shadow_buf();
         let damage = f(DisplayMap {
             offscreen: ptr::slice_from_raw_parts_mut(
