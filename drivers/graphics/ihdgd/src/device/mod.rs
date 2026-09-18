@@ -527,6 +527,8 @@ impl Device {
             ddi.kms_id = Some(connector_id);
         }
 
+        self.dump();
+
         // Discover current framebuffers
         for crtc_id in objects.crtc_ids().to_vec() {
             let driver_data = objects.get_crtc(crtc_id).unwrap().driver_data;
@@ -537,6 +539,7 @@ impl Device {
                     plane.fetch_modeset(&mut self.alloc_buffers);
 
                     let fb = plane.fetch_framebuffer(&self.gm, &mut self.ggtt);
+                    log::info!("plane {}{}: {:?}", plane.name, pipe.name, fb);
 
                     //TODO: use EDID for firmware mode instead of modeinfo_for_size
                     objects
@@ -574,8 +577,6 @@ impl Device {
                 }
             }
         }
-
-        //self.dump();
 
         log::info!(
             "device initialized with {} framebuffers",
