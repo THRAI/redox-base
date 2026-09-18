@@ -420,7 +420,7 @@ impl Device {
                 int = Interrupter {
                     change_detects: vec![
                         ChangeDetect::new("de_hpd_interrupt", unsafe { gttmm.mmio(0x44470)? }),
-                        ChangeDetect::new("de_port_interrupt", unsafe { gttmm.mmio(0x44440)? }),
+                        //TODO: spurious interrupts: ChangeDetect::new("de_port_interrupt", unsafe { gttmm.mmio(0x44440)? }),
                         ChangeDetect::new("shotplug_ctl_ddi", unsafe { gttmm.mmio(0xC4030)? }),
                         ChangeDetect::new("shotplug_ctl_tc", unsafe { gttmm.mmio(0xC4034)? }),
                         ChangeDetect::new("tbt_hotplug_ctl", unsafe { gttmm.mmio(0x44030)? }),
