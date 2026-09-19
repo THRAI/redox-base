@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
+use std::process;
 
 use common::MemoryType;
 use event::{user_data, EventQueue};
@@ -59,8 +60,12 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
         let event_queue =
             EventQueue::<Source>::new().expect("ihdad: Could not create event queue.");
         let socket = Socket::nonblock().expect("ihdad: failed to create socket");
-        let mut device = unsafe {
-            hda::IntelHDA::new(address, vend_prod).expect("ihdad: failed to allocate device")
+        let mut device = match unsafe { hda::IntelHDA::new(address, vend_prod) } {
+            Ok(ok) => ok,
+            Err(err) => {
+                log::error!("failed to initialize HDA: {}", err);
+                process::exit(1);
+            }
         };
         let mut readiness_based = ReadinessBased::new(Box::new(socket), 16);
 

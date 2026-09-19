@@ -471,7 +471,14 @@ impl IntelHDA {
 
         log::debug!("Best pin: {:01X}:{:02X}", outpin.0, outpin.1);
 
-        let path = self.find_path_to_dac(outpin).unwrap();
+        let Some(path) = self.find_path_to_dac(outpin) else {
+            log::error!(
+                "failed to find path to DAC {:01X}:{:02X}",
+                outpin.0,
+                outpin.1
+            );
+            return Err(Error::new(EIO));
+        };
 
         let dac = *path.last().unwrap();
         let pin = *path.first().unwrap();
