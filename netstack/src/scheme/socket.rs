@@ -316,8 +316,8 @@ where
         }?;
 
         let mut timeout = match op {
-            Op::Read(_) => write_timeout,
-            Op::Write(_) => read_timeout,
+            Op::Read(_) => read_timeout,
+            Op::Write(_) => write_timeout,
             _ => None,
         };
 
@@ -402,7 +402,11 @@ where
                         let count = timespec.deref_mut().write(buf).map_err(|err| {
                             SyscallError::new(err.raw_os_error().unwrap_or(syscall::EIO))
                         })?;
-                        (Some(timespec), count)
+                        if timespec.tv_nsec == 0 && timespec.tv_sec == 0 {
+                            (None, 0) // disable timeout
+                        } else {
+                            (Some(timespec), count)
+                        }
                     }
                 };
                 match setting {
