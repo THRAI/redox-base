@@ -6,6 +6,7 @@ use drm_sys::{
     DRM_CAP_DUMB_PREFERRED_DEPTH, DRM_CAP_TIMESTAMP_MONOTONIC, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT,
     DRM_CLIENT_CAP_UNIVERSAL_PLANES,
 };
+use graphics_ipc::redox_uapi_exts::REDOX_DRM_CLIENT_CAP_HOTPLUG_EVENTS;
 use syscall::{EINVAL, EOPNOTSUPP, Error};
 
 use crate::{DrmHandle, GraphicsAdapter};
@@ -126,6 +127,7 @@ pub(super) fn set_client_cap<T: GraphicsAdapter>(
             }
             handle.supports_cursor_hotspot = enable;
         }
+        REDOX_DRM_CLIENT_CAP_HOTPLUG_EVENTS => handle.supports_redox_hotplug_events = enable,
         _ => return Err(Error::new(EINVAL)),
     }
     Ok(0)

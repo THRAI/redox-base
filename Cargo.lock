@@ -658,6 +658,7 @@ dependencies = [
  "drm-fourcc",
  "drm-sys",
  "edid",
+ "graphics-ipc",
  "inputd",
  "libredox",
  "log",
@@ -1033,6 +1034,7 @@ name = "graphics-ipc"
 version = "0.1.0"
 dependencies = [
  "drm",
+ "drm-sys",
 ]
 
 [[package]]

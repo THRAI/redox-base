@@ -1,11 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt::Debug;
+use std::slice;
 use std::sync::Arc;
 
 use drm_sys::DRM_CLIENT_NAME_MAX_LEN;
+use graphics_ipc::redox_uapi_exts::RedoxDrmEventConnectorHotplug;
 use redox_scheme::CallerCtx;
 use scheme_utils::{FpathWriter, ResourceSync};
-use syscall::{EINVAL, Error, MapFlags, Result};
+use syscall::{EFAULT, EINVAL, Error, EventFlags, MapFlags, Result};
 
 use crate::kms::framebuffer::{KmsFramebuffer, disable_planes_with_fb};
 use crate::kms::objects::KmsObjectId;
@@ -14,6 +16,12 @@ use crate::{
     GraphicsAdapter, GraphicsResource, GraphicsSchemeData, MAP_FAKE_OFFSET_MULTIPLIER, ioctl,
 };
 
+/// # Safety
+///
+/// Type must not have any padding or contain any references.
+pub(crate) unsafe trait DrmEvent {}
+unsafe impl DrmEvent for RedoxDrmEventConnectorHotplug {}
+
 #[derive(Debug)]
 pub(crate) struct DrmHandle<T: GraphicsAdapter> {
     pub(crate) vt: usize,
@@ -21,9 +29,13 @@ pub(crate) struct DrmHandle<T: GraphicsAdapter> {
     pub(crate) unique: Option<String>,
     pub(crate) supports_universal_planes: bool,
     pub(crate) supports_cursor_hotspot: bool,
+    pub(crate) supports_redox_hotplug_events: bool,
     pub(crate) fbs: BTreeMap<KmsObjectId, KmsRcObjectRef<KmsFramebuffer<T>>>,
     pub(crate) next_buffer_id: u32,
     pub(crate) buffers: HashMap<u32, Arc<T::Buffer>>,
+    events: VecDeque<Box<[u8]>>,
+    requested_events: EventFlags,
+    notified_read: bool,
 }
 
 impl<T: GraphicsAdapter> DrmHandle<T> {
@@ -34,16 +46,76 @@ impl<T: GraphicsAdapter> DrmHandle<T> {
             unique: None,
             supports_universal_planes: false,
             supports_cursor_hotspot: false,
+            supports_redox_hotplug_events: false,
             fbs: BTreeMap::new(),
             next_buffer_id: 0,
             buffers: HashMap::new(),
+            events: VecDeque::new(),
+            requested_events: EventFlags::empty(),
+            notified_read: true,
         }
+    }
+
+    pub(crate) fn should_post_event(&self) -> bool {
+        self.requested_events.contains(EventFlags::EVENT_READ)
+            && !self.events.is_empty()
+            && !self.notified_read
+    }
+
+    pub(crate) fn push_event<U: DrmEvent>(&mut self, event: U) {
+        self.events.push_back(
+            unsafe { slice::from_raw_parts((&raw const event).cast::<u8>(), size_of::<U>()) }
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        self.notified_read = false;
     }
 }
 
 impl<T: GraphicsAdapter> ResourceSync for DrmHandle<T> {
     type SchemeData = GraphicsSchemeData<T>;
     type ResourceEnum = GraphicsResource<T>;
+
+    fn read(
+        &mut self,
+        _scheme_data: &mut Self::SchemeData,
+        buf: &mut [u8],
+        _offset: u64,
+        _fcntl_flags: u32,
+    ) -> Result<usize> {
+        let mut written = 0;
+        while let Some(event) = self.events.pop_front() {
+            if event.len() > buf.len() - written {
+                self.events.push_front(event);
+                if written == 0 {
+                    return Err(Error::new(EFAULT));
+                }
+                break;
+            }
+            buf[written..written + event.len()].copy_from_slice(&event);
+            written += event.len();
+        }
+        self.notified_read = false;
+        Ok(written)
+    }
+
+    fn fevent(
+        &mut self,
+        _scheme_data: &mut Self::SchemeData,
+        flags: EventFlags,
+    ) -> Result<EventFlags> {
+        self.requested_events = flags;
+        if !flags.contains(EventFlags::EVENT_READ) {
+            return Ok(EventFlags::empty());
+        }
+        if self.events.is_empty() {
+            self.notified_read = false;
+            Ok(EventFlags::empty())
+        } else {
+            self.notified_read = true;
+            Ok(EventFlags::EVENT_READ)
+        }
+    }
 
     fn fstat(
         &mut self,
