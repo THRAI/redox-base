@@ -482,6 +482,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "drm",
+ "drm-ffi",
  "graphics-ipc",
  "orbclient",
  "psf-rs",

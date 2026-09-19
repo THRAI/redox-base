@@ -1,11 +1,15 @@
 use std::collections::VecDeque;
+use std::os::fd::AsRawFd;
 
 use console_draw::alacritty_terminal::term;
 use console_draw::V2DisplayMap;
+use event::EventQueue;
 use graphics_ipc::DrmHandle;
 use inputd::ConsumerHandle;
 use orbclient::{Event, EventOption};
 use syscall::error::*;
+
+use crate::Source;
 
 pub struct TextScreen {
     pub input_handle: ConsumerHandle,
@@ -18,6 +22,7 @@ pub struct TextScreen {
 impl TextScreen {
     pub fn new(
         input_handle: ConsumerHandle,
+        event_queue: &EventQueue<Source>,
         font: Option<console_draw::ConsoleFont>,
     ) -> TextScreen {
         let mut text_screen = TextScreen {
@@ -27,11 +32,11 @@ impl TextScreen {
             ctrl: false,
             input: VecDeque::new(),
         };
-        text_screen.handle_handoff();
+        text_screen.handle_handoff(event_queue);
         text_screen
     }
 
-    pub fn handle_handoff(&mut self) {
+    pub fn handle_handoff(&mut self, event_queue: &EventQueue<Source>) {
         log::info!("fbcond: Performing handoff");
 
         let display_file = match self.input_handle.open_display() {
@@ -46,10 +51,42 @@ impl TextScreen {
         log::debug!("fbcond: Opened new display");
 
         match V2DisplayMap::new(new_display_handle) {
-            Ok(map) => self.map = Some(map),
+            Ok(mut map) => match self.inner.handle_handoff(&mut map) {
+                Ok(()) => {
+                    if let Some(old_map) = &self.map {
+                        event_queue
+                            .unsubscribe(old_map.event_handle().as_raw_fd() as usize)
+                            .expect("fbcond: failed to unsubscribe from old drm events");
+                    }
+                    event_queue
+                        .subscribe(
+                            map.event_handle().as_raw_fd() as usize,
+                            Source::DisplayHandle,
+                            event::EventFlags::READ,
+                        )
+                        .expect("fbcond: failed to subscribe to drm events");
+                    self.map = Some(map);
+                }
+                Err(err) => {
+                    eprintln!("fbcond: failed to handle handoff: {err}");
+                    return;
+                }
+            },
             Err(err) => {
-                log::error!("fbcond: failed to map new display: {err}");
+                eprintln!("fbcond: failed to open display: {}", err);
                 return;
+            }
+        };
+    }
+
+    pub fn handle_display_event(&mut self) {
+        if let Some(map) = &mut self.map {
+            match self.inner.handle_display_event(map) {
+                Ok(()) => {}
+                Err(err) => {
+                    eprintln!("fbcond: failed to create or map framebuffer: {}", err);
+                    return;
+                }
             }
         }
     }
@@ -151,14 +188,6 @@ impl TextScreen {
 
     pub fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if let Some(map) = &mut self.map {
-            match self.inner.resize_to_preferred(map) {
-                Ok(false) => {}
-                Ok(true) => eprintln!("fbcond: resized display"),
-                Err(err) => {
-                    eprintln!("fbcond: failed to create or map framebuffer: {}", err);
-                }
-            }
-
             self.inner.write(map, buf, &mut self.input);
         }
 

@@ -15,18 +15,19 @@ use graphics_ipc::DrmHandle;
 use inputd::{ConsumerHandle, ConsumerHandleEvent};
 use orbclient::{Event, EventOption};
 
+event::user_data! {
+    enum Source {
+        LogPipe,
+        Input,
+        DisplayHandle,
+    }
+}
+
 fn main() {
     daemon::Daemon::new(daemon);
 }
 fn daemon(daemon: daemon::Daemon) -> ! {
     let event_queue = EventQueue::new().expect("fbbootlogd: failed to create event queue");
-
-    event::user_data! {
-        enum Source {
-            LogPipe,
-            Input,
-        }
-    }
 
     let (mut log_reader, log_writer) = io::pipe().expect("fbbootlogd: failed to create pipe");
     if unsafe { libc::fcntl(log_reader.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) != 0 } {
@@ -38,7 +39,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     let input_handle = ConsumerHandle::bootlog_vt().expect("fbbootlogd: Failed to open vt");
     let mut bootlog = Fbbootlog::new();
-    bootlog.handle_handoff(&input_handle);
+    bootlog.handle_handoff(&input_handle, &event_queue);
 
     event_queue
         .subscribe(
@@ -77,7 +78,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     libredox::call::setns(0).expect("fbbootlogd: failed to enter null namespace");
 
-    for event in event_queue {
+    for event in event_queue.iter() {
         match event.expect("fbbootlogd: failed to get event").user_data {
             Source::LogPipe => loop {
                 let mut buf = [0; 4096];
@@ -103,10 +104,13 @@ fn daemon(daemon: daemon::Daemon) -> ! {
                         }
                         ConsumerHandleEvent::Handoff => {
                             eprintln!("fbbootlogd: handoff requested");
-                            bootlog.handle_handoff(&input_handle);
+                            bootlog.handle_handoff(&input_handle, &event_queue);
                         }
                     }
                 }
+            }
+            Source::DisplayHandle => {
+                bootlog.handle_display_event();
             }
         }
     }
@@ -132,7 +136,7 @@ impl Fbbootlog {
         }
     }
 
-    fn handle_handoff(&mut self, input_handle: &ConsumerHandle) {
+    fn handle_handoff(&mut self, input_handle: &ConsumerHandle, event_queue: &EventQueue<Source>) {
         let new_display_handle = match input_handle.open_display() {
             Ok(display) => DrmHandle::from_file(display).unwrap(),
             Err(err) => {
@@ -142,7 +146,27 @@ impl Fbbootlog {
         };
 
         match V2DisplayMap::new(new_display_handle) {
-            Ok(display_map) => self.display_map = Some(display_map),
+            Ok(mut display_map) => match self.text_screen.handle_handoff(&mut display_map) {
+                Ok(()) => {
+                    if let Some(old_display_map) = &self.display_map {
+                        event_queue
+                            .unsubscribe(old_display_map.event_handle().as_raw_fd() as usize)
+                            .expect("fbbootlogd: failed to unsubscribe from old drm events");
+                    }
+                    event_queue
+                        .subscribe(
+                            display_map.event_handle().as_raw_fd() as usize,
+                            Source::DisplayHandle,
+                            event::EventFlags::READ,
+                        )
+                        .expect("fbbootlogd: failed to subscribe to drm events");
+                    self.display_map = Some(display_map);
+                }
+                Err(err) => {
+                    eprintln!("fbbootlogd: failed to handle handoff: {err}");
+                    return;
+                }
+            },
             Err(err) => {
                 eprintln!("fbbootlogd: failed to open display: {}", err);
                 return;
@@ -195,17 +219,20 @@ impl Fbbootlog {
         }
     }
 
-    fn handle_logs(&mut self, buf: &[u8]) {
+    fn handle_display_event(&mut self) {
         if let Some(map) = &mut self.display_map {
-            match self.text_screen.resize_to_preferred(map) {
-                Ok(false) => {}
-                Ok(true) => eprintln!("fbbootlogd: resized display"),
+            match self.text_screen.handle_display_event(map) {
+                Ok(()) => {}
                 Err(err) => {
                     eprintln!("fbbootlogd: failed to create or map framebuffer: {}", err);
                     return;
                 }
             }
+        }
+    }
 
+    fn handle_logs(&mut self, buf: &[u8]) {
+        if let Some(map) = &mut self.display_map {
             self.text_screen.write(map, buf, &mut VecDeque::new());
         }
     }

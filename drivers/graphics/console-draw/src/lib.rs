@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::TryFrom;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::rc::Rc;
 use std::{cmp, io, mem, ptr};
 
@@ -17,7 +18,12 @@ use alacritty_terminal::term::{
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use alacritty_terminal::{vte, Term};
 use drm::buffer::{Buffer, DrmFourcc};
-use drm::control::{connector, crtc, framebuffer, ClipRect, Device, Mode, RawResourceHandle};
+use drm::control::{self, connector, crtc, framebuffer, ClipRect, Device, Mode, RawResourceHandle};
+use drm_ffi::drm_event;
+use graphics_ipc::redox_uapi_exts::{
+    RedoxDrmEventConnectorHotplug, REDOX_DRM_CLIENT_CAP_HOTPLUG_EVENTS,
+    REDOX_DRM_EVENT_CONNECTOR_HOTPLUG,
+};
 use graphics_ipc::{CpuBackedBuffer, DrmHandle};
 use orbclient::FONT;
 
@@ -75,6 +81,13 @@ impl V2DisplayMap {
     }
 
     pub fn new(display_handle: DrmHandle) -> io::Result<Self> {
+        drm_ffi::set_capability(
+            display_handle.as_fd(),
+            u64::from(REDOX_DRM_CLIENT_CAP_HOTPLUG_EVENTS),
+            true,
+        )
+        .unwrap();
+
         let crtc_connector_map = Self::map_connectors_to_crtcs(
             &display_handle,
             true, // force_probe
@@ -112,6 +125,10 @@ impl V2DisplayMap {
             display_handle,
             displays,
         })
+    }
+
+    pub fn event_handle(&self) -> BorrowedFd<'_> {
+        self.display_handle.as_fd()
     }
 
     fn with_console_map(&mut self, f: impl FnOnce(DisplayMap) -> ClipRect) -> ClipRect {
@@ -396,22 +413,17 @@ impl TextScreen {
 
     pub fn write(&mut self, map: &mut V2DisplayMap, buf: &[u8], input: &mut VecDeque<u8>) {
         let damage = map.with_console_map(|mut console_map| {
-            self.term.resize(TermSize::new(
-                console_map.width / self.font.width,
-                console_map.height / self.font.height,
-            ));
-
             self.vte_parser.advance(&mut self.term, buf);
             self.vte_parser.stop_sync(&mut self.term); // FIXME
 
             input.extend(self.term_input.borrow_mut().drain(..));
 
-            self.redraw(&mut console_map)
+            self.redraw(&mut console_map, false)
         });
         map.dirty_fb(damage).unwrap();
     }
 
-    fn redraw(&mut self, map: &mut DisplayMap) -> ClipRect {
+    fn redraw(&mut self, map: &mut DisplayMap, force_damage: bool) -> ClipRect {
         let mut min_changed_x = map.width / self.font.width;
         let mut max_changed_x = 0;
         let mut min_changed_y = map.height / self.font.height;
@@ -435,6 +447,7 @@ impl TextScreen {
 
         // FIXME handle column damage
         let changed_lines = match self.term.damage() {
+            _ if force_damage => (0..self.term.screen_lines()).collect::<Vec<_>>(),
             TermDamage::Full => (0..self.term.screen_lines()).collect::<Vec<_>>(),
             TermDamage::Partial(term_damage_iterator) => term_damage_iterator
                 .map(|damage| damage.line)
@@ -516,10 +529,45 @@ impl TextScreen {
         )
     }
 
-    pub fn resize_to_preferred(&mut self, map: &mut V2DisplayMap) -> io::Result<bool> {
+    pub fn handle_handoff(&mut self, map: &mut V2DisplayMap) -> io::Result<()> {
+        self.handle_connector_hotplug(map, true /* new_drm_handle */)
+    }
+
+    pub fn handle_display_event(&mut self, map: &mut V2DisplayMap) -> io::Result<()> {
+        for event in map.display_handle.receive_events()? {
+            match event {
+                control::Event::Vblank(_) | control::Event::PageFlip(_) => todo!(),
+                control::Event::Unknown(data) => {
+                    assert!(data.len() >= size_of::<drm_event>());
+                    let event = unsafe { ptr::read_unaligned(data.as_ptr().cast::<drm_event>()) };
+                    match event.type_ {
+                        REDOX_DRM_EVENT_CONNECTOR_HOTPLUG => {
+                            assert_eq!(data.len(), size_of::<RedoxDrmEventConnectorHotplug>());
+                            let _event = unsafe {
+                                ptr::read_unaligned(
+                                    data.as_ptr().cast::<RedoxDrmEventConnectorHotplug>(),
+                                )
+                            };
+
+                            self.handle_connector_hotplug(map, false /* new_drm_handle */)?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_connector_hotplug(
+        &mut self,
+        map: &mut V2DisplayMap,
+        new_drm_handle: bool,
+    ) -> io::Result<()> {
         let crtc_connector_map = V2DisplayMap::map_connectors_to_crtcs(
             &map.display_handle,
-            false, // force_probe
+            true, // force_probe
         )?;
 
         let preferred_sizes =
@@ -535,8 +583,8 @@ impl TextScreen {
             .displays
             .iter()
             .map(|(_crtc, _fb, buffer)| buffer.buffer().size());
-        if preferred_sizes.eq(current_sizes) {
-            return Ok(false);
+        if !new_drm_handle && preferred_sizes.eq(current_sizes) {
+            return Ok(());
         }
 
         let mut new_displays = vec![];
@@ -560,7 +608,14 @@ impl TextScreen {
         }
 
         let old_displays = mem::replace(&mut map.displays, new_displays);
-        map.with_console_map(|mut console_map| self.redraw(&mut console_map));
+        map.with_console_map(|mut console_map| {
+            self.term.resize(TermSize::new(
+                console_map.width / self.font.width,
+                console_map.height / self.font.height,
+            ));
+            self.last_cursor = Point::new(Line(0), Column(0));
+            self.redraw(&mut console_map, true)
+        });
 
         for (crtc, fb, connector, preferred_mode) in new_mapping {
             map.display_handle.set_crtc(
@@ -572,11 +627,13 @@ impl TextScreen {
             )?;
         }
 
-        for (_crtc, fb, buffer) in old_displays {
-            buffer.destroy(&map.display_handle)?;
-            let _ = map.display_handle.destroy_framebuffer(fb);
+        if !new_drm_handle {
+            for (_crtc, fb, buffer) in old_displays {
+                buffer.destroy(&map.display_handle)?;
+                let _ = map.display_handle.destroy_framebuffer(fb);
+            }
         }
 
-        Ok(true)
+        Ok(())
     }
 }
