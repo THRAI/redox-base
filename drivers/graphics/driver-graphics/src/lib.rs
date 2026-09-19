@@ -102,7 +102,11 @@ pub trait GraphicsAdapter: Sized + Debug {
         false
     }
 
-    fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId);
+    fn probe_connector(
+        &mut self,
+        objects: &mut KmsObjects<Self>,
+        id: KmsObjectId,
+    ) -> syscall::Result<()>;
 
     fn create_dumb_buffer(&mut self, width: u32, height: u32) -> (Self::Buffer, u32);
     fn map_dumb_buffer(&mut self, buffer: &Self::Buffer) -> *mut u8;
@@ -154,7 +158,7 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
         let mut objects = KmsObjects::new();
         adapter.init(&mut objects);
         for connector_id in objects.connector_ids().to_vec() {
-            adapter.probe_connector(&mut objects, connector_id)
+            adapter.probe_connector(&mut objects, connector_id).unwrap();
         }
 
         let mut inner = GraphicsSchemeImpl::new(
@@ -215,7 +219,7 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
         (&mut inner.adapter, &mut inner.objects)
     }
 
-    pub fn notify_displays_changed(&mut self) {
+    pub fn notify_connector_hotplug(&mut self, _connector: KmsObjectId) {
         // FIXME notify clients
     }
 

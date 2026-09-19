@@ -80,8 +80,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                 // Intel graphics uses MSI/MSI-X, which are edge triggered and can be unmasked immediately
                 irq_file.irq_handle().write(&mut irq).unwrap();
                 if scheme.adapter_mut().handle_irq() {
-                    let (adapter, objects) = scheme.adapter_and_kms_objects_mut();
-                    adapter.handle_events(objects);
+                    Device::handle_events(&mut scheme);
                     scheme.tick().unwrap();
                 }
             }

@@ -592,9 +592,13 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
                     let (adapter, objects) = scheme.adapter_and_kms_objects_mut();
                     futures::executor::block_on(async { adapter.update_displays().await.unwrap() });
                     for connector_id in objects.connector_ids().to_vec() {
-                        adapter.probe_connector(objects, connector_id);
+                        // FIXME remove this probe_connector in favor of client driver probing once
+                        // all clients listen for hotplug events.
+                        adapter.probe_connector(objects, connector_id).unwrap();
                     }
-                    scheme.notify_displays_changed();
+                    for connector_id in objects.connector_ids().to_vec() {
+                        scheme.notify_connector_hotplug(connector_id);
+                    }
                     scheme
                         .adapter_mut()
                         .config

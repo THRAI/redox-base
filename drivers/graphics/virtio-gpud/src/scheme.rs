@@ -422,9 +422,13 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         true
     }
 
-    fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {
+    fn probe_connector(
+        &mut self,
+        objects: &mut KmsObjects<Self>,
+        id: KmsObjectId,
+    ) -> syscall::Result<()> {
         futures::executor::block_on(async {
-            let mut connector = objects.get_connector(id).unwrap().lock().unwrap();
+            let mut connector = objects.get_connector(id)?.lock().unwrap();
             let display = &self.displays[connector.driver_data.scanout_id as usize];
 
             connector.connection = KmsConnectorStatus::Connected;
@@ -435,7 +439,8 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
             } else {
                 connector.update_from_size(display.width, display.height);
             }
-        });
+            Ok(())
+        })
     }
 
     fn create_dumb_buffer(&mut self, width: u32, height: u32) -> (Self::Buffer, u32) {

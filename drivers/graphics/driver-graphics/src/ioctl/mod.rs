@@ -79,7 +79,7 @@ pub(crate) fn call_ioctl<T: GraphicsAdapter>(
         }),
         ipc::MODE_GET_CONNECTOR => ipc::DrmModeGetConnector::with(payload, |mut data| {
             if data.count_modes() == 0 {
-                adapter.probe_connector(objects, KmsObjectId(data.connector_id()));
+                adapter.probe_connector(objects, KmsObjectId(data.connector_id()))?;
             }
             let connector = objects
                 .get_connector(KmsObjectId(data.connector_id()))?

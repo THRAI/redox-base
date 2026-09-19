@@ -76,11 +76,16 @@ impl GraphicsAdapter for FbAdapter {
         None
     }
 
-    fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {
-        let mut connector = objects.get_connector(id).unwrap().lock().unwrap();
+    fn probe_connector(
+        &mut self,
+        objects: &mut KmsObjects<Self>,
+        id: KmsObjectId,
+    ) -> syscall::Result<()> {
+        let mut connector = objects.get_connector(id)?.lock().unwrap();
         let connector = &mut *connector;
         connector.connection = KmsConnectorStatus::Connected;
         connector.update_from_size(connector.driver_data.width, connector.driver_data.height);
+        Ok(())
     }
 
     fn create_dumb_buffer(&mut self, width: u32, height: u32) -> (Self::Buffer, u32) {
