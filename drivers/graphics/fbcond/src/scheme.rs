@@ -1,6 +1,7 @@
 use std::fs;
 
 use console_draw::ConsoleFont;
+use event::EventQueue;
 use inputd::ConsumerHandle;
 use redox_scheme::CallerCtx;
 use scheme_utils::{resource_scheme, FpathWriter, ResourceOpenResult, ResourceSync};
@@ -9,6 +10,7 @@ use syscall::schemev2::NewFdFlags;
 use syscall::{Error, EventFlags, Result, EAGAIN, ENOENT, O_NONBLOCK};
 
 use crate::text::TextScreen;
+use crate::Source;
 
 resource_scheme! {
     pub(crate) FbconScheme<>;
@@ -25,7 +27,10 @@ pub(crate) struct FbconSchemeData {
 }
 
 impl FbconSchemeData {
-    pub(crate) fn new(input_handle: ConsumerHandle) -> FbconSchemeData {
+    pub(crate) fn new(
+        input_handle: ConsumerHandle,
+        event_queue: &EventQueue<Source>,
+    ) -> FbconSchemeData {
         let config = match fs::read_to_string("/etc/fbcond.toml") {
             Ok(config) => config,
             Err(err) => {
@@ -60,7 +65,7 @@ impl FbconSchemeData {
         };
 
         FbconSchemeData {
-            console: TextScreen::new(input_handle, font.clone()),
+            console: TextScreen::new(input_handle, event_queue, font.clone()),
         }
     }
 }

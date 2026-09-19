@@ -7,6 +7,8 @@ use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
 use drm::control::Device as _;
 use drm::{Device as _, DriverCapability};
 
+pub mod redox_uapi_exts;
+
 /// A graphics handle using the Linux DRM interface.
 pub struct DrmHandle {
     file: File,

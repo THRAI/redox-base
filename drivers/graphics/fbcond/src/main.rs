@@ -17,6 +17,7 @@ user_data! {
     enum Source {
         Scheme,
         Vt,
+        DisplayHandle,
     }
 }
 
@@ -56,7 +57,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 
     let mut scheme = FbconScheme::new(
         format!("fbcon.{vt_id}"),
-        FbconSchemeData::new(input_handle),
+        FbconSchemeData::new(input_handle, &event_queue),
         FbconResource::SchemeRoot(SchemeRoot),
     );
     let mut readiness = ReadinessBased::new(Box::new(socket), 16);
@@ -66,12 +67,12 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
     libredox::call::setns(0).expect("fbcond: failed to enter null namespace");
 
     // Handle all events that could have happened before registering with the event queue.
-    handle_event(&mut scheme, &mut readiness, Source::Scheme);
-    handle_event(&mut scheme, &mut readiness, Source::Vt);
+    handle_event(&mut scheme, &mut readiness, &event_queue, Source::Scheme);
+    handle_event(&mut scheme, &mut readiness, &event_queue, Source::Vt);
 
-    for event in event_queue {
+    for event in event_queue.iter() {
         let event = event.expect("fbcond: failed to read event from event queue");
-        handle_event(&mut scheme, &mut readiness, event.user_data);
+        handle_event(&mut scheme, &mut readiness, &event_queue, event.user_data);
     }
 
     std::process::exit(0);
@@ -80,6 +81,7 @@ fn daemon(daemon: daemon::SchemeDaemon) -> ! {
 fn handle_event(
     scheme: &mut FbconScheme,
     readiness: &mut ReadinessBased<Box<Socket>>,
+    event_queue: &EventQueue<Source>,
     event: Source,
 ) {
     match event {
@@ -105,9 +107,12 @@ fn handle_event(
                             vt.input(event)
                         }
                     }
-                    ConsumerHandleEvent::Handoff => vt.handle_handoff(),
+                    ConsumerHandleEvent::Handoff => vt.handle_handoff(event_queue),
                 }
             }
+        }
+        Source::DisplayHandle => {
+            scheme.scheme_data_mut().console.handle_display_event();
         }
     }
 

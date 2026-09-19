@@ -16,6 +16,7 @@ redox_syscall.workspace = true
 libredox.workspace = true
 
 common = { path = "../../common" }
+graphics-ipc = { path = "../graphics-ipc"}
 inputd = { path = "../../inputd" }
 
 [lints]

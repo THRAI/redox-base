@@ -8,13 +8,16 @@ use std::io::{self, Write};
 use std::marker::PhantomData;
 use std::ops::ControlFlow;
 
+use graphics_ipc::redox_uapi_exts::{
+    REDOX_DRM_EVENT_CONNECTOR_HOTPLUG, RedoxDrmEventConnectorHotplug,
+};
 use inputd::{DisplayHandle, VtEvent, VtEventKind};
 use libredox::Fd;
 use redox_scheme::scheme::{SchemeSync, register_scheme_inner};
-use redox_scheme::{CallerCtx, Socket};
+use redox_scheme::{CallerCtx, Response, SignalBehavior, Socket};
 use scheme_utils::{Blocking, FpathWriter, ResourceOpenResult, ResourceSync, resource_scheme};
 use syscall::schemev2::NewFdFlags;
-use syscall::{EINVAL, Error, Result};
+use syscall::{EINVAL, Error, EventFlags, Result};
 
 use crate::handle::DrmHandle;
 use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState};
@@ -102,7 +105,11 @@ pub trait GraphicsAdapter: Sized + Debug {
         false
     }
 
-    fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId);
+    fn probe_connector(
+        &mut self,
+        objects: &mut KmsObjects<Self>,
+        id: KmsObjectId,
+    ) -> syscall::Result<()>;
 
     fn create_dumb_buffer(&mut self, width: u32, height: u32) -> (Self::Buffer, u32);
     fn map_dumb_buffer(&mut self, buffer: &Self::Buffer) -> *mut u8;
@@ -154,7 +161,7 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
         let mut objects = KmsObjects::new();
         adapter.init(&mut objects);
         for connector_id in objects.connector_ids().to_vec() {
-            adapter.probe_connector(&mut objects, connector_id)
+            adapter.probe_connector(&mut objects, connector_id).unwrap();
         }
 
         let mut inner = GraphicsSchemeImpl::new(
@@ -215,8 +222,26 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
         (&mut inner.adapter, &mut inner.objects)
     }
 
-    pub fn notify_displays_changed(&mut self) {
-        // FIXME notify clients
+    pub fn notify_connector_hotplug(&mut self, connector: KmsObjectId) {
+        let event = RedoxDrmEventConnectorHotplug {
+            base: drm_sys::drm_event {
+                type_: REDOX_DRM_EVENT_CONNECTOR_HOTPLUG,
+                length: size_of::<RedoxDrmEventConnectorHotplug>() as u32,
+            },
+            connector: connector.0,
+        };
+        for (_, handle) in self.inner.handles_mut_and_scheme_data().0 {
+            match handle {
+                GraphicsResource::DrmHandle(handle) => {
+                    if handle.supports_redox_hotplug_events {
+                        handle.push_event(event);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        self.post_events();
     }
 
     /// Process new scheme requests.
@@ -233,9 +258,30 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
                 ControlFlow::Continue(()) => {}
                 ControlFlow::Break(()) => break,
             }
+
+            self.post_events();
         }
 
         Ok(())
+    }
+
+    fn post_events(&mut self) {
+        for (&id, handle) in self.inner.handles_mut_and_scheme_data().0 {
+            match handle {
+                GraphicsResource::DrmHandle(handle) => {
+                    if handle.should_post_event() {
+                        self.handler
+                            .socket()
+                            .write_response(
+                                Response::post_fevent(id, EventFlags::EVENT_READ.bits()),
+                                SignalBehavior::Restart,
+                            )
+                            .unwrap();
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 

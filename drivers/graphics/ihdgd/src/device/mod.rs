@@ -5,7 +5,8 @@ use std::{fmt, mem};
 use common::io::{Io, MmioPtr};
 use common::timeout::Timeout;
 use driver_graphics::kms::connector::{modeinfo_for_size, KmsConnectorStatus};
-use driver_graphics::kms::objects::KmsObjects;
+use driver_graphics::kms::objects::{KmsObjectId, KmsObjects};
+use driver_graphics::GraphicsScheme;
 use drm_sys::drm_mode_modeinfo;
 use pcid_interface::{PciFunction, PciFunctionHandle};
 use range_alloc::RangeAllocator;
@@ -669,15 +670,16 @@ impl Device {
         }
     }
 
-    pub fn probe_ddi(&mut self, objects: &mut KmsObjects<Self>, name: &str) -> Result<bool> {
-        let Some(ddi) = self.ddis.iter_mut().find(|ddi| ddi.name == name) else {
-            log::warn!("DDI {} not found", name);
-            return Err(Error::new(EIO));
-        };
+    pub fn probe_ddi(
+        &mut self,
+        objects: &mut KmsObjects<Self>,
+        connector_id: KmsObjectId,
+    ) -> Result<bool> {
+        let mut connector = objects.get_connector(connector_id).unwrap().lock().unwrap();
+        let ddi = &mut self.ddis[connector.driver_data.ddi_idx];
 
         //TODO: probing repeatedly is causing loss of EDID information
-        let connector = objects.get_connector(ddi.kms_id.unwrap()).unwrap();
-        if connector.lock().unwrap().driver_data.edid.is_some() {
+        if connector.driver_data.edid.is_some() {
             return Ok(true);
         }
 
@@ -704,8 +706,9 @@ impl Device {
         match edid::parse(&edid_data).to_full_result() {
             Ok(edid) => {
                 log::info!("DDI {} EDID from {}: {:?}", ddi.name, source, edid);
-                connector.lock().unwrap().driver_data.edid = Some(edid);
-                objects.set_connector_edid(ddi.kms_id.unwrap(), edid_data.to_vec());
+                connector.driver_data.edid = Some(edid);
+                drop(connector);
+                objects.set_connector_edid(connector_id, edid_data.to_vec());
                 Ok(true)
             }
             Err(err) => {
@@ -1124,27 +1127,23 @@ impl Device {
         had_irq
     }
 
-    pub fn handle_events(&mut self, objects: &mut KmsObjects<Self>) {
-        while let Some(event) = self.events.pop_front() {
+    pub fn handle_events(scheme: &mut GraphicsScheme<Self>) {
+        while let Some(event) = scheme.adapter_mut().events.pop_front() {
             match event {
                 Event::DdiHotplug(ddi_name) => {
                     log::info!("DDI {} plugged", ddi_name);
-                    for _attempt in 0..4 {
-                        //TODO: gmbus times out!
-                        match self.probe_ddi(objects, ddi_name) {
-                            Ok(true) => {
-                                break;
-                            }
-                            Ok(false) => {
-                                log::warn!("timeout probing {}", ddi_name);
-                            }
-                            Err(err) => {
-                                log::warn!("failed to probe {}: {}", ddi_name, err);
-                            }
-                        }
-                        //TODO: do this asynchronously so scheme events can be handled
-                        std::thread::sleep(std::time::Duration::from_secs(1));
-                    }
+
+                    let Some(ddi) = scheme
+                        .adapter()
+                        .ddis
+                        .iter()
+                        .find(|ddi| ddi.name == ddi_name)
+                    else {
+                        log::warn!("DDI {} not found", ddi_name);
+                        continue;
+                    };
+
+                    scheme.notify_connector_hotplug(ddi.kms_id.unwrap());
                 }
             }
         }

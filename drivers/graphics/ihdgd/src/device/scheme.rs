@@ -83,17 +83,21 @@ impl GraphicsAdapter for Device {
         None
     }
 
-    fn probe_connector(&mut self, objects: &mut KmsObjects<Self>, id: KmsObjectId) {
+    fn probe_connector(
+        &mut self,
+        objects: &mut KmsObjects<Self>,
+        id: KmsObjectId,
+    ) -> syscall::Result<()> {
         let ddi_name = {
-            let connector = objects.get_connector(id).unwrap().lock().unwrap();
+            let connector = objects.get_connector(id)?.lock().unwrap();
             if !matches!(connector.connection, KmsConnectorStatus::Unknown) {
                 //TODO: fix probing on every frame
-                return;
+                return Ok(());
             }
             connector.driver_data.ddi_name
         };
         log::info!("probe connector {:?}: DDI {}", id, ddi_name);
-        let connection = match self.probe_ddi(objects, ddi_name) {
+        let connection = match self.probe_ddi(objects, id) {
             Ok(true) => KmsConnectorStatus::Connected,
             Ok(false) => {
                 log::warn!("timeout probing {}", ddi_name);
@@ -108,6 +112,7 @@ impl GraphicsAdapter for Device {
             let mut connector = objects.get_connector(id).unwrap().lock().unwrap();
             connector.connection = connection;
         }
+        Ok(())
     }
 
     fn create_dumb_buffer(&mut self, width: u32, height: u32) -> (Self::Buffer, u32) {

@@ -482,6 +482,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "drm",
+ "drm-ffi",
  "graphics-ipc",
  "orbclient",
  "psf-rs",
@@ -658,6 +659,7 @@ dependencies = [
  "drm-fourcc",
  "drm-sys",
  "edid",
+ "graphics-ipc",
  "inputd",
  "libredox",
  "log",
@@ -1033,6 +1035,7 @@ name = "graphics-ipc"
 version = "0.1.0"
 dependencies = [
  "drm",
+ "drm-sys",
 ]
 
 [[package]]
