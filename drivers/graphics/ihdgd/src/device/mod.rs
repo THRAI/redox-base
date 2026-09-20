@@ -639,13 +639,10 @@ impl Device {
             pipe.interrupt.enable(1);
         }
         // Enable display interrupts
-        self.int
-            .display_int_ctl
-            .reg
-            .write(self.int.display_int_ctl.enable);
+        self.int.display_int_ctl.write(|data| data.set_enable(true));
         if let Some(gfx_mstr_intr) = &mut self.int.gfx_mstr_intr {
             // Enable graphics interrupts
-            gfx_mstr_intr.reg.write(gfx_mstr_intr.enable);
+            gfx_mstr_intr.write(|data| data.set_enable(true));
         }
         for change_detect in self.int.change_detects.iter_mut() {
             change_detect.log();
@@ -856,8 +853,7 @@ impl Device {
                 if let Some(clock_select) = ddi.trans_clock_select {
                     transcoder
                         .clk_sel
-                        .reg
-                        .write(clock_select << transcoder.clk_sel.clk_sel_shift);
+                        .write(|data| data.set_clk_sel(clock_select));
                 }
 
                 // Set pipe bottom color to blue for debugging
@@ -876,43 +872,44 @@ impl Device {
                 transcoder.modeset(pipe, &mode);
 
                 // Configure and enable TRANS_DDI_FUNC_CTL
-                {
-                    let mut ddi_func_ctl = TRANS_DDI_FUNC_CTL_ENABLE |
+                transcoder.ddi_func_ctl.write(|mut data| {
+                    data = data.or_raw(
+                        TRANS_DDI_FUNC_CTL_ENABLE |
                         //TODO: allow different bits per color
                         TRANS_DDI_FUNC_CTL_BPC_8 |
                         //TODO: correct port width selection
-                        TRANS_DDI_FUNC_CTL_PORT_WIDTH_4;
+                        TRANS_DDI_FUNC_CTL_PORT_WIDTH_4,
+                    );
 
                     if let Some(ddi_select) = ddi.trans_ddi_select {
-                        ddi_func_ctl |= ddi_select << transcoder.ddi_func_ctl.ddi_shift;
+                        data = data.set_ddi(ddi_select);
                     }
 
                     match input {
                         VideoInput::Hdmi => {
-                            ddi_func_ctl |= TRANS_DDI_FUNC_CTL_MODE_HDMI;
+                            data = data.or_raw(TRANS_DDI_FUNC_CTL_MODE_HDMI);
 
                             // Set HDMI scrambling and high TMDS char rate based on symbol rate > 340 MHz
                             if mode.clock > 340_000 {
-                                ddi_func_ctl |= transcoder.ddi_func_ctl.hdmi_scrambling
-                                    | transcoder.ddi_func_ctl.high_tmds_char_rate;
+                                data = data.set_hdmi_scrambling(true).set_high_tmds_char_rate(true);
                             }
                         }
                         VideoInput::Dp => {
                             //TODO: MST
-                            ddi_func_ctl |= TRANS_DDI_FUNC_CTL_MODE_DP_SST;
+                            data = data.or_raw(TRANS_DDI_FUNC_CTL_MODE_DP_SST);
                         }
                     }
 
                     // Sync polarity
                     if (mode.flags & drm_sys::DRM_MODE_FLAG_PVSYNC) != 0 {
-                        ddi_func_ctl |= TRANS_DDI_FUNC_CTL_SYNC_POLARITY_VSHIGH;
+                        data = data.or_raw(TRANS_DDI_FUNC_CTL_SYNC_POLARITY_VSHIGH);
                     }
                     if (mode.flags & drm_sys::DRM_MODE_FLAG_PHSYNC) != 0 {
-                        ddi_func_ctl |= TRANS_DDI_FUNC_CTL_SYNC_POLARITY_HSHIGH;
+                        data = data.or_raw(TRANS_DDI_FUNC_CTL_SYNC_POLARITY_HSHIGH);
                     }
 
-                    transcoder.ddi_func_ctl.reg.write(ddi_func_ctl);
-                }
+                    data
+                });
 
                 // Configure and enable TRANS_CONF
                 let mut conf = transcoder.conf.read();
@@ -1016,10 +1013,10 @@ impl Device {
     }
 
     pub fn handle_display_irq(&mut self) -> bool {
-        let display_ints = self.int.display_int_ctl.reg.read() & !self.int.display_int_ctl.enable;
-        if display_ints != 0 {
-            log::debug!("  display ints {:08X}", display_ints);
-            if display_ints & self.int.display_int_ctl.sde != 0 {
+        let display_ints = self.int.display_int_ctl.read().set_enable(false);
+        if display_ints.raw() != 0 {
+            log::debug!("  display ints {:08X}", display_ints.raw());
+            if display_ints.sde() {
                 let sde_ints = self.int.sde_interrupt.pending();
                 log::debug!("    south display engine ints {:08X}", sde_ints);
                 for ddi in self.ddis.iter() {
@@ -1031,7 +1028,7 @@ impl Device {
                 }
             }
             for pipe in self.pipes.iter_mut() {
-                if display_ints & pipe.display_int_ctl_pending != 0 {
+                if display_ints.raw() & pipe.display_int_ctl_pending != 0 {
                     let pipe_ints = pipe.interrupt.pending();
                     log::debug!("    pipe {} ints {:08X}", pipe.name, pipe_ints);
                 }
@@ -1047,12 +1044,12 @@ impl Device {
         // is very important to ensure we don't get into situation where we failed to acknowledge
         // all interrupts and no longer get any PCI interrupts.
         let had_irq = if let Some(gfx_mstr_intr) = &mut self.int.gfx_mstr_intr {
-            gfx_mstr_intr.reg.write(0);
-            let gfx_ints = gfx_mstr_intr.reg.read() & !gfx_mstr_intr.enable;
-            let res = if gfx_ints != 0 {
-                log::debug!("gfx ints {:08X}", gfx_ints);
+            gfx_mstr_intr.write(|data| data);
+            let gfx_ints = gfx_mstr_intr.read().set_enable(false);
+            let res = if gfx_ints.raw() != 0 {
+                log::debug!("gfx ints {:08X}", gfx_ints.raw());
 
-                if gfx_ints & gfx_mstr_intr.display != 0 {
+                if gfx_ints.display() {
                     self.handle_display_irq();
                 }
 
@@ -1061,15 +1058,12 @@ impl Device {
                 false
             };
             let gfx_mstr_intr = self.int.gfx_mstr_intr.as_mut().unwrap();
-            gfx_mstr_intr.reg.write(gfx_mstr_intr.enable);
+            gfx_mstr_intr.write(|data| data.set_enable(true));
             res
         } else {
-            self.int.display_int_ctl.reg.write(0);
+            self.int.display_int_ctl.write(|data| data);
             let res = self.handle_display_irq();
-            self.int
-                .display_int_ctl
-                .reg
-                .write(self.int.display_int_ctl.enable);
+            self.int.display_int_ctl.write(|data| data.set_enable(true));
             res
         };
 

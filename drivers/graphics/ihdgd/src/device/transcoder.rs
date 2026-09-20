@@ -70,9 +70,9 @@ define_regs! {
 impl Transcoder {
     pub fn dump(&self) {
         eprint!("Transcoder {} {}", self.name, self.index);
-        eprint!(" clk_sel {:08X}", self.clk_sel.reg.read());
+        eprint!(" clk_sel {:08X}", self.clk_sel.read().raw());
         eprint!(" conf {:08X}", self.conf.read());
-        eprint!(" ddi_func_ctl {:08X}", self.ddi_func_ctl.reg.read());
+        eprint!(" ddi_func_ctl {:08X}", self.ddi_func_ctl.read().raw());
         if let Some(reg) = &self.ddi_func_ctl2 {
             eprint!(" ddi_func_ctl2 {:08X}", reg.read());
         }
@@ -118,7 +118,7 @@ impl Transcoder {
     }
 
     pub fn ddi_select(&self) -> u32 {
-        (self.ddi_func_ctl.reg.read() & self.ddi_func_ctl.ddi_mask) >> self.ddi_func_ctl.ddi_shift
+        self.ddi_func_ctl.read().ddi()
     }
 
     pub fn modeset(&mut self, pipe: &mut Pipe, mode: &drm_mode_modeinfo) {

@@ -113,7 +113,7 @@ impl Plane {
 
     pub fn set_framebuffer(&mut self, fb: Option<&KmsFramebuffer<Device>>) {
         let Some(fb) = fb else {
-            self.ctl.reg.write(0); // Disable plane
+            self.ctl.write(|data| data); // Disable plane
             return;
         };
 
@@ -127,22 +127,21 @@ impl Plane {
 
         // Disable gamma
         if let Some(color_ctl) = &mut self.color_ctl {
-            color_ctl.reg.write(color_ctl.gamma_disable);
+            color_ctl.write(|data| data.set_gamma_disable(true));
         }
 
         //TODO: more PLANE_CTL bits
         self.ctl
-            .reg
-            .write(PLANE_CTL_ENABLE | self.ctl.source_rgb_8888);
+            .write(|data| data.or_raw(PLANE_CTL_ENABLE).set_source_rgb_8888());
     }
 
     pub fn dump(&self) {
         eprint!("Plane {}", self.name);
         eprint!(" buf_cfg {:08X}", self.buf_cfg.read());
         if let Some(color_ctl) = &self.color_ctl {
-            eprint!(" color_ctl {:08X}", color_ctl.reg.read());
+            eprint!(" color_ctl {:08X}", color_ctl.read().raw());
         }
-        eprint!(" ctl {:08X}", self.ctl.reg.read());
+        eprint!(" ctl {:08X}", self.ctl.read().raw());
         eprint!(" offset {:08X}", self.offset.read());
         eprint!(" pos {:08X}", self.offset.read());
         eprint!(" size {:08X}", self.size.read());

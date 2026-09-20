@@ -127,19 +127,51 @@ impl Parse for InputFieldRegField {
 }
 
 impl InputFieldRegField {
-    fn generate(self, vis: &Visibility, reg_type: &Type) -> Vec<proc_macro2::TokenStream> {
+    fn generate(
+        self,
+        vis: &Visibility,
+        field_type: &Type,
+    ) -> (Vec<proc_macro2::TokenStream>, Vec<proc_macro2::TokenStream>) {
         let reg_field_name = self.name;
         match self.kind {
             InputFieldRegFieldKind::Field { _field } => {
                 let mask = Ident::new(&format!("{reg_field_name}_mask"), reg_field_name.span());
                 let shift = Ident::new(&format!("{reg_field_name}_shift"), reg_field_name.span());
-                vec![
-                    quote! { #vis #mask: #reg_type },
-                    quote! { #vis #shift: #reg_type },
-                ]
+                let set = Ident::new(&format!("set_{reg_field_name}"), reg_field_name.span());
+                (
+                    vec![
+                        quote! { #vis #mask: #field_type },
+                        quote! { #vis #shift: #field_type },
+                    ],
+                    vec![
+                        quote! { #vis fn #reg_field_name(&self) -> #field_type {
+                            (self.0 & self.1.#mask) >> self.1.#shift
+                        }},
+                        quote! { #vis fn #set(mut self, data: #field_type) -> Self {
+                            self.0 &= !self.1.#mask;
+                            self.0 |= data << self.1.#shift;
+                            self
+                        }},
+                    ],
+                )
             }
             InputFieldRegFieldKind::Flag { _flag } => {
-                vec![quote! { #vis #reg_field_name: #reg_type }]
+                let set = Ident::new(&format!("set_{reg_field_name}"), reg_field_name.span());
+                (
+                    vec![quote! { #vis #reg_field_name: #field_type }],
+                    vec![
+                        quote! { #vis fn #reg_field_name(&self) -> bool {
+                            self.0 & self.1.#reg_field_name != 0
+                        }},
+                        quote! { #vis fn #set(mut self, val: bool) -> Self {
+                            self.0 &= !self.1.#reg_field_name;
+                            if val {
+                                self.0 |= self.1.#reg_field_name;
+                            }
+                            self
+                        }},
+                    ],
+                )
             }
             InputFieldRegFieldKind::Enum {
                 _enum,
@@ -147,13 +179,22 @@ impl InputFieldRegField {
                 variants,
             } => {
                 let mask = Ident::new(&format!("{reg_field_name}_mask"), reg_field_name.span());
-                let mut fields = vec![quote! { #vis #mask: #reg_type }];
+                let mut fields = vec![quote! { #vis #mask: #field_type }];
+                let mut methods = vec![];
                 for variant in variants {
                     let variant =
                         Ident::new(&format!("{reg_field_name}_{variant}"), variant.span());
-                    fields.push(quote! { #vis #variant: #reg_type })
+                    let set_variant = Ident::new(&format!("set_{variant}"), variant.span());
+                    fields.push(quote! { #vis #variant: #field_type });
+                    methods.push(quote! {
+                        #vis fn #set_variant(mut self) -> Self {
+                            self.0 &= !self.1.#mask;
+                            self.0 |= self.1.#variant;
+                            self
+                        }
+                    })
                 }
-                fields
+                (fields, methods)
             }
         }
     }
@@ -178,14 +219,47 @@ pub(crate) fn define_regs(tokens: TokenStream) -> TokenStream {
                 if let Some((_, reg_fields)) = fields {
                     let reg_type_name =
                         Ident::new(&format!("{struct_name}_{field_name}"), field_name.span());
-                    let reg_fields = reg_fields
+                    let reg_data_type_name = Ident::new(
+                        &format!("{struct_name}_{field_name}Data"),
+                        field_name.span(),
+                    );
+                    let (reg_fields, reg_data_methods): (Vec<_>, Vec<_>) = reg_fields
                         .into_iter()
-                        .flat_map(|reg_field| reg_field.generate(&field_vis, &field_type));
+                        .map(|reg_field| reg_field.generate(&field_vis, &field_type))
+                        .unzip();
+                    let reg_fields = reg_fields.into_iter().flatten();
+                    let reg_data_methods = reg_data_methods.into_iter().flatten();
                     reg_types.push(quote! {
                         #[allow(non_camel_case_types)]
                         #field_vis struct #reg_type_name {
                             #field_vis reg: MmioPtr<#field_type>,
                             #(#reg_fields),*
+                        }
+
+                        impl #reg_type_name {
+                            #field_vis fn read(&self) -> #reg_data_type_name {
+                                #reg_data_type_name(self.reg.read(), self)
+                            }
+
+                            #field_vis fn write(&mut self, f: impl FnOnce(#reg_data_type_name) -> #reg_data_type_name) {
+                                self.reg.write(f(#reg_data_type_name(0, self)).0);
+                            }
+                        }
+
+                        #[derive(Copy, Clone)]
+                        #[allow(non_camel_case_types)]
+                        #field_vis struct #reg_data_type_name<'a>(#field_type, &'a #reg_type_name);
+
+                        impl #reg_data_type_name<'_> {
+                            #field_vis fn raw(&self) -> #field_type {
+                                self.0
+                            }
+
+                            #field_vis fn or_raw(self, data: #field_type) -> Self {
+                                Self(self.0 | data, self.1)
+                            }
+
+                            #(#reg_data_methods)*
                         }
                     });
                     quote! { #reg_type_name }
