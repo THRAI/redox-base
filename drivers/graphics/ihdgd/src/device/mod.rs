@@ -651,7 +651,7 @@ impl Device {
             eprintln!("dpclka_cfgcr0 {:08X}", dpclka_cfgcr0.read());
         }
         for dpll in self.dplls.iter() {
-            if dpll.enable.readf(DPLL_ENABLE_ENABLE) {
+            if dpll.is_enabled() {
                 dpll.dump();
             }
         }
@@ -762,65 +762,13 @@ impl Device {
                 let dpll = self
                     .dplls
                     .iter_mut()
-                    .find(|dpll| !dpll.enable.readf(DPLL_ENABLE_ENABLE))
+                    .find(|dpll| !dpll.is_enabled())
                     .ok_or_else(|| {
                         log::error!("failed to find free DPLL");
                         Error::new(EIO)
                     })?;
 
-                // DPLL power guard
-                let mut dpll_enable = unsafe { MmioPtr::new(dpll.enable.as_mut_ptr()) };
-                let dpll_power_guard = CallbackGuard::new(
-                    &mut dpll_enable,
-                    |dpll_enable| {
-                        // Enable DPLL power
-                        dpll_enable.writef(DPLL_ENABLE_POWER_ENABLE, true);
-                        //TODO: timeout not specified in docs, should be very fast
-                        let timeout = Timeout::from_micros(1);
-                        while !dpll_enable.readf(DPLL_ENABLE_POWER_STATE) {
-                            timeout.run().map_err(|()| {
-                                log::debug!("timeout while enabling DPLL {} power", dpll.name);
-                                Error::new(EIO)
-                            })?;
-                        }
-                        Ok(())
-                    },
-                    |dpll_enable| {
-                        // Disable DPLL power
-                        dpll_enable.writef(DPLL_ENABLE_POWER_ENABLE, false);
-                    },
-                )?;
-
-                match input {
-                    VideoInput::Hdmi => {
-                        // Set SSC enable/disable. For HDMI, always disable
-                        dpll.ssc.writef(DPLL_SSC_ENABLE, false);
-
-                        // Configure DPLL frequency
-                        dpll.set_freq_hdmi(self.ref_freq, &mode)?;
-                    }
-                    VideoInput::Dp => {
-                        log::warn!("DPLL for DisplayPort not implemented");
-                        return Err(Error::new(EIO));
-                    }
-                }
-
-                //TODO: "Sequence Before Frequency Change"
-
-                // Enable DPLL
-                //TODO: use guard?
-                {
-                    dpll.enable.writef(DPLL_ENABLE_ENABLE, true);
-                    let timeout = Timeout::from_micros(50);
-                    while !dpll.enable.readf(DPLL_ENABLE_LOCK) {
-                        timeout.run().map_err(|()| {
-                            log::debug!("timeout while enabling DPLL {}", dpll.name);
-                            Error::new(EIO)
-                        })?;
-                    }
-                }
-
-                //TODO: "Sequence After Frequency Change"
+                dpll.configure_and_enable(self.ref_freq, mode, input)?;
 
                 // Update DPLL mapping
                 if let Some(dpclka_cfgcr0) = &mut self.dpclka_cfgcr0 {
@@ -831,12 +779,9 @@ impl Device {
                     v |= dpll.dpclka_cfgcr0_clock_value << clock_shift;
                     dpclka_cfgcr0.write(v);
                 }
-
-                // Continue to allow DPLL power
-                mem::forget(dpll_power_guard);
             }
 
-            // Enable DPLL clock (must be done separately from PLL mapping)
+            // Enable DDI clock (must be done separately from PLL mapping)
             if let Some(dpclka_cfgcr0) = &mut self.dpclka_cfgcr0 {
                 if let Some(clock_off) = ddi.dpclka_cfgcr0_clock_off {
                     dpclka_cfgcr0.writef(clock_off, false);
