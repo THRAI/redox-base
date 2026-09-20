@@ -7,8 +7,8 @@ use super::{MmioRegion, Pipe};
 
 // IHD-OS-KBL-Vol 2c-1.17 TRANS_CONF
 // IHD-OS-TGL-Vol 2c-12.21 TRANS_CONF
-pub const TRANS_CONF_ENABLE: u32 = 1 << 31;
-pub const TRANS_CONF_STATE: u32 = 1 << 30;
+const TRANS_CONF_ENABLE: u32 = 1 << 31;
+const TRANS_CONF_STATE: u32 = 1 << 30;
 pub const TRANS_CONF_MODE_MASK: u32 = 0b11 << 21;
 
 // IHD-OS-KBL-Vol 2c-1.17 TRANS_DDI_FUNC_CTL
@@ -37,7 +37,10 @@ define_regs! {
         pub reg clk_sel: u32 {
             field clk_sel,
         },
-        pub reg conf: u32,
+        pub reg conf: u32 {
+            flag enable,
+            flag state,
+        },
         pub reg ddi_func_ctl: u32 {
             field ddi,
             flag hdmi_scrambling,
@@ -71,7 +74,7 @@ impl Transcoder {
     pub fn dump(&self) {
         eprint!("Transcoder {} {}", self.name, self.index);
         eprint!(" clk_sel {:08X}", self.clk_sel.read().raw());
-        eprint!(" conf {:08X}", self.conf.read());
+        eprint!(" conf {:08X}", self.conf.read().raw());
         eprint!(" ddi_func_ctl {:08X}", self.ddi_func_ctl.read().raw());
         if let Some(reg) = &self.ddi_func_ctl2 {
             eprint!(" ddi_func_ctl2 {:08X}", reg.read());
@@ -159,7 +162,11 @@ impl Transcoder {
                     clk_sel_shift: 29,
                 },
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_CONF
-                conf: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
+                conf: Transcoder_conf {
+                    reg: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
+                    enable: TRANS_CONF_ENABLE,
+                    state: TRANS_CONF_STATE,
+                },
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_DDI_FUNC_CTL
                 ddi_func_ctl: Transcoder_ddi_func_ctl {
                     reg: unsafe { gttmm.mmio(0x60400 + i * 0x1000)? },
@@ -222,7 +229,11 @@ impl Transcoder {
                     clk_sel_shift: 28,
                 },
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_CONF
-                conf: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
+                conf: Transcoder_conf {
+                    reg: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
+                    enable: TRANS_CONF_ENABLE,
+                    state: TRANS_CONF_STATE,
+                },
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_DDI_FUNC_CTL
                 ddi_func_ctl: Transcoder_ddi_func_ctl {
                     reg: unsafe { gttmm.mmio(0x60400 + i * 0x1000)? },

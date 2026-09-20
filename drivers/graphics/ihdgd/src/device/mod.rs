@@ -666,7 +666,7 @@ impl Device {
         }
 
         for (transcoder, pipe) in self.transcoders.iter().zip(self.pipes.iter()) {
-            if transcoder.conf.readf(TRANS_CONF_ENABLE) {
+            if transcoder.conf.read().enable() {
                 transcoder.dump();
                 pipe.dump();
                 for plane in pipe.planes.iter() {
@@ -831,7 +831,7 @@ impl Device {
                 // Find free transcoder with free pipe
                 let mut transcoder_pipe = None;
                 for (transcoder, pipe) in self.transcoders.iter_mut().zip(self.pipes.iter_mut()) {
-                    if transcoder.conf.readf(TRANS_CONF_ENABLE) {
+                    if transcoder.conf.read().enable() {
                         continue;
                     }
                     //TODO: how would we know if pipe is in use?
@@ -912,15 +912,15 @@ impl Device {
                 });
 
                 // Configure and enable TRANS_CONF
-                let mut conf = transcoder.conf.read();
-                // Set mode to progressive
-                conf &= !TRANS_CONF_MODE_MASK;
-                // Enable transcoder
-                conf |= TRANS_CONF_ENABLE;
-                transcoder.conf.write(conf);
+                transcoder.conf.modify(|data| {
+                    // Set mode to progressive
+                    data.and_raw(!TRANS_CONF_MODE_MASK)
+                        // Enable transcoder
+                        .set_enable(true)
+                });
                 //TODO: what is the correct timeout?
                 let timeout = Timeout::from_millis(100);
-                while !transcoder.conf.readf(TRANS_CONF_STATE) {
+                while !transcoder.conf.read().state() {
                     timeout.run().map_err(|()| {
                         log::error!(
                             "timeout on DDI {} transcoder {} enable",

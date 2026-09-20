@@ -244,6 +244,10 @@ pub(crate) fn define_regs(tokens: TokenStream) -> TokenStream {
                             #field_vis fn write(&mut self, f: impl FnOnce(#reg_data_type_name) -> #reg_data_type_name) {
                                 self.reg.write(f(#reg_data_type_name(0, self)).0);
                             }
+
+                            #field_vis fn modify(&mut self, f: impl FnOnce(#reg_data_type_name) -> #reg_data_type_name) {
+                                self.reg.write(f(self.read()).0);
+                            }
                         }
 
                         #[derive(Copy, Clone)]
@@ -257,6 +261,10 @@ pub(crate) fn define_regs(tokens: TokenStream) -> TokenStream {
 
                             #field_vis fn or_raw(self, data: #field_type) -> Self {
                                 Self(self.0 | data, self.1)
+                            }
+
+                            #field_vis fn and_raw(self, data: #field_type) -> Self {
+                                Self(self.0 & data, self.1)
                             }
 
                             #(#reg_data_methods)*
