@@ -1050,7 +1050,6 @@ impl Device {
             gfx_mstr_intr.reg.write(0);
             let gfx_ints = gfx_mstr_intr.reg.read() & !gfx_mstr_intr.enable;
             let res = if gfx_ints != 0 {
-                gfx_mstr_intr.reg.write(gfx_ints | gfx_mstr_intr.enable);
                 log::debug!("gfx ints {:08X}", gfx_ints);
 
                 if gfx_ints & gfx_mstr_intr.display != 0 {
