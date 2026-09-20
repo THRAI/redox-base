@@ -1,5 +1,6 @@
 use common::io::{Io, MmioPtr};
 use drm_sys::drm_mode_modeinfo;
+use ihdgd_macros::define_regs;
 use syscall::error::Result;
 
 use super::{MmioRegion, Pipe};
@@ -29,46 +30,49 @@ pub const TRANS_DDI_FUNC_CTL_PORT_WIDTH_2: u32 = 0b001 << 1;
 pub const TRANS_DDI_FUNC_CTL_PORT_WIDTH_3: u32 = 0b010 << 1;
 pub const TRANS_DDI_FUNC_CTL_PORT_WIDTH_4: u32 = 0b011 << 1;
 
-pub struct Transcoder {
-    pub name: &'static str,
-    pub index: usize,
-    pub clk_sel: MmioPtr<u32>,
-    pub clk_sel_shift: u32,
-    pub conf: MmioPtr<u32>,
-    pub ddi_func_ctl: MmioPtr<u32>,
-    pub ddi_func_ctl_ddi_mask: u32,
-    pub ddi_func_ctl_ddi_shift: u32,
-    pub ddi_func_ctl_hdmi_scrambling: u32,
-    pub ddi_func_ctl_high_tmds_char_rate: u32,
-    pub ddi_func_ctl2: Option<MmioPtr<u32>>,
-    pub hblank: MmioPtr<u32>,
-    pub hsync: MmioPtr<u32>,
-    pub htotal: MmioPtr<u32>,
-    pub msa_misc: MmioPtr<u32>,
-    pub mult: MmioPtr<u32>,
-    pub push: Option<MmioPtr<u32>>,
-    pub space: MmioPtr<u32>,
-    pub stereo3d_ctl: MmioPtr<u32>,
-    pub vblank: MmioPtr<u32>,
-    pub vrr_ctl: Option<MmioPtr<u32>>,
-    pub vrr_flipline: Option<MmioPtr<u32>>,
-    pub vrr_status: Option<MmioPtr<u32>>,
-    pub vrr_status2: Option<MmioPtr<u32>>,
-    pub vrr_vmax: Option<MmioPtr<u32>>,
-    pub vrr_vmaxshift: Option<MmioPtr<u32>>,
-    pub vrr_vmin: Option<MmioPtr<u32>>,
-    pub vrr_vtotal_prev: Option<MmioPtr<u32>>,
-    pub vsync: MmioPtr<u32>,
-    pub vsyncshift: MmioPtr<u32>,
-    pub vtotal: MmioPtr<u32>,
+define_regs! {
+    pub struct Transcoder {
+        pub let name: &'static str,
+        pub let index: usize,
+        pub reg clk_sel: u32 {
+            field clk_sel,
+        },
+        pub reg conf: u32,
+        pub reg ddi_func_ctl: u32 {
+            field ddi,
+            flag hdmi_scrambling,
+            flag high_tmds_char_rate,
+        },
+        pub reg ddi_func_ctl2?: u32,
+        pub reg hblank: u32,
+        pub reg hsync: u32,
+        pub reg htotal: u32,
+        pub reg msa_misc: u32,
+        pub reg mult: u32,
+        pub reg push?: u32,
+        pub reg space: u32,
+        pub reg stereo3d_ctl: u32,
+        pub reg vblank: u32,
+        pub reg vrr_ctl?: u32,
+        pub reg vrr_flipline?: u32,
+        pub reg vrr_status?: u32,
+        pub reg vrr_status2?: u32,
+        pub reg vrr_vmax?: u32,
+        pub reg vrr_vmaxshift?: u32,
+        pub reg vrr_vmin?: u32,
+        pub reg vrr_vtotal_prev?: u32,
+        pub reg vsync: u32,
+        pub reg vsyncshift: u32,
+        pub reg vtotal: u32,
+    }
 }
 
 impl Transcoder {
     pub fn dump(&self) {
         eprint!("Transcoder {} {}", self.name, self.index);
-        eprint!(" clk_sel {:08X}", self.clk_sel.read());
+        eprint!(" clk_sel {:08X}", self.clk_sel.reg.read());
         eprint!(" conf {:08X}", self.conf.read());
-        eprint!(" ddi_func_ctl {:08X}", self.ddi_func_ctl.read());
+        eprint!(" ddi_func_ctl {:08X}", self.ddi_func_ctl.reg.read());
         if let Some(reg) = &self.ddi_func_ctl2 {
             eprint!(" ddi_func_ctl2 {:08X}", reg.read());
         }
@@ -114,7 +118,7 @@ impl Transcoder {
     }
 
     pub fn ddi_select(&self) -> u32 {
-        (self.ddi_func_ctl.read() & self.ddi_func_ctl_ddi_mask) >> self.ddi_func_ctl_ddi_shift
+        (self.ddi_func_ctl.reg.read() & self.ddi_func_ctl.ddi_mask) >> self.ddi_func_ctl.ddi_shift
     }
 
     pub fn modeset(&mut self, pipe: &mut Pipe, mode: &drm_mode_modeinfo) {
@@ -149,17 +153,22 @@ impl Transcoder {
                 name,
                 index: i,
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_CLK_SEL
-                clk_sel: unsafe { gttmm.mmio(0x46140 + i * 0x4)? },
-                clk_sel_shift: 29,
+                clk_sel: Transcoder_clk_sel {
+                    reg: unsafe { gttmm.mmio(0x46140 + i * 0x4)? },
+                    clk_sel_mask: 0b111 << 29,
+                    clk_sel_shift: 29,
+                },
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_CONF
                 conf: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_DDI_FUNC_CTL
-                ddi_func_ctl: unsafe { gttmm.mmio(0x60400 + i * 0x1000)? },
-                ddi_func_ctl_ddi_mask: 0b111 << 28,
-                ddi_func_ctl_ddi_shift: 28,
-                // HDMI scrambling not supported on Kaby Lake
-                ddi_func_ctl_hdmi_scrambling: 0,
-                ddi_func_ctl_high_tmds_char_rate: 0,
+                ddi_func_ctl: Transcoder_ddi_func_ctl {
+                    reg: unsafe { gttmm.mmio(0x60400 + i * 0x1000)? },
+                    ddi_mask: 0b111 << 28,
+                    ddi_shift: 28,
+                    // HDMI scrambling not supported on Kaby Lake
+                    hdmi_scrambling: 0,
+                    high_tmds_char_rate: 0,
+                },
                 // N/A
                 ddi_func_ctl2: None,
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_HBLANK
@@ -207,16 +216,21 @@ impl Transcoder {
                 name,
                 index: i,
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_CLK_SEL
-                clk_sel: unsafe { gttmm.mmio(0x46140 + i * 0x4)? },
-                clk_sel_shift: 28,
+                clk_sel: Transcoder_clk_sel {
+                    reg: unsafe { gttmm.mmio(0x46140 + i * 0x4)? },
+                    clk_sel_mask: 0b1111 << 28,
+                    clk_sel_shift: 28,
+                },
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_CONF
                 conf: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_DDI_FUNC_CTL
-                ddi_func_ctl: unsafe { gttmm.mmio(0x60400 + i * 0x1000)? },
-                ddi_func_ctl_ddi_mask: 0b1111 << 27,
-                ddi_func_ctl_ddi_shift: 27,
-                ddi_func_ctl_hdmi_scrambling: 1 << 0,
-                ddi_func_ctl_high_tmds_char_rate: 1 << 4,
+                ddi_func_ctl: Transcoder_ddi_func_ctl {
+                    reg: unsafe { gttmm.mmio(0x60400 + i * 0x1000)? },
+                    ddi_mask: 0b1111 << 27,
+                    ddi_shift: 27,
+                    hdmi_scrambling: 1 << 0,
+                    high_tmds_char_rate: 1 << 4,
+                },
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_DDI_FUNC_CTL2
                 ddi_func_ctl2: Some(unsafe { gttmm.mmio(0x60404 + i * 0x1000)? }),
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_HBLANK

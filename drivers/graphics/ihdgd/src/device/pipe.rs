@@ -4,6 +4,7 @@ use common::io::{Io, MmioPtr};
 use driver_graphics::kms::framebuffer::KmsFramebuffer;
 use driver_graphics::kms::objects::KmsObjectId;
 use drm_fourcc::DrmFourcc;
+use ihdgd_macros::define_regs;
 use range_alloc::RangeAllocator;
 use syscall::error::Result;
 use syscall::{Error, EIO};
@@ -17,23 +18,28 @@ pub const PLANE_CTL_ENABLE: u32 = 1 << 31;
 pub const PLANE_WM_ENABLE: u32 = 1 << 31;
 pub const PLANE_WM_LINES_SHIFT: u32 = 14;
 
-pub struct Plane {
-    pub name: &'static str,
-    pub index: usize,
-    pub kms_id: Option<KmsObjectId>,
-    pub buf_cfg: MmioPtr<u32>,
-    pub color_ctl: Option<MmioPtr<u32>>,
-    pub color_ctl_gamma_disable: u32,
-    pub ctl: MmioPtr<u32>,
-    pub ctl_source_rgb_8888: u32,
-    pub ctl_source_mask: u32,
-    pub offset: MmioPtr<u32>,
-    pub pos: MmioPtr<u32>,
-    pub size: MmioPtr<u32>,
-    pub stride: MmioPtr<u32>,
-    pub surf: MmioPtr<u32>,
-    pub wm: [MmioPtr<u32>; 8],
-    pub wm_trans: MmioPtr<u32>,
+define_regs! {
+    pub struct Plane {
+        pub let name: &'static str,
+        pub let index: usize,
+        pub let kms_id: Option<KmsObjectId>,
+        pub reg buf_cfg: u32,
+        pub reg color_ctl?: u32 {
+            flag gamma_disable,
+        },
+        pub reg ctl: u32 {
+            enum source {
+                rgb_8888,
+            }
+        },
+        pub reg offset: u32,
+        pub reg pos: u32,
+        pub reg size: u32,
+        pub reg stride: u32,
+        pub reg surf: u32,
+        pub reg wm[8]: u32,
+        pub reg wm_trans: u32,
+    }
 }
 
 impl Plane {
@@ -107,7 +113,7 @@ impl Plane {
 
     pub fn set_framebuffer(&mut self, fb: Option<&KmsFramebuffer<Device>>) {
         let Some(fb) = fb else {
-            self.ctl.write(0); // Disable plane
+            self.ctl.reg.write(0); // Disable plane
             return;
         };
 
@@ -121,20 +127,22 @@ impl Plane {
 
         // Disable gamma
         if let Some(color_ctl) = &mut self.color_ctl {
-            color_ctl.write(self.color_ctl_gamma_disable);
+            color_ctl.reg.write(color_ctl.gamma_disable);
         }
 
         //TODO: more PLANE_CTL bits
-        self.ctl.write(PLANE_CTL_ENABLE | self.ctl_source_rgb_8888);
+        self.ctl
+            .reg
+            .write(PLANE_CTL_ENABLE | self.ctl.source_rgb_8888);
     }
 
     pub fn dump(&self) {
         eprint!("Plane {}", self.name);
         eprint!(" buf_cfg {:08X}", self.buf_cfg.read());
-        if let Some(reg) = &self.color_ctl {
-            eprint!(" color_ctl {:08X}", reg.read());
+        if let Some(color_ctl) = &self.color_ctl {
+            eprint!(" color_ctl {:08X}", color_ctl.reg.read());
         }
-        eprint!(" ctl {:08X}", self.ctl.read());
+        eprint!(" ctl {:08X}", self.ctl.reg.read());
         eprint!(" offset {:08X}", self.offset.read());
         eprint!(" pos {:08X}", self.offset.read());
         eprint!(" size {:08X}", self.size.read());
@@ -148,15 +156,17 @@ impl Plane {
     }
 }
 
-pub struct Pipe {
-    pub name: &'static str,
-    pub index: usize,
-    pub planes: Vec<Plane>,
-    pub bottom_color: MmioPtr<u32>,
-    pub display_int_ctl_pending: u32,
-    pub interrupt: InterruptRegs,
-    pub misc: MmioPtr<u32>,
-    pub srcsz: MmioPtr<u32>,
+define_regs! {
+    pub struct Pipe {
+        pub let name: &'static str,
+        pub let index: usize,
+        pub let planes: Vec<Plane>,
+        pub reg bottom_color: u32,
+        pub let display_int_ctl_pending: u32,
+        pub let interrupt: InterruptRegs,
+        pub reg misc: u32,
+        pub reg srcsz: u32,
+    }
 }
 
 impl Pipe {
@@ -182,11 +192,12 @@ impl Pipe {
                     buf_cfg: unsafe { gttmm.mmio(0x7027C + i * 0x1000 + j * 0x100)? },
                     // N/A
                     color_ctl: None,
-                    color_ctl_gamma_disable: 0,
                     // IHD-OS-KBL-Vol 2c-1.17 PLANE_CTL
-                    ctl: unsafe { gttmm.mmio(0x70180 + i * 0x1000 + j * 0x100)? },
-                    ctl_source_rgb_8888: 0b0100 << 24,
-                    ctl_source_mask: 0b1111 << 24,
+                    ctl: Plane_ctl {
+                        reg: unsafe { gttmm.mmio(0x70180 + i * 0x1000 + j * 0x100)? },
+                        source_rgb_8888: 0b0100 << 24,
+                        source_mask: 0b1111 << 24,
+                    },
                     // IHD-OS-KBL-Vol 2c-1.17 PLANE_OFFSET
                     offset: unsafe { gttmm.mmio(0x701A4 + i * 0x1000 + j * 0x100)? },
                     // IHD-OS-KBL-Vol 2c-1.17 PLANE_POS
@@ -243,12 +254,16 @@ impl Pipe {
                     // IHD-OS-TGL-Vol 2c-12.21 PLANE_BUF_CFG
                     buf_cfg: unsafe { gttmm.mmio(0x7027C + i * 0x1000 + j * 0x100)? },
                     // IHD-OS-TGL-Vol 2c-12.21 PLANE_COLOR_CTL
-                    color_ctl: Some(unsafe { gttmm.mmio(0x701CC + i * 0x1000 + j * 0x100)? }),
-                    color_ctl_gamma_disable: 1 << 13,
+                    color_ctl: Some(Plane_color_ctl {
+                        reg: unsafe { gttmm.mmio(0x701CC + i * 0x1000 + j * 0x100)? },
+                        gamma_disable: 1 << 13,
+                    }),
                     // IHD-OS-TGL-Vol 2c-12.21 PLANE_CTL
-                    ctl: unsafe { gttmm.mmio(0x70180 + i * 0x1000 + j * 0x100)? },
-                    ctl_source_rgb_8888: 0b01000 << 23,
-                    ctl_source_mask: 0b11111 << 23,
+                    ctl: Plane_ctl {
+                        reg: unsafe { gttmm.mmio(0x70180 + i * 0x1000 + j * 0x100)? },
+                        source_rgb_8888: 0b01000 << 23,
+                        source_mask: 0b11111 << 23,
+                    },
                     // IHD-OS-TGL-Vol 2c-12.21 PLANE_OFFSET
                     offset: unsafe { gttmm.mmio(0x701A4 + i * 0x1000 + j * 0x100)? },
                     // IHD-OS-TGL-Vol 2c-12.21 PLANE_POS

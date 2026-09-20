@@ -3,6 +3,7 @@ use std::mem;
 use common::io::{Io, MmioPtr};
 use common::timeout::Timeout;
 use drm_sys::drm_mode_modeinfo;
+use ihdgd_macros::define_regs;
 use syscall::error::{Error, Result, EIO};
 
 use super::{CallbackGuard, MmioRegion, VideoInput};
@@ -27,20 +28,22 @@ pub const DPLL_ENABLE_POWER_STATE: u32 = 1 << 26;
 
 pub const DPLL_SSC_ENABLE: u32 = 1 << 9;
 
-pub struct Dpll {
-    pub name: &'static str,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_CFGCR0
-    cfgcr0: MmioPtr<u32>,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_CFGCR1
-    cfgcr1: MmioPtr<u32>,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_DIV0
-    div0: MmioPtr<u32>,
-    // IHD-OS-TGL-Vol 2c-12.21 DPCLKA_CFGCR0
-    pub dpclka_cfgcr0_clock_value: u32,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_ENABLE
-    enable: MmioPtr<u32>,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_SSC
-    ssc: MmioPtr<u32>,
+define_regs! {
+    pub struct Dpll {
+        let name: &'static str,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_CFGCR0
+        reg cfgcr0: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_CFGCR1
+        reg cfgcr1: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_DIV0
+        reg div0: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPCLKA_CFGCR0
+        pub let dpclka_cfgcr0_clock_value: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_ENABLE
+        reg enable: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_SSC
+        reg ssc: u32,
+    }
 }
 
 //TODO: verify offsets and count using DeviceKind?
