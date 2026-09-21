@@ -365,33 +365,33 @@ impl MouseState {
                 self.reset(ps2)
             }
             MouseState::Reset => {
-                log::warn!("timeout waiting for mouse reset");
+                log::debug!("timeout waiting for mouse reset");
                 self.reset(ps2)
             }
             MouseState::Bat => {
-                log::warn!("timeout waiting for BAT completion");
+                log::debug!("timeout waiting for BAT completion");
                 self.reset(ps2)
             }
             MouseState::IdentifyTouchpad { .. } => {
                 //TODO: retry?
-                log::warn!("timeout identifying touchpad");
+                log::debug!("timeout identifying touchpad");
                 self.request_status(ps2)
             }
             MouseState::EnableIntellimouse { .. } => {
                 //TODO: retry?
-                log::warn!("timeout enabling intellimouse");
+                log::debug!("timeout enabling intellimouse");
                 self.request_status(ps2)
             }
             MouseState::Status { index } => {
-                log::warn!("timeout waiting for mouse status {}", index);
+                log::debug!("timeout waiting for mouse status {}", index);
                 self.request_id(ps2)
             }
             MouseState::DeviceId => {
-                log::warn!("timeout requesting mouse id");
+                log::debug!("timeout requesting mouse id");
                 self.enable_reporting(0, ps2)
             }
             MouseState::EnableReporting { id } => {
-                log::warn!("timeout enabling reporting");
+                log::debug!("timeout enabling reporting");
                 //TODO: limit number of retries
                 self.enable_reporting(id, ps2)
             }

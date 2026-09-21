@@ -303,7 +303,8 @@ impl Device {
             }
             // Meteor Lake-P
             //TODO: add more IDs
-            (0x8086, 0x7d45)   // Meteor Lake-P
+            (0x8086, 0x7d45) | // Meteor Lake-P
+            (0x8086, 0x7dd5)   // Meteor Lake-P
             => {
                 DeviceKind::MeteorLakeP
             }

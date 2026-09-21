@@ -58,5 +58,6 @@ ids = { 0x8086 = [
     # Meteor Lake-P, from manual inspection
     #TODO: add more IDs
     0x7D45,
+    0x7DD5,
 ] }
 command = ["ihdgd"]
