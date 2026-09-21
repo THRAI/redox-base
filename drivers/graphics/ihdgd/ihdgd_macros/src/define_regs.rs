@@ -241,10 +241,14 @@ pub(crate) fn define_regs(tokens: TokenStream) -> TokenStream {
                                 #reg_data_type_name(self.reg.read(), self)
                             }
 
+                            /// Write a new value to the register, discarding
+                            /// the old value.
                             #field_vis fn write(&mut self, f: impl FnOnce(#reg_data_type_name) -> #reg_data_type_name) {
                                 self.reg.write(f(#reg_data_type_name(0, self)).0);
                             }
 
+                            /// Modify the contents of the register, preserving
+                            /// all fields not explicitly changed.
                             #field_vis fn modify(&mut self, f: impl FnOnce(#reg_data_type_name) -> #reg_data_type_name) {
                                 self.reg.write(f(self.read()).0);
                             }
