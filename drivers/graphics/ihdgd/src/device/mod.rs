@@ -552,7 +552,7 @@ impl Device {
             let pipe = &self.pipes[driver_data.pipe_idx];
             let transcoder = &self.transcoders[driver_data.transcoder_idx];
             for plane in pipe.planes.iter() {
-                if plane.ctl.reg.readf(PLANE_CTL_ENABLE) {
+                if plane.ctl.read().enable() {
                     plane.fetch_modeset(&mut self.alloc_buffers);
 
                     let fb = plane.fetch_framebuffer(&self.gm, &mut self.ggtt);
@@ -628,7 +628,7 @@ impl Device {
 
     pub fn dump(&self) {
         for ddi in self.ddis.iter() {
-            if ddi.buf_ctl.readf(DDI_BUF_CTL_ENABLE) {
+            if ddi.buf_ctl.read().enable() {
                 ddi.dump();
             }
         }
@@ -647,7 +647,7 @@ impl Device {
                 transcoder.dump();
                 pipe.dump();
                 for plane in pipe.planes.iter() {
-                    if plane.index == 0 || plane.ctl.reg.readf(PLANE_CTL_ENABLE) {
+                    if plane.index == 0 || plane.ctl.read().enable() {
                         eprint!("  ");
                         plane.dump();
                     }
@@ -842,13 +842,12 @@ impl Device {
 
                 // Configure and enable TRANS_DDI_FUNC_CTL
                 transcoder.ddi_func_ctl.write(|mut data| {
-                    data = data.or_raw(
-                        TRANS_DDI_FUNC_CTL_ENABLE |
+                    data = data
+                        .set_enable(true)
                         //TODO: allow different bits per color
-                        TRANS_DDI_FUNC_CTL_BPC_8 |
+                        .set_bpc_bpc8()
                         //TODO: correct port width selection
-                        TRANS_DDI_FUNC_CTL_PORT_WIDTH_4,
-                    );
+                        .set_port_width_width4();
 
                     if let Some(ddi_select) = ddi.trans_ddi_select {
                         data = data.set_ddi(ddi_select);
@@ -856,7 +855,7 @@ impl Device {
 
                     match input {
                         VideoInput::Hdmi => {
-                            data = data.or_raw(TRANS_DDI_FUNC_CTL_MODE_HDMI);
+                            data = data.set_mode_hdmi();
 
                             // Set HDMI scrambling and high TMDS char rate based on symbol rate > 340 MHz
                             if mode.clock > 340_000 {
@@ -865,16 +864,16 @@ impl Device {
                         }
                         VideoInput::Dp => {
                             //TODO: MST
-                            data = data.or_raw(TRANS_DDI_FUNC_CTL_MODE_DP_SST);
+                            data = data.set_mode_dp_sst();
                         }
                     }
 
                     // Sync polarity
                     if (mode.flags & drm_sys::DRM_MODE_FLAG_PVSYNC) != 0 {
-                        data = data.or_raw(TRANS_DDI_FUNC_CTL_SYNC_POLARITY_VSHIGH);
+                        data = data.set_sync_polarity_vshigh();
                     }
                     if (mode.flags & drm_sys::DRM_MODE_FLAG_PHSYNC) != 0 {
-                        data = data.or_raw(TRANS_DDI_FUNC_CTL_SYNC_POLARITY_HSHIGH);
+                        data = data.set_sync_polarity_hshigh();
                     }
 
                     data
@@ -883,7 +882,7 @@ impl Device {
                 // Configure and enable TRANS_CONF
                 transcoder.conf.modify(|data| {
                     // Set mode to progressive
-                    data.and_raw(!TRANS_CONF_MODE_MASK)
+                    data.set_interlaced_mode_pf_pd()
                         // Enable transcoder
                         .set_enable(true)
                 });
@@ -923,11 +922,11 @@ impl Device {
 
                 // Configure and enable DDI_BUF_CTL
                 //TODO: more DDI_BUF_CTL bits?
-                ddi.buf_ctl.writef(DDI_BUF_CTL_ENABLE, true);
+                ddi.buf_ctl.modify(|data| data.set_enable(true));
 
                 // Wait for DDI_BUF_CTL IDLE = 0, timeout after 500 us
                 let timeout = Timeout::from_micros(500);
-                while ddi.buf_ctl.readf(DDI_BUF_CTL_IDLE) {
+                while ddi.buf_ctl.read().idle() {
                     timeout.run().map_err(|()| {
                         log::warn!("timeout while waiting for DDI {} active", ddi.name);
                         Error::new(EIO)
@@ -941,7 +940,7 @@ impl Device {
             Ok(())
         };
 
-        if ddi.buf_ctl.readf(DDI_BUF_CTL_IDLE) {
+        if ddi.buf_ctl.read().idle() {
             log::info!("DDI {} idle, will attempt mode setting", ddi.name);
             const EDID_VIDEO_INPUT_UNDEFINED: u8 = (1 << 7) | 0b0000;
             const EDID_VIDEO_INPUT_DVI: u8 = (1 << 7) | 0b0001;

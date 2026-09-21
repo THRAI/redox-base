@@ -13,22 +13,6 @@ use crate::device::aux::Aux;
 use crate::device::power::PowerWells;
 use crate::device::Gmbus;
 
-// IHD-OS-TGL-Vol 2c-12.21 DDI_AUX_CTL
-pub const DDI_AUX_CTL_BUSY: u32 = 1 << 31;
-pub const DDI_AUX_CTL_DONE: u32 = 1 << 30;
-pub const DDI_AUX_CTL_TIMEOUT_ERROR: u32 = 1 << 28;
-pub const DDI_AUX_CTL_TIMEOUT_SHIFT: u32 = 26;
-pub const DDI_AUX_CTL_TIMEOUT_MASK: u32 = 0b11 << DDI_AUX_CTL_TIMEOUT_SHIFT;
-pub const DDI_AUX_CTL_TIMEOUT_4000US: u32 = 0b11 << DDI_AUX_CTL_TIMEOUT_SHIFT;
-pub const DDI_AUX_CTL_RECEIVE_ERROR: u32 = 1 << 25;
-pub const DDI_AUX_CTL_SIZE_SHIFT: u32 = 20;
-pub const DDI_AUX_CTL_SIZE_MASK: u32 = 0b11111 << 20;
-pub const DDI_AUX_CTL_IO_SELECT: u32 = 1 << 11;
-
-// IHD-OS-TGL-Vol 2c-12.21 DDI_BUF_CTL
-pub const DDI_BUF_CTL_ENABLE: u32 = 1 << 31;
-pub const DDI_BUF_CTL_IDLE: u32 = 1 << 7;
-
 // IHD-OS-TGL-Vol 2c-12.21 PORT_CL_DW5
 pub const PORT_CL_DW5_SUS_CLOCK_MASK: u32 = 0b11 << 0;
 
@@ -130,9 +114,27 @@ define_regs! {
         pub let kms_id: Option<KmsObjectId>,
         pub let gttmm: Arc<MmioRegion>,
         pub let port_base: Option<usize>,
-        pub reg aux_ctl: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DDI_AUX_CTL
+        pub reg aux_ctl: u32 {
+            flag busy = 1 << 31,
+            flag done = 1 << 30,
+            flag timeout_error = 1 << 28,
+            enum timeout = 0b11 << 26 {
+                timeout4000us = 0b11,
+            },
+            flag receive_error = 1 << 25,
+            field size = 0b11111 << 20,
+            enum io_select = 0b1 << 11 {
+                legacy = 0b0,
+                tbt = 0b1, // not present on KBL
+            }
+        },
         pub reg aux_datas[5]: u32,
-        pub reg buf_ctl: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DDI_BUF_CTL
+        pub reg buf_ctl: u32 {
+            flag enable = 1 << 31,
+            flag idle = 1 << 7,
+        },
         pub let dpclka_cfgcr0_clock_shift: Option<u32>,
         pub let dpclka_cfgcr0_clock_off: Option<u32>,
         pub let gmbus_pin_pair: Option<u8>,
@@ -151,7 +153,7 @@ define_regs! {
 impl Ddi {
     pub fn dump(&self) {
         eprint!("Ddi {} {}", self.name, self.index);
-        eprint!(" buf_ctl {:08X}", self.buf_ctl.read());
+        eprint!(" buf_ctl {:08X}", self.buf_ctl.read().raw());
         let lanes = [PortLane::Ln0, PortLane::Ln1, PortLane::Ln2, PortLane::Ln3];
         for reg in [
             PortClReg::Dw5,
@@ -492,7 +494,9 @@ impl Ddi {
                 port_base: None, //TODO: port regs
                 gttmm: gttmm.clone(),
                 // IHD-OS-KBL-Vol 2c-1.17 DDI_AUX_CTL
-                aux_ctl: unsafe { gttmm.mmio(0x64010 + i * 0x100)? },
+                aux_ctl: Ddi_aux_ctl {
+                    reg: unsafe { gttmm.mmio(0x64010 + i * 0x100)? },
+                },
                 // IHD-OS-KBL-Vol 2c-1.17 DDI_AUX_DATA
                 aux_datas: [
                     unsafe { gttmm.mmio(0x64014 + i * 0x100)? },
@@ -502,7 +506,9 @@ impl Ddi {
                     unsafe { gttmm.mmio(0x64024 + i * 0x100)? },
                 ],
                 // IHD-OS-KBL-Vol 2c-1.17 DDI_BUF_CTL
-                buf_ctl: unsafe { gttmm.mmio(0x64000 + i * 0x100)? },
+                buf_ctl: Ddi_buf_ctl {
+                    reg: unsafe { gttmm.mmio(0x64000 + i * 0x100)? },
+                },
                 // N/A
                 dpclka_cfgcr0_clock_shift: None,
                 dpclka_cfgcr0_clock_off: None,
@@ -589,7 +595,9 @@ impl Ddi {
                 port_base,
                 gttmm: gttmm.clone(),
                 // IHD-OS-TGL-Vol 2c-12.21 DDI_AUX_CTL
-                aux_ctl: unsafe { gttmm.mmio(0x64010 + i * 0x100)? },
+                aux_ctl: Ddi_aux_ctl {
+                    reg: unsafe { gttmm.mmio(0x64010 + i * 0x100)? },
+                },
                 // IHD-OS-TGL-Vol 2c-12.21 DDI_AUX_DATA
                 aux_datas: [
                     unsafe { gttmm.mmio(0x64014 + i * 0x100)? },
@@ -599,7 +607,9 @@ impl Ddi {
                     unsafe { gttmm.mmio(0x64024 + i * 0x100)? },
                 ],
                 // IHD-OS-TGL-Vol 2c-12.21 DDI_BUF_CTL
-                buf_ctl: unsafe { gttmm.mmio(0x64000 + i * 0x100)? },
+                buf_ctl: Ddi_buf_ctl {
+                    reg: unsafe { gttmm.mmio(0x64000 + i * 0x100)? },
+                },
                 // IHD-OS-TGL-Vol 2c-12.21 DPCLKA_CFGCR0
                 dpclka_cfgcr0_clock_shift: match i {
                     0 => Some(0),
@@ -690,7 +700,9 @@ impl Ddi {
                 port_base,
                 gttmm: gttmm.clone(),
                 // IHD-OS-ACM-Vol 2c-3.23 DDI_AUX_CTL
-                aux_ctl: unsafe { gttmm.mmio(0x64010 + i * 0x100)? },
+                aux_ctl: Ddi_aux_ctl {
+                    reg: unsafe { gttmm.mmio(0x64010 + i * 0x100)? },
+                },
                 // IHD-OS-ACM-Vol 2c-3.23 DDI_AUX_DATA
                 aux_datas: [
                     unsafe { gttmm.mmio(0x64014 + i * 0x100)? },
@@ -700,7 +712,9 @@ impl Ddi {
                     unsafe { gttmm.mmio(0x64024 + i * 0x100)? },
                 ],
                 // IHD-OS-ACM-Vol 2c-3.23 DDI_BUF_CTL
-                buf_ctl: unsafe { gttmm.mmio(0x64000 + i * 0x100)? },
+                buf_ctl: Ddi_buf_ctl {
+                    reg: unsafe { gttmm.mmio(0x64000 + i * 0x100)? },
+                },
                 // IHD-OS-ACM-Vol 2c-3.23 DPCLKA_CFGCR0
                 dpclka_cfgcr0_clock_shift: match i {
                     0 => Some(0),

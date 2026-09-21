@@ -8,6 +8,7 @@ use syscall::error::{Error, Result, EIO};
 
 use super::{MmioRegion, VideoInput};
 
+// FIXME hard code in the define_regs! invocation
 pub const DPLL_CFGCR1_QDIV_RATIO_SHIFT: u32 = 10;
 pub const DPLL_CFGCR1_QDIV_RATIO_MASK: u32 = 0xFF << DPLL_CFGCR1_QDIV_RATIO_SHIFT;
 pub const DPLL_CFGCR1_QDIV_MODE: u32 = 1 << 9;
@@ -21,13 +22,6 @@ pub const DPLL_CFGCR1_PDIV_5: u32 = 0b0100 << 2;
 pub const DPLL_CFGCR1_PDIV_7: u32 = 0b1000 << 2;
 pub const DPLL_CFGCR1_PDIV_MASK: u32 = 0b1111 << 2;
 
-pub const DPLL_ENABLE_ENABLE: u32 = 1 << 31;
-pub const DPLL_ENABLE_LOCK: u32 = 1 << 30;
-pub const DPLL_ENABLE_POWER_ENABLE: u32 = 1 << 27;
-pub const DPLL_ENABLE_POWER_STATE: u32 = 1 << 26;
-
-pub const DPLL_SSC_ENABLE: u32 = 1 << 9;
-
 define_regs! {
     pub struct Dpll {
         let name: &'static str,
@@ -40,16 +34,23 @@ define_regs! {
         // IHD-OS-TGL-Vol 2c-12.21 DPCLKA_CFGCR0
         pub let dpclka_cfgcr0_clock_value: u32,
         // IHD-OS-TGL-Vol 2c-12.21 DPLL_ENABLE
-        reg enable: u32,
+        reg enable: u32 {
+            flag enable = 1 << 31,
+            flag lock = 1 << 30,
+            flag power_enable = 1 << 27,
+            flag power_state = 1 << 26,
+        },
         // IHD-OS-TGL-Vol 2c-12.21 DPLL_SSC
-        reg ssc: u32,
+        reg ssc: u32 {
+            flag enable = 1 << 9,
+        },
     }
 }
 
 //TODO: verify offsets and count using DeviceKind?
 impl Dpll {
     pub fn is_enabled(&self) -> bool {
-        self.enable.readf(DPLL_ENABLE_ENABLE)
+        self.enable.read().enable()
     }
 
     pub fn dump(&self) {
@@ -57,8 +58,8 @@ impl Dpll {
         eprint!(" cfgcr0 {:08X}", self.cfgcr0.read());
         eprint!(" cfgcr1 {:08X}", self.cfgcr1.read());
         eprint!(" div0 {:08X}", self.div0.read());
-        eprint!(" enable {:08X}", self.enable.read());
-        eprint!(" ssc {:08X}", self.ssc.read());
+        eprint!(" enable {:08X}", self.enable.read().raw());
+        eprint!(" ssc {:08X}", self.ssc.read().raw());
         eprintln!();
     }
 
@@ -69,10 +70,10 @@ impl Dpll {
         input: VideoInput,
     ) -> Result<()> {
         // Enable DPLL power
-        self.enable.writef(DPLL_ENABLE_POWER_ENABLE, true);
+        self.enable.modify(|data| data.set_power_enable(true));
         //TODO: timeout not specified in docs, should be very fast
         let timeout = Timeout::from_micros(1);
-        while !self.enable.readf(DPLL_ENABLE_POWER_STATE) {
+        while !self.enable.read().power_state() {
             timeout.run().map_err(|()| {
                 log::debug!("timeout while enabling DPLL {} power", self.name);
                 Error::new(EIO)
@@ -80,13 +81,13 @@ impl Dpll {
         }
         let mut this = DropGuard::new(self, |this| {
             // Disable DPLL power
-            this.enable.writef(DPLL_ENABLE_POWER_ENABLE, false);
+            this.enable.modify(|data| data.set_power_enable(false));
         });
 
         match input {
             VideoInput::Hdmi => {
                 // Set SSC enable/disable. For HDMI, always disable
-                this.ssc.writef(DPLL_SSC_ENABLE, false);
+                this.ssc.modify(|data| data.set_enable(false));
 
                 // Configure DPLL frequency
                 this.set_freq_hdmi(ref_freq, &mode)?;
@@ -102,9 +103,9 @@ impl Dpll {
         // Enable DPLL
         //TODO: use guard?
         {
-            this.enable.writef(DPLL_ENABLE_ENABLE, true);
+            this.enable.modify(|data| data.set_enable(true));
             let timeout = Timeout::from_micros(50);
-            while !this.enable.readf(DPLL_ENABLE_LOCK) {
+            while !this.enable.read().lock() {
                 timeout.run().map_err(|()| {
                     log::debug!("timeout while enabling DPLL {}", this.name);
                     Error::new(EIO)
@@ -234,8 +235,12 @@ impl Dpll {
             cfgcr1: unsafe { gttmm.mmio(0x164288)? },
             div0: unsafe { gttmm.mmio(0x164B00)? },
             dpclka_cfgcr0_clock_value: 0b00,
-            enable: unsafe { gttmm.mmio(0x46010)? },
-            ssc: unsafe { gttmm.mmio(0x164B10)? },
+            enable: Dpll_enable {
+                reg: unsafe { gttmm.mmio(0x46010)? },
+            },
+            ssc: Dpll_ssc {
+                reg: unsafe { gttmm.mmio(0x164B10)? },
+            },
         });
         dplls.push(Self {
             name: "1",
@@ -243,8 +248,12 @@ impl Dpll {
             cfgcr1: unsafe { gttmm.mmio(0x164290)? },
             div0: unsafe { gttmm.mmio(0x164C00)? },
             dpclka_cfgcr0_clock_value: 0b01,
-            enable: unsafe { gttmm.mmio(0x46014)? },
-            ssc: unsafe { gttmm.mmio(0x164C10)? },
+            enable: Dpll_enable {
+                reg: unsafe { gttmm.mmio(0x46014)? },
+            },
+            ssc: Dpll_ssc {
+                reg: unsafe { gttmm.mmio(0x164C10)? },
+            },
         });
         /*TODO: not present on U-class CPUs
         dplls.push(Self {

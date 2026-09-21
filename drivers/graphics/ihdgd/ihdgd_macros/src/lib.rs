@@ -28,7 +28,9 @@ mod shared;
 ///                 red,
 ///                 green,
 ///                 blue,
-///             }
+///             },
+///             // A subfield whose location is hard coded in the accessors.
+///             field fixed = 0b1111 << 7,
 ///         },
 ///         // An array of 8 identical registers
 ///         pub reg register_set[8]: u32,
@@ -55,6 +57,7 @@ mod shared;
 ///     pub baz_shift: u32, // For example 11
 ///
 ///     pub quux_mask: u32, // For example 0b11 << 15
+///     pub quux_shift: u32, // For example 15
 ///     pub quux_red: u32, // For example 0b00 << 15
 ///     pub quux_green: u32, // For example 0b01 << 15
 ///     pub quux_blue: u32, // For example 0b10 << 15
@@ -80,6 +83,8 @@ mod shared;
 ///     pub fn set_quux_red(mut self) -> Self { ... }
 ///     pub fn set_quux_green(mut self) -> Self { ... }
 ///     pub fn set_quux_blue(mut self) -> Self { ... }
+///     pub fn fixed(&self) -> u32 { ... }
+///     pub fn set_fixed(mut self, data: u32) -> Self { ... }
 /// }
 /// ```
 #[proc_macro]

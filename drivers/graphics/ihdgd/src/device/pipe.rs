@@ -13,8 +13,6 @@ use super::buffer::GpuBuffer;
 use super::{Device, GlobalGtt, MmioRegion};
 use crate::device::InterruptRegs;
 
-pub const PLANE_CTL_ENABLE: u32 = 1 << 31;
-
 pub const PLANE_WM_ENABLE: u32 = 1 << 31;
 pub const PLANE_WM_LINES_SHIFT: u32 = 14;
 
@@ -28,6 +26,7 @@ define_regs! {
             flag gamma_disable,
         },
         pub reg ctl: u32 {
+            flag enable = 1 << 31,
             enum source {
                 rgb_8888,
             }
@@ -132,7 +131,7 @@ impl Plane {
 
         //TODO: more PLANE_CTL bits
         self.ctl
-            .write(|data| data.or_raw(PLANE_CTL_ENABLE).set_source_rgb_8888());
+            .write(|data| data.set_enable(true).set_source_rgb_8888());
     }
 
     pub fn dump(&self) {
@@ -194,8 +193,9 @@ impl Pipe {
                     // IHD-OS-KBL-Vol 2c-1.17 PLANE_CTL
                     ctl: Plane_ctl {
                         reg: unsafe { gttmm.mmio(0x70180 + i * 0x1000 + j * 0x100)? },
-                        source_rgb_8888: 0b0100 << 24,
+                        source_rgb_8888: 0b0100,
                         source_mask: 0b1111 << 24,
+                        source_shift: 24,
                     },
                     // IHD-OS-KBL-Vol 2c-1.17 PLANE_OFFSET
                     offset: unsafe { gttmm.mmio(0x701A4 + i * 0x1000 + j * 0x100)? },
@@ -262,6 +262,7 @@ impl Pipe {
                         reg: unsafe { gttmm.mmio(0x70180 + i * 0x1000 + j * 0x100)? },
                         source_rgb_8888: 0b01000 << 23,
                         source_mask: 0b11111 << 23,
+                        source_shift: 23,
                     },
                     // IHD-OS-TGL-Vol 2c-12.21 PLANE_OFFSET
                     offset: unsafe { gttmm.mmio(0x701A4 + i * 0x1000 + j * 0x100)? },
