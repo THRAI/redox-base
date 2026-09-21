@@ -1,8 +1,12 @@
+use std::mem;
+
 use common::io::{Io, MmioPtr};
+use common::timeout::Timeout;
 use drm_sys::drm_mode_modeinfo;
+use ihdgd_macros::define_regs;
 use syscall::error::{Error, Result, EIO};
 
-use super::MmioRegion;
+use super::{CallbackGuard, MmioRegion, VideoInput};
 
 pub const DPLL_CFGCR1_QDIV_RATIO_SHIFT: u32 = 10;
 pub const DPLL_CFGCR1_QDIV_RATIO_MASK: u32 = 0xFF << DPLL_CFGCR1_QDIV_RATIO_SHIFT;
@@ -24,24 +28,30 @@ pub const DPLL_ENABLE_POWER_STATE: u32 = 1 << 26;
 
 pub const DPLL_SSC_ENABLE: u32 = 1 << 9;
 
-pub struct Dpll {
-    pub name: &'static str,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_CFGCR0
-    pub cfgcr0: MmioPtr<u32>,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_CFGCR1
-    pub cfgcr1: MmioPtr<u32>,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_DIV0
-    pub div0: MmioPtr<u32>,
-    // IHD-OS-TGL-Vol 2c-12.21 DPCLKA_CFGCR0
-    pub dpclka_cfgcr0_clock_value: u32,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_ENABLE
-    pub enable: MmioPtr<u32>,
-    // IHD-OS-TGL-Vol 2c-12.21 DPLL_SSC
-    pub ssc: MmioPtr<u32>,
+define_regs! {
+    pub struct Dpll {
+        let name: &'static str,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_CFGCR0
+        reg cfgcr0: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_CFGCR1
+        reg cfgcr1: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_DIV0
+        reg div0: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPCLKA_CFGCR0
+        pub let dpclka_cfgcr0_clock_value: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_ENABLE
+        reg enable: u32,
+        // IHD-OS-TGL-Vol 2c-12.21 DPLL_SSC
+        reg ssc: u32,
+    }
 }
 
 //TODO: verify offsets and count using DeviceKind?
 impl Dpll {
+    pub fn is_enabled(&self) -> bool {
+        self.enable.readf(DPLL_ENABLE_ENABLE)
+    }
+
     pub fn dump(&self) {
         eprint!("Dpll {}", self.name);
         eprint!(" cfgcr0 {:08X}", self.cfgcr0.read());
@@ -50,6 +60,70 @@ impl Dpll {
         eprint!(" enable {:08X}", self.enable.read());
         eprint!(" ssc {:08X}", self.ssc.read());
         eprintln!();
+    }
+
+    pub fn configure_and_enable(
+        &mut self,
+        ref_freq: u64,
+        mode: drm_mode_modeinfo,
+        input: VideoInput,
+    ) -> Result<()> {
+        let mut dpll_enable = unsafe { MmioPtr::new(self.enable.as_mut_ptr()) };
+        let dpll_power_guard = CallbackGuard::new(
+            &mut dpll_enable,
+            |dpll_enable| {
+                // Enable DPLL power
+                dpll_enable.writef(DPLL_ENABLE_POWER_ENABLE, true);
+                //TODO: timeout not specified in docs, should be very fast
+                let timeout = Timeout::from_micros(1);
+                while !dpll_enable.readf(DPLL_ENABLE_POWER_STATE) {
+                    timeout.run().map_err(|()| {
+                        log::debug!("timeout while enabling DPLL {} power", self.name);
+                        Error::new(EIO)
+                    })?;
+                }
+                Ok(())
+            },
+            |dpll_enable| {
+                // Disable DPLL power
+                dpll_enable.writef(DPLL_ENABLE_POWER_ENABLE, false);
+            },
+        )?;
+        match input {
+            VideoInput::Hdmi => {
+                // Set SSC enable/disable. For HDMI, always disable
+                self.ssc.writef(DPLL_SSC_ENABLE, false);
+
+                // Configure DPLL frequency
+                self.set_freq_hdmi(ref_freq, &mode)?;
+            }
+            VideoInput::Dp => {
+                log::warn!("DPLL for DisplayPort not implemented");
+                return Err(Error::new(EIO));
+            }
+        }
+
+        //TODO: "Sequence Before Frequency Change"
+
+        // Enable DPLL
+        //TODO: use guard?
+        {
+            self.enable.writef(DPLL_ENABLE_ENABLE, true);
+            let timeout = Timeout::from_micros(50);
+            while !self.enable.readf(DPLL_ENABLE_LOCK) {
+                timeout.run().map_err(|()| {
+                    log::debug!("timeout while enabling DPLL {}", self.name);
+                    Error::new(EIO)
+                })?;
+            }
+        }
+
+        //TODO: "Sequence After Frequency Change"
+
+        // Continue to allow DPLL power
+        mem::forget(dpll_power_guard);
+
+        Ok(())
     }
 
     pub fn set_freq_hdmi(&mut self, mut ref_freq: u64, mode: &drm_mode_modeinfo) -> Result<()> {

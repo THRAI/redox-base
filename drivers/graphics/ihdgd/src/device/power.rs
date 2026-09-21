@@ -1,5 +1,6 @@
 use common::io::{Io, MmioPtr};
 use common::timeout::Timeout;
+use ihdgd_macros::define_regs;
 use syscall::error::{Error, Result, EIO};
 
 use super::MmioRegion;
@@ -16,13 +17,16 @@ pub struct PowerWell {
     pub fuse_status: u32,
 }
 
-pub struct PowerWells {
-    pub ctl: MmioPtr<u32>,
-    pub ctl_aux: MmioPtr<u32>,
-    pub ctl_ddi: MmioPtr<u32>,
-    pub fuse_status: MmioPtr<u32>,
-    pub fuse_status_pg0: u32,
-    pub wells: Vec<PowerWell>,
+define_regs! {
+    pub struct PowerWells {
+        pub reg ctl: u32,
+        pub reg ctl_aux: u32,
+        pub reg ctl_ddi: u32,
+        pub reg fuse_status: u32 {
+            flag pg0,
+        },
+        pub let wells: Vec<PowerWell>,
+    }
 }
 
 impl PowerWells {
@@ -31,7 +35,7 @@ impl PowerWells {
         // Wait 20us for distribution of PG0
         {
             let timeout = Timeout::from_micros(20);
-            while !self.fuse_status.readf(self.fuse_status_pg0) {
+            while !self.fuse_status.reg.readf(self.fuse_status.pg0) {
                 timeout.run().map_err(|()| {
                     log::warn!("timeout on distribution of power well 0");
                     Error::new(EIO)
@@ -68,7 +72,7 @@ impl PowerWells {
                 // Wait 20us for distribution
                 {
                     let timeout = Timeout::from_micros(20);
-                    while !self.fuse_status.readf(well.fuse_status) {
+                    while !self.fuse_status.reg.readf(well.fuse_status) {
                         timeout.run().map_err(|()| {
                             log::warn!("timeout on distribution of power well {}", well.name);
                             Error::new(EIO)
@@ -120,8 +124,10 @@ impl PowerWells {
         let ctl_aux = unsafe { gttmm.mmio(0x45404)? };
         let ctl_ddi = unsafe { gttmm.mmio(0x45404)? };
         // IHD-OS-KBL-Vol 2c-1.17 FUSE_STATUS
-        let fuse_status = unsafe { gttmm.mmio(0x42000)? };
-        let fuse_status_pg0 = 1 << 27;
+        let fuse_status = PowerWells_fuse_status {
+            reg: unsafe { gttmm.mmio(0x42000)? },
+            pg0: 1 << 27,
+        };
         let wells = vec![
             PowerWell {
                 name: "1",
@@ -149,7 +155,6 @@ impl PowerWells {
             ctl_aux,
             ctl_ddi,
             fuse_status,
-            fuse_status_pg0,
             wells,
         })
     }
@@ -162,8 +167,10 @@ impl PowerWells {
         // IHD-OS-TGL-Vol 2c-12.21 PWR_WELL_CTL_DDI
         let ctl_ddi = unsafe { gttmm.mmio(0x45454)? };
         // IHD-OS-TGL-Vol 2c-12.21 FUSE_STATUS
-        let fuse_status = unsafe { gttmm.mmio(0x42000)? };
-        let fuse_status_pg0 = 1 << 27;
+        let fuse_status = PowerWells_fuse_status {
+            reg: unsafe { gttmm.mmio(0x42000)? },
+            pg0: 1 << 27,
+        };
         let wells = vec![
             // DBUF functionality, Pipe A, Transcoder A and DSI, DDI A-C, FBC, DSS
             PowerWell {
@@ -226,7 +233,6 @@ impl PowerWells {
             ctl_aux,
             ctl_ddi,
             fuse_status,
-            fuse_status_pg0,
             wells,
         })
     }
@@ -239,8 +245,10 @@ impl PowerWells {
         // IHD-OS-ACM-Vol 2c-3.23 PWR_WELL_CTL_DDI
         let ctl_ddi = unsafe { gttmm.mmio(0x45454)? };
         // IHD-OS-ACM-Vol 2c-3.23 FUSE_STATUS
-        let fuse_status = unsafe { gttmm.mmio(0x42000)? };
-        let fuse_status_pg0 = 1 << 27;
+        let fuse_status = PowerWells_fuse_status {
+            reg: unsafe { gttmm.mmio(0x42000)? },
+            pg0: 1 << 27,
+        };
         let wells = vec![
             // DBUF functionality, Transcoder A, DDI A-B
             PowerWell {
@@ -314,7 +322,6 @@ impl PowerWells {
             ctl_aux,
             ctl_ddi,
             fuse_status,
-            fuse_status_pg0,
             wells,
         })
     }

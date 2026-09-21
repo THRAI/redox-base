@@ -20,6 +20,7 @@ void = "1.0"
 common = { path = "../../common" }
 daemon = { path = "../../../daemon" }
 driver-graphics = { path = "../driver-graphics" }
+ihdgd_macros = { path = "ihdgd_macros"}
 pcid = { path = "../../pcid" }
 
 libredox.workspace = true

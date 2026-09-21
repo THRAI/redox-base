@@ -4,6 +4,7 @@ use common::io::{Io, MmioPtr, WriteOnly};
 use common::timeout::Timeout;
 use driver_graphics::kms::objects::KmsObjectId;
 use embedded_hal::prelude::*;
+use ihdgd_macros::define_regs;
 use syscall::error::{Error, Result, EIO};
 
 use super::{GpioPort, MmioRegion};
@@ -121,26 +122,28 @@ pub enum PortLane {
     Ln3 = 0xB00,
 }
 
-pub struct Ddi {
-    pub name: &'static str,
-    pub index: usize,
-    pub kms_id: Option<KmsObjectId>,
-    pub gttmm: Arc<MmioRegion>,
-    pub port_base: Option<usize>,
-    pub aux_ctl: MmioPtr<u32>,
-    pub aux_datas: [MmioPtr<u32>; 5],
-    pub buf_ctl: MmioPtr<u32>,
-    pub dpclka_cfgcr0_clock_shift: Option<u32>,
-    pub dpclka_cfgcr0_clock_off: Option<u32>,
-    pub gmbus_pin_pair: Option<u8>,
-    pub gpio_port: Option<GpioPort>,
-    pub pwr_well_ctl_aux_request: u32,
-    pub pwr_well_ctl_aux_state: u32,
-    pub pwr_well_ctl_ddi_request: u32,
-    pub pwr_well_ctl_ddi_state: u32,
-    pub sde_interrupt_hotplug: Option<u32>,
-    pub trans_clock_select: Option<u32>,
-    pub trans_ddi_select: Option<u32>,
+define_regs! {
+    pub struct Ddi {
+        pub let name: &'static str,
+        pub let index: usize,
+        pub let kms_id: Option<KmsObjectId>,
+        pub let gttmm: Arc<MmioRegion>,
+        pub let port_base: Option<usize>,
+        pub reg aux_ctl: u32,
+        pub reg aux_datas[5]: u32,
+        pub reg buf_ctl: u32,
+        pub let dpclka_cfgcr0_clock_shift: Option<u32>,
+        pub let dpclka_cfgcr0_clock_off: Option<u32>,
+        pub let gmbus_pin_pair: Option<u8>,
+        pub let gpio_port: Option<GpioPort>,
+        pub let pwr_well_ctl_aux_request: u32,
+        pub let pwr_well_ctl_aux_state: u32,
+        pub let pwr_well_ctl_ddi_request: u32,
+        pub let pwr_well_ctl_ddi_state: u32,
+        pub let sde_interrupt_hotplug: Option<u32>,
+        pub let trans_clock_select: Option<u32>,
+        pub let trans_ddi_select: Option<u32>,
+    }
 }
 
 //TODO: verify offsets and count using DeviceKind?

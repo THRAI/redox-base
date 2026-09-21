@@ -8,6 +8,7 @@ use driver_graphics::kms::connector::{modeinfo_for_size, KmsConnectorStatus};
 use driver_graphics::kms::objects::{KmsObjectId, KmsObjects};
 use driver_graphics::GraphicsScheme;
 use drm_sys::drm_mode_modeinfo;
+use ihdgd_macros::define_regs;
 use pcid_interface::{PciFunction, PciFunctionHandle};
 use range_alloc::RangeAllocator;
 use syscall::error::{Error, Result, EIO, ENODEV, ERANGE};
@@ -101,15 +102,17 @@ pub enum Event {
     DdiHotplug(&'static str),
 }
 
-pub struct InterruptRegs {
-    // Interrupt status register, has live status of interrupts
-    pub isr: MmioPtr<u32>,
-    // Interrupt mask register, masks isr for iir, 0 is unmasked
-    pub imr: MmioPtr<u32>,
-    // Interrupt identity register, write 1 to clear
-    pub iir: MmioPtr<u32>,
-    // Interrupt enable register, 1 allows interrupt to propogate
-    pub ier: MmioPtr<u32>,
+define_regs! {
+    pub struct InterruptRegs {
+        // Interrupt status register, has live status of interrupts
+        reg isr: u32,
+        // Interrupt mask register, masks isr for iir, 0 is unmasked
+        reg imr: u32,
+        // Interrupt identity register, write 1 to clear
+        reg iir: u32,
+        // Interrupt enable register, 1 allows interrupt to propogate
+        reg ier: u32,
+    }
 }
 
 impl InterruptRegs {
@@ -140,15 +143,19 @@ impl InterruptRegs {
     }
 }
 
-pub struct Interrupter {
-    change_detects: Vec<ChangeDetect>,
-    display_int_ctl: MmioPtr<u32>,
-    display_int_ctl_enable: u32,
-    display_int_ctl_sde: u32,
-    gfx_mstr_intr: Option<MmioPtr<u32>>,
-    gfx_mstr_intr_display: u32,
-    gfx_mstr_intr_enable: u32,
-    sde_interrupt: InterruptRegs,
+define_regs! {
+    pub struct Interrupter {
+        let change_detects: Vec<ChangeDetect>,
+        reg display_int_ctl: u32 {
+            flag enable,
+            flag sde,
+        },
+        reg gfx_mstr_intr?: u32 {
+            flag display,
+            flag enable,
+        },
+        let sde_interrupt: InterruptRegs,
+    }
 }
 
 #[derive(Debug)]
@@ -379,12 +386,12 @@ impl Device {
                 int = Interrupter {
                     change_detects: Vec::new(),
                     // IHD-OS-KBL-Vol 2c-1.17 MASTER_INT_CTL
-                    display_int_ctl: unsafe { gttmm.mmio(0x44200)? },
-                    display_int_ctl_enable: 1 << 31,
-                    display_int_ctl_sde: 1 << 23,
+                    display_int_ctl: Interrupter_display_int_ctl {
+                        reg: unsafe { gttmm.mmio(0x44200)? },
+                        enable: 1 << 31,
+                        sde: 1 << 23,
+                    },
                     gfx_mstr_intr: None,
-                    gfx_mstr_intr_display: 0,
-                    gfx_mstr_intr_enable: 0,
                     sde_interrupt: unsafe { InterruptRegs::new(&gttmm, 0xC4000)? },
                 };
 
@@ -427,12 +434,16 @@ impl Device {
                         ChangeDetect::new("tbt_hotplug_ctl", unsafe { gttmm.mmio(0x44030)? }),
                         ChangeDetect::new("tc_hotplug_ctl", unsafe { gttmm.mmio(0x44038)? }),
                     ],
-                    display_int_ctl: unsafe { gttmm.mmio(0x44200)? },
-                    display_int_ctl_enable: 1 << 31,
-                    display_int_ctl_sde: 1 << 23,
-                    gfx_mstr_intr: Some(unsafe { gttmm.mmio(0x190010)? }),
-                    gfx_mstr_intr_display: 1 << 16,
-                    gfx_mstr_intr_enable: 1 << 31,
+                    display_int_ctl: Interrupter_display_int_ctl {
+                        reg: unsafe { gttmm.mmio(0x44200)? },
+                        enable: 1 << 31,
+                        sde: 1 << 23,
+                    },
+                    gfx_mstr_intr: Some(Interrupter_gfx_mstr_intr {
+                        reg: unsafe { gttmm.mmio(0x190010)? },
+                        display: 1 << 16,
+                        enable: 1 << 31,
+                    }),
                     sde_interrupt: unsafe { InterruptRegs::new(&gttmm, 0xC4000)? },
                 };
             }
@@ -564,7 +575,7 @@ impl Device {
             let pipe = &self.pipes[driver_data.pipe_idx];
             let transcoder = &self.transcoders[driver_data.transcoder_idx];
             for plane in pipe.planes.iter() {
-                if plane.ctl.readf(PLANE_CTL_ENABLE) {
+                if plane.ctl.reg.readf(PLANE_CTL_ENABLE) {
                     plane.fetch_modeset(&mut self.alloc_buffers);
 
                     let fb = plane.fetch_framebuffer(&self.gm, &mut self.ggtt);
@@ -628,12 +639,10 @@ impl Device {
             pipe.interrupt.enable(1);
         }
         // Enable display interrupts
-        self.int
-            .display_int_ctl
-            .write(self.int.display_int_ctl_enable);
+        self.int.display_int_ctl.write(|data| data.set_enable(true));
         if let Some(gfx_mstr_intr) = &mut self.int.gfx_mstr_intr {
             // Enable graphics interrupts
-            gfx_mstr_intr.write(self.int.gfx_mstr_intr_enable);
+            gfx_mstr_intr.write(|data| data.set_enable(true));
         }
         for change_detect in self.int.change_detects.iter_mut() {
             change_detect.log();
@@ -651,17 +660,17 @@ impl Device {
             eprintln!("dpclka_cfgcr0 {:08X}", dpclka_cfgcr0.read());
         }
         for dpll in self.dplls.iter() {
-            if dpll.enable.readf(DPLL_ENABLE_ENABLE) {
+            if dpll.is_enabled() {
                 dpll.dump();
             }
         }
 
         for (transcoder, pipe) in self.transcoders.iter().zip(self.pipes.iter()) {
-            if transcoder.conf.readf(TRANS_CONF_ENABLE) {
+            if transcoder.conf.read().enable() {
                 transcoder.dump();
                 pipe.dump();
                 for plane in pipe.planes.iter() {
-                    if plane.index == 0 || plane.ctl.readf(PLANE_CTL_ENABLE) {
+                    if plane.index == 0 || plane.ctl.reg.readf(PLANE_CTL_ENABLE) {
                         eprint!("  ");
                         plane.dump();
                     }
@@ -762,65 +771,13 @@ impl Device {
                 let dpll = self
                     .dplls
                     .iter_mut()
-                    .find(|dpll| !dpll.enable.readf(DPLL_ENABLE_ENABLE))
+                    .find(|dpll| !dpll.is_enabled())
                     .ok_or_else(|| {
                         log::error!("failed to find free DPLL");
                         Error::new(EIO)
                     })?;
 
-                // DPLL power guard
-                let mut dpll_enable = unsafe { MmioPtr::new(dpll.enable.as_mut_ptr()) };
-                let dpll_power_guard = CallbackGuard::new(
-                    &mut dpll_enable,
-                    |dpll_enable| {
-                        // Enable DPLL power
-                        dpll_enable.writef(DPLL_ENABLE_POWER_ENABLE, true);
-                        //TODO: timeout not specified in docs, should be very fast
-                        let timeout = Timeout::from_micros(1);
-                        while !dpll_enable.readf(DPLL_ENABLE_POWER_STATE) {
-                            timeout.run().map_err(|()| {
-                                log::debug!("timeout while enabling DPLL {} power", dpll.name);
-                                Error::new(EIO)
-                            })?;
-                        }
-                        Ok(())
-                    },
-                    |dpll_enable| {
-                        // Disable DPLL power
-                        dpll_enable.writef(DPLL_ENABLE_POWER_ENABLE, false);
-                    },
-                )?;
-
-                match input {
-                    VideoInput::Hdmi => {
-                        // Set SSC enable/disable. For HDMI, always disable
-                        dpll.ssc.writef(DPLL_SSC_ENABLE, false);
-
-                        // Configure DPLL frequency
-                        dpll.set_freq_hdmi(self.ref_freq, &mode)?;
-                    }
-                    VideoInput::Dp => {
-                        log::warn!("DPLL for DisplayPort not implemented");
-                        return Err(Error::new(EIO));
-                    }
-                }
-
-                //TODO: "Sequence Before Frequency Change"
-
-                // Enable DPLL
-                //TODO: use guard?
-                {
-                    dpll.enable.writef(DPLL_ENABLE_ENABLE, true);
-                    let timeout = Timeout::from_micros(50);
-                    while !dpll.enable.readf(DPLL_ENABLE_LOCK) {
-                        timeout.run().map_err(|()| {
-                            log::debug!("timeout while enabling DPLL {}", dpll.name);
-                            Error::new(EIO)
-                        })?;
-                    }
-                }
-
-                //TODO: "Sequence After Frequency Change"
+                dpll.configure_and_enable(self.ref_freq, mode, input)?;
 
                 // Update DPLL mapping
                 if let Some(dpclka_cfgcr0) = &mut self.dpclka_cfgcr0 {
@@ -831,12 +788,9 @@ impl Device {
                     v |= dpll.dpclka_cfgcr0_clock_value << clock_shift;
                     dpclka_cfgcr0.write(v);
                 }
-
-                // Continue to allow DPLL power
-                mem::forget(dpll_power_guard);
             }
 
-            // Enable DPLL clock (must be done separately from PLL mapping)
+            // Enable DDI clock (must be done separately from PLL mapping)
             if let Some(dpclka_cfgcr0) = &mut self.dpclka_cfgcr0 {
                 if let Some(clock_off) = ddi.dpclka_cfgcr0_clock_off {
                     dpclka_cfgcr0.writef(clock_off, false);
@@ -877,7 +831,7 @@ impl Device {
                 // Find free transcoder with free pipe
                 let mut transcoder_pipe = None;
                 for (transcoder, pipe) in self.transcoders.iter_mut().zip(self.pipes.iter_mut()) {
-                    if transcoder.conf.readf(TRANS_CONF_ENABLE) {
+                    if transcoder.conf.read().enable() {
                         continue;
                     }
                     //TODO: how would we know if pipe is in use?
@@ -899,7 +853,7 @@ impl Device {
                 if let Some(clock_select) = ddi.trans_clock_select {
                     transcoder
                         .clk_sel
-                        .write(clock_select << transcoder.clk_sel_shift);
+                        .write(|data| data.set_clk_sel(clock_select));
                 }
 
                 // Set pipe bottom color to blue for debugging
@@ -918,54 +872,55 @@ impl Device {
                 transcoder.modeset(pipe, &mode);
 
                 // Configure and enable TRANS_DDI_FUNC_CTL
-                {
-                    let mut ddi_func_ctl = TRANS_DDI_FUNC_CTL_ENABLE |
+                transcoder.ddi_func_ctl.write(|mut data| {
+                    data = data.or_raw(
+                        TRANS_DDI_FUNC_CTL_ENABLE |
                         //TODO: allow different bits per color
                         TRANS_DDI_FUNC_CTL_BPC_8 |
                         //TODO: correct port width selection
-                        TRANS_DDI_FUNC_CTL_PORT_WIDTH_4;
+                        TRANS_DDI_FUNC_CTL_PORT_WIDTH_4,
+                    );
 
                     if let Some(ddi_select) = ddi.trans_ddi_select {
-                        ddi_func_ctl |= ddi_select << transcoder.ddi_func_ctl_ddi_shift;
+                        data = data.set_ddi(ddi_select);
                     }
 
                     match input {
                         VideoInput::Hdmi => {
-                            ddi_func_ctl |= TRANS_DDI_FUNC_CTL_MODE_HDMI;
+                            data = data.or_raw(TRANS_DDI_FUNC_CTL_MODE_HDMI);
 
                             // Set HDMI scrambling and high TMDS char rate based on symbol rate > 340 MHz
                             if mode.clock > 340_000 {
-                                ddi_func_ctl |= transcoder.ddi_func_ctl_hdmi_scrambling
-                                    | transcoder.ddi_func_ctl_high_tmds_char_rate;
+                                data = data.set_hdmi_scrambling(true).set_high_tmds_char_rate(true);
                             }
                         }
                         VideoInput::Dp => {
                             //TODO: MST
-                            ddi_func_ctl |= TRANS_DDI_FUNC_CTL_MODE_DP_SST;
+                            data = data.or_raw(TRANS_DDI_FUNC_CTL_MODE_DP_SST);
                         }
                     }
 
                     // Sync polarity
                     if (mode.flags & drm_sys::DRM_MODE_FLAG_PVSYNC) != 0 {
-                        ddi_func_ctl |= TRANS_DDI_FUNC_CTL_SYNC_POLARITY_VSHIGH;
+                        data = data.or_raw(TRANS_DDI_FUNC_CTL_SYNC_POLARITY_VSHIGH);
                     }
                     if (mode.flags & drm_sys::DRM_MODE_FLAG_PHSYNC) != 0 {
-                        ddi_func_ctl |= TRANS_DDI_FUNC_CTL_SYNC_POLARITY_HSHIGH;
+                        data = data.or_raw(TRANS_DDI_FUNC_CTL_SYNC_POLARITY_HSHIGH);
                     }
 
-                    transcoder.ddi_func_ctl.write(ddi_func_ctl);
-                }
+                    data
+                });
 
                 // Configure and enable TRANS_CONF
-                let mut conf = transcoder.conf.read();
-                // Set mode to progressive
-                conf &= !TRANS_CONF_MODE_MASK;
-                // Enable transcoder
-                conf |= TRANS_CONF_ENABLE;
-                transcoder.conf.write(conf);
+                transcoder.conf.modify(|data| {
+                    // Set mode to progressive
+                    data.and_raw(!TRANS_CONF_MODE_MASK)
+                        // Enable transcoder
+                        .set_enable(true)
+                });
                 //TODO: what is the correct timeout?
                 let timeout = Timeout::from_millis(100);
-                while !transcoder.conf.readf(TRANS_CONF_STATE) {
+                while !transcoder.conf.read().state() {
                     timeout.run().map_err(|()| {
                         log::error!(
                             "timeout on DDI {} transcoder {} enable",
@@ -1058,10 +1013,10 @@ impl Device {
     }
 
     pub fn handle_display_irq(&mut self) -> bool {
-        let display_ints = self.int.display_int_ctl.read() & !self.int.display_int_ctl_enable;
-        if display_ints != 0 {
-            log::debug!("  display ints {:08X}", display_ints);
-            if display_ints & self.int.display_int_ctl_sde != 0 {
+        let display_ints = self.int.display_int_ctl.read().set_enable(false);
+        if display_ints.raw() != 0 {
+            log::debug!("  display ints {:08X}", display_ints.raw());
+            if display_ints.sde() {
                 let sde_ints = self.int.sde_interrupt.pending();
                 log::debug!("    south display engine ints {:08X}", sde_ints);
                 for ddi in self.ddis.iter() {
@@ -1073,7 +1028,7 @@ impl Device {
                 }
             }
             for pipe in self.pipes.iter_mut() {
-                if display_ints & pipe.display_int_ctl_pending != 0 {
+                if display_ints.raw() & pipe.display_int_ctl_pending != 0 {
                     let pipe_ints = pipe.interrupt.pending();
                     log::debug!("    pipe {} ints {:08X}", pipe.name, pipe_ints);
                 }
@@ -1089,13 +1044,12 @@ impl Device {
         // is very important to ensure we don't get into situation where we failed to acknowledge
         // all interrupts and no longer get any PCI interrupts.
         let had_irq = if let Some(gfx_mstr_intr) = &mut self.int.gfx_mstr_intr {
-            gfx_mstr_intr.write(0);
-            let gfx_ints = gfx_mstr_intr.read() & !self.int.gfx_mstr_intr_enable;
-            let res = if gfx_ints != 0 {
-                gfx_mstr_intr.write(gfx_ints | self.int.gfx_mstr_intr_enable);
-                log::debug!("gfx ints {:08X}", gfx_ints);
+            gfx_mstr_intr.write(|data| data);
+            let gfx_ints = gfx_mstr_intr.read().set_enable(false);
+            let res = if gfx_ints.raw() != 0 {
+                log::debug!("gfx ints {:08X}", gfx_ints.raw());
 
-                if gfx_ints & self.int.gfx_mstr_intr_display != 0 {
+                if gfx_ints.display() {
                     self.handle_display_irq();
                 }
 
@@ -1103,18 +1057,13 @@ impl Device {
             } else {
                 false
             };
-            self.int
-                .gfx_mstr_intr
-                .as_mut()
-                .unwrap()
-                .write(self.int.gfx_mstr_intr_enable);
+            let gfx_mstr_intr = self.int.gfx_mstr_intr.as_mut().unwrap();
+            gfx_mstr_intr.write(|data| data.set_enable(true));
             res
         } else {
-            self.int.display_int_ctl.write(0);
+            self.int.display_int_ctl.write(|data| data);
             let res = self.handle_display_irq();
-            self.int
-                .display_int_ctl
-                .write(self.int.display_int_ctl_enable);
+            self.int.display_int_ctl.write(|data| data.set_enable(true));
             res
         };
 
