@@ -17,8 +17,8 @@ use arrayvec::ArrayString;
 use hashbrown::hash_map::{Entry, OccupiedEntry, VacantEntry};
 use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
 use libredox::protocol::{
-    PidfdCall, ProcCall, ProcKillTarget, ProcMeta, RtSigInfo, SIGCHLD, SIGCONT, SIGHUP, SIGKILL,
-    SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU, ThreadCall, WaitFlags,
+    PidfdCall, ProcCall, ProcKillTarget, ProcMeta, Rlimit, RtSigInfo, SIGCHLD, SIGCONT, SIGHUP,
+    SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU, ThreadCall, WaitFlags,
 };
 use redox_rt::proc::FdGuard;
 use redox_scheme::scheme::{IntoTag, Op, OpCall};
@@ -398,6 +398,8 @@ struct Process {
 
     sig_pctl: Option<Page<SigProcControl>>,
     rtqs: Vec<VecDeque<RtSigInfo>>,
+
+    rlim: [Rlimit; 16],
 }
 #[derive(Copy, Clone, Debug)]
 struct WaitpidKey {
@@ -653,6 +655,8 @@ impl<'a> ProcScheme<'a> {
 
                     sig_pctl: None,
                     rtqs: Vec::new(),
+
+                    rlim: [Rlimit::const_default(); 16],
                 }));
                 self.groups.insert(
                     INIT_PID,
@@ -687,6 +691,7 @@ impl<'a> ProcScheme<'a> {
             sgid,
             name,
             prio,
+            rlim,
             ..
         } = *proc_guard.borrow();
 
@@ -720,6 +725,8 @@ impl<'a> ProcScheme<'a> {
             sgid,
             name,
             prio,
+            // The child inherits the parent's rlimits.
+            rlim,
 
             status: ProcessStatus::PossiblyRunnable,
             disabled_setpgid: false,
@@ -965,6 +972,9 @@ impl<'a> ProcScheme<'a> {
                     return Response::ready_err(EINVAL, op);
                 };
                 match verb {
+                    ProcCall::ControlTerm => {
+                        return Response::ready_err(EINVAL, op);
+                    }
                     ProcCall::Exit => self.on_exit_start(
                         fd_pid,
                         metadata[1] as u16,
@@ -1030,6 +1040,34 @@ impl<'a> ProcScheme<'a> {
                         self.on_setsid(fd_pid, awoken).map(|()| 0),
                         op,
                     )),
+                    ProcCall::Rlimit
+                        if CallFlags::from_bits_retain(metadata[2] as usize)
+                            .contains(CallFlags::WRITE) =>
+                    {
+                        let Ok(rlim) = plain::from_bytes(payload) else {
+                            return Response::ready_err(EINVAL, op);
+                        };
+                        Ready(Response::new(
+                            self.on_setrlimit(fd_pid, metadata[1] as usize, rlim)
+                                .map(|()| 0),
+                            op,
+                        ))
+                    }
+                    ProcCall::Rlimit
+                        if CallFlags::from_bits_retain(metadata[2] as usize)
+                            .contains(CallFlags::READ) =>
+                    {
+                        let Ok(rlim) = plain::from_mut_bytes(payload) else {
+                            return Response::ready_err(EINVAL, op);
+                        };
+                        Ready(Response::new(
+                            self.on_getrlimit(fd_pid, metadata[1] as usize, rlim)
+                                .map(|()| 0),
+                            op,
+                        ))
+                    }
+                    // Rlimit verb with CallFlags not containing READ or WRITE is invalid.
+                    ProcCall::Rlimit => Response::ready_err(EINVAL, op),
                     ProcCall::SetResugid => Ready(Response::new(
                         self.on_setresugid(fd_pid, payload).map(|()| 0),
                         op,
@@ -1259,6 +1297,60 @@ impl<'a> ProcScheme<'a> {
             .ppid;
         log::trace!("GETPPID {caller_pid:?} -> {ppid:?}");
         Ok(ppid)
+    }
+
+    fn on_setrlimit(
+        &mut self,
+        caller_pid: ProcessId,
+        resource: usize,
+        new_rlim: &Rlimit,
+    ) -> Result<()> {
+        let current_rlimits = &mut self
+            .processes
+            .get(&caller_pid)
+            .ok_or(Error::new(ESRCH))?
+            .borrow_mut()
+            .rlim;
+        let size = current_rlimits.len();
+
+        // POSIX: "[return EINVAL if] an invalid resource was specified"
+        if resource >= size {
+            return Err(Error::new(EINVAL));
+        }
+
+        let x = &mut current_rlimits[resource];
+
+        // POSIX: "[return EINVAL if] the new rlim_cur esceeds the new rlim_max"
+        if new_rlim.rlim_cur > new_rlim.rlim_max {
+            return Err(Error::new(EINVAL));
+        }
+        // TODO: EINVAL if current usage higher than the new limit.
+        *x = *new_rlim;
+        Ok(())
+    }
+
+    fn on_getrlimit(
+        &mut self,
+        caller_pid: ProcessId,
+        resource: usize,
+        rlim: &mut Rlimit,
+    ) -> Result<()> {
+        let current_rlimits = self
+            .processes
+            .get(&caller_pid)
+            .ok_or(Error::new(ESRCH))?
+            .borrow()
+            .rlim;
+        let size = current_rlimits.len();
+
+        // POSIX: "[return EINVAL if] an invalid resource was specified"
+        if resource >= size {
+            return Err(Error::new(EINVAL));
+        }
+
+        *rlim = current_rlimits[resource];
+
+        Ok(())
     }
     fn on_getsid(&mut self, caller_pid: ProcessId, req_pid: ProcessId) -> Result<ProcessId> {
         let caller_proc = self
