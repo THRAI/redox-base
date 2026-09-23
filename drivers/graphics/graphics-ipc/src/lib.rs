@@ -4,8 +4,11 @@ use std::{io, mem, ptr};
 
 use drm::buffer::Buffer;
 use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
-use drm::control::Device as _;
+use drm::control::{Device as _, PageFlipEvent, VblankEvent};
 use drm::{Device as _, DriverCapability};
+use drm_sys::drm_event;
+
+use crate::redox_uapi_exts::{RedoxDrmEventConnectorHotplug, REDOX_DRM_EVENT_CONNECTOR_HOTPLUG};
 
 pub mod redox_uapi_exts;
 
@@ -29,6 +32,36 @@ impl DrmHandle {
         assert!(handle.get_driver_capability(DriverCapability::DumbBuffer)? == 1);
         Ok(handle)
     }
+
+    pub fn redox_receive_events(&self) -> io::Result<impl Iterator<Item = RedoxDrmEvents>> {
+        let iter = self.receive_events()?.map(|event| match event {
+            drm::control::Event::Vblank(event) => RedoxDrmEvents::Vblank(event),
+            drm::control::Event::PageFlip(event) => RedoxDrmEvents::PageFlip(event),
+            drm::control::Event::Unknown(data) => {
+                assert!(data.len() >= size_of::<drm_event>());
+                let event = unsafe { ptr::read_unaligned(data.as_ptr().cast::<drm_event>()) };
+                match event.type_ {
+                    REDOX_DRM_EVENT_CONNECTOR_HOTPLUG => {
+                        assert_eq!(data.len(), size_of::<RedoxDrmEventConnectorHotplug>());
+                        RedoxDrmEvents::RedoxConnectorHotplug(unsafe {
+                            ptr::read_unaligned(
+                                data.as_ptr().cast::<RedoxDrmEventConnectorHotplug>(),
+                            )
+                        })
+                    }
+                    _ => RedoxDrmEvents::Unknown(data),
+                }
+            }
+        });
+        Ok(iter)
+    }
+}
+
+pub enum RedoxDrmEvents {
+    Vblank(VblankEvent),
+    PageFlip(PageFlipEvent),
+    RedoxConnectorHotplug(RedoxDrmEventConnectorHotplug),
+    Unknown(Vec<u8>),
 }
 
 pub struct CpuBackedBuffer {
