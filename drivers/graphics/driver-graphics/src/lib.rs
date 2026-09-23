@@ -223,19 +223,6 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
     }
 
     pub fn notify_connector_hotplug(&mut self, connector: KmsObjectId) {
-        if let KmsConnectorStatus::Connected = self
-            .kms_objects()
-            .get_connector(connector)
-            .unwrap()
-            .lock()
-            .unwrap()
-            .connection
-        {
-            // Avoid surfacing spurious hotplug events to userspace.
-            // FIXME handle disconnects
-            return;
-        }
-
         let event = RedoxDrmEventConnectorHotplug {
             base: drm_sys::drm_event {
                 type_: REDOX_DRM_EVENT_CONNECTOR_HOTPLUG,

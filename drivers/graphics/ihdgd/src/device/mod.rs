@@ -5,14 +5,14 @@ use std::sync::Arc;
 
 use common::io::{Io, MmioPtr};
 use common::timeout::Timeout;
-use driver_graphics::kms::connector::{modeinfo_for_size, KmsConnectorStatus};
-use driver_graphics::kms::objects::{KmsObjectId, KmsObjects};
 use driver_graphics::GraphicsScheme;
+use driver_graphics::kms::connector::{KmsConnectorStatus, modeinfo_for_size};
+use driver_graphics::kms::objects::{KmsObjectId, KmsObjects};
 use drm_sys::drm_mode_modeinfo;
 use ihdgd_macros::define_regs;
 use pcid_interface::{PciFunction, PciFunctionHandle};
 use range_alloc::RangeAllocator;
-use syscall::error::{Error, Result, EIO, ENODEV, ERANGE};
+use syscall::error::{EIO, ENODEV, ERANGE, Error, Result};
 
 mod aux;
 mod bios;
@@ -1060,7 +1060,22 @@ impl Device {
                         continue;
                     };
 
-                    scheme.notify_connector_hotplug(ddi.kms_id.unwrap());
+                    let connector = ddi.kms_id.unwrap();
+
+                    if let KmsConnectorStatus::Connected = scheme
+                        .kms_objects()
+                        .get_connector(connector)
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .connection
+                    {
+                        // Avoid surfacing spurious hotplug events to userspace.
+                        // FIXME handle disconnects
+                        continue;
+                    }
+
+                    scheme.notify_connector_hotplug(connector);
                 }
             }
         }
