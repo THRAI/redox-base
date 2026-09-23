@@ -1,3 +1,4 @@
+use std::mem::DropGuard;
 use std::sync::Arc;
 
 use common::io::{Io, MmioPtr, WriteOnly};
@@ -10,7 +11,7 @@ use syscall::error::{Error, Result, EIO};
 use super::{GpioPort, MmioRegion};
 use crate::device::aux::Aux;
 use crate::device::power::PowerWells;
-use crate::device::{CallbackGuard, Gmbus};
+use crate::device::Gmbus;
 
 // IHD-OS-TGL-Vol 2c-12.21 DDI_AUX_CTL
 pub const DDI_AUX_CTL_BUSY: u32 = 1 << 31;
@@ -227,26 +228,20 @@ impl Ddi {
             //TODO: the request can be shared by multiple DDIs
             let pwr_well_ctl_aux_request = ddi.pwr_well_ctl_aux_request;
             let pwr_well_ctl_aux_state = ddi.pwr_well_ctl_aux_state;
-            let mut pwr_well_ctl_aux = unsafe { MmioPtr::new(power_wells.ctl_aux.as_mut_ptr()) };
-            let _pwr_guard = CallbackGuard::new(
-                &mut pwr_well_ctl_aux,
-                |pwr_well_ctl_aux| {
-                    // Enable aux power
-                    pwr_well_ctl_aux.writef(pwr_well_ctl_aux_request, true);
-                    let timeout = Timeout::from_micros(1500);
-                    while !pwr_well_ctl_aux.readf(pwr_well_ctl_aux_state) {
-                        timeout.run().map_err(|()| {
-                            log::debug!("timeout while requesting DDI {} aux power", ddi.name);
-                            Error::new(EIO)
-                        })?;
-                    }
-                    Ok(())
-                },
-                |pwr_well_ctl_aux| {
-                    // Disable aux power
-                    pwr_well_ctl_aux.writef(pwr_well_ctl_aux_request, false);
-                },
-            )?;
+            let pwr_well_ctl_aux = &mut power_wells.ctl_aux;
+            // Enable aux power
+            pwr_well_ctl_aux.writef(pwr_well_ctl_aux_request, true);
+            let timeout = Timeout::from_micros(1500);
+            while !pwr_well_ctl_aux.readf(pwr_well_ctl_aux_state) {
+                timeout.run().map_err(|()| {
+                    log::debug!("timeout while requesting DDI {} aux power", ddi.name);
+                    Error::new(EIO)
+                })?;
+            }
+            let _pwr_guard = DropGuard::new(pwr_well_ctl_aux, |pwr_well_ctl_aux| {
+                // Disable aux power
+                pwr_well_ctl_aux.writef(pwr_well_ctl_aux_request, false);
+            });
 
             let mut edid_data = [0; 128];
             Aux::new(ddi)

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
+use std::mem::DropGuard;
 use std::sync::Arc;
-use std::{fmt, mem};
 
 use common::io::{Io, MmioPtr};
 use common::timeout::Timeout;
@@ -38,31 +39,6 @@ mod scheme;
 use self::scheme::*;
 mod transcoder;
 use self::transcoder::*;
-
-//TODO: move to common?
-pub struct CallbackGuard<'a, T, F: FnOnce(&mut T)> {
-    value: &'a mut T,
-    fini: Option<F>,
-}
-
-impl<'a, T, F: FnOnce(&mut T)> CallbackGuard<'a, T, F> {
-    // Note that fini will also run if init fails
-    pub fn new(value: &'a mut T, init: impl FnOnce(&mut T) -> Result<()>, fini: F) -> Result<Self> {
-        let mut this = Self {
-            value,
-            fini: Some(fini),
-        };
-        init(&mut this.value)?;
-        Ok(this)
-    }
-}
-
-impl<'a, T, F: FnOnce(&mut T)> Drop for CallbackGuard<'a, T, F> {
-    fn drop(&mut self) {
-        let fini = self.fini.take().unwrap();
-        fini(&mut self.value);
-    }
-}
 
 pub struct ChangeDetect {
     name: &'static str,
@@ -803,27 +779,20 @@ impl Device {
             //TODO: skip if TBT
             let pwr_well_ctl_ddi_request = ddi.pwr_well_ctl_ddi_request;
             let pwr_well_ctl_ddi_state = ddi.pwr_well_ctl_ddi_state;
-            let mut pwr_well_ctl_ddi =
-                unsafe { MmioPtr::new(self.power_wells.ctl_ddi.as_mut_ptr()) };
-            let pwr_guard = CallbackGuard::new(
-                &mut pwr_well_ctl_ddi,
-                |pwr_well_ctl_ddi| {
-                    // Enable IO power
-                    pwr_well_ctl_ddi.writef(pwr_well_ctl_ddi_request, true);
-                    let timeout = Timeout::from_micros(30);
-                    while !pwr_well_ctl_ddi.readf(pwr_well_ctl_ddi_state) {
-                        timeout.run().map_err(|()| {
-                            log::debug!("timeout while requesting DDI {} IO power", ddi.name);
-                            Error::new(EIO)
-                        })?;
-                    }
-                    Ok(())
-                },
-                |pwr_well_ctl_ddi| {
-                    // Disable IO power
-                    pwr_well_ctl_ddi.writef(pwr_well_ctl_ddi_request, false);
-                },
-            )?;
+            let power_wells = &mut self.power_wells;
+            // Enable IO power
+            power_wells.ctl_ddi.writef(pwr_well_ctl_ddi_request, true);
+            let timeout = Timeout::from_micros(30);
+            while !power_wells.ctl_ddi.readf(pwr_well_ctl_ddi_state) {
+                timeout.run().map_err(|()| {
+                    log::debug!("timeout while requesting DDI {} IO power", ddi.name);
+                    Error::new(EIO)
+                })?;
+            }
+            let mut pwr_guard = DropGuard::new(power_wells, |power_wells| {
+                // Disable IO power
+                power_wells.ctl_ddi.writef(pwr_well_ctl_ddi_request, false);
+            });
 
             //TODO: Type-C DP_MODE
 
@@ -846,9 +815,8 @@ impl Device {
 
                 // Enable pipe and transcoder power wells
                 //TODO: turn off wells later if not used
-                self.power_wells.enable_well_by_pipe(pipe.name)?;
-                self.power_wells
-                    .enable_well_by_transcoder(transcoder.name)?;
+                pwr_guard.enable_well_by_pipe(pipe.name)?;
+                pwr_guard.enable_well_by_transcoder(transcoder.name)?;
 
                 // Configure transcoder clock select
                 if let Some(clock_select) = ddi.trans_clock_select {
@@ -968,7 +936,7 @@ impl Device {
             }
 
             // Keep IO power on if finished
-            mem::forget(pwr_guard);
+            DropGuard::dismiss(pwr_guard);
 
             Ok(())
         };

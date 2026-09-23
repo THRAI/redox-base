@@ -4,8 +4,8 @@ use driver_graphics::kms::objects::{KmsObjectId, KmsObjects};
 use driver_graphics::kms::plane::{KmsPlane, KmsPlaneDriver, KmsPlaneState};
 use driver_graphics::{Buffer, Damage, DumbBufferConfig, GraphicsAdapter};
 
-use super::Device;
 use super::buffer::GpuBuffer;
+use super::Device;
 
 #[derive(Debug)]
 pub struct Connector {

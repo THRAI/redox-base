@@ -1,4 +1,4 @@
-use std::mem;
+use std::mem::DropGuard;
 
 use common::io::{Io, MmioPtr};
 use common::timeout::Timeout;
@@ -6,7 +6,7 @@ use drm_sys::drm_mode_modeinfo;
 use ihdgd_macros::define_regs;
 use syscall::error::{Error, Result, EIO};
 
-use super::{CallbackGuard, MmioRegion, VideoInput};
+use super::{MmioRegion, VideoInput};
 
 pub const DPLL_CFGCR1_QDIV_RATIO_SHIFT: u32 = 10;
 pub const DPLL_CFGCR1_QDIV_RATIO_MASK: u32 = 0xFF << DPLL_CFGCR1_QDIV_RATIO_SHIFT;
@@ -68,34 +68,28 @@ impl Dpll {
         mode: drm_mode_modeinfo,
         input: VideoInput,
     ) -> Result<()> {
-        let mut dpll_enable = unsafe { MmioPtr::new(self.enable.as_mut_ptr()) };
-        let dpll_power_guard = CallbackGuard::new(
-            &mut dpll_enable,
-            |dpll_enable| {
-                // Enable DPLL power
-                dpll_enable.writef(DPLL_ENABLE_POWER_ENABLE, true);
-                //TODO: timeout not specified in docs, should be very fast
-                let timeout = Timeout::from_micros(1);
-                while !dpll_enable.readf(DPLL_ENABLE_POWER_STATE) {
-                    timeout.run().map_err(|()| {
-                        log::debug!("timeout while enabling DPLL {} power", self.name);
-                        Error::new(EIO)
-                    })?;
-                }
-                Ok(())
-            },
-            |dpll_enable| {
-                // Disable DPLL power
-                dpll_enable.writef(DPLL_ENABLE_POWER_ENABLE, false);
-            },
-        )?;
+        // Enable DPLL power
+        self.enable.writef(DPLL_ENABLE_POWER_ENABLE, true);
+        //TODO: timeout not specified in docs, should be very fast
+        let timeout = Timeout::from_micros(1);
+        while !self.enable.readf(DPLL_ENABLE_POWER_STATE) {
+            timeout.run().map_err(|()| {
+                log::debug!("timeout while enabling DPLL {} power", self.name);
+                Error::new(EIO)
+            })?;
+        }
+        let mut this = DropGuard::new(self, |this| {
+            // Disable DPLL power
+            this.enable.writef(DPLL_ENABLE_POWER_ENABLE, false);
+        });
+
         match input {
             VideoInput::Hdmi => {
                 // Set SSC enable/disable. For HDMI, always disable
-                self.ssc.writef(DPLL_SSC_ENABLE, false);
+                this.ssc.writef(DPLL_SSC_ENABLE, false);
 
                 // Configure DPLL frequency
-                self.set_freq_hdmi(ref_freq, &mode)?;
+                this.set_freq_hdmi(ref_freq, &mode)?;
             }
             VideoInput::Dp => {
                 log::warn!("DPLL for DisplayPort not implemented");
@@ -108,11 +102,11 @@ impl Dpll {
         // Enable DPLL
         //TODO: use guard?
         {
-            self.enable.writef(DPLL_ENABLE_ENABLE, true);
+            this.enable.writef(DPLL_ENABLE_ENABLE, true);
             let timeout = Timeout::from_micros(50);
-            while !self.enable.readf(DPLL_ENABLE_LOCK) {
+            while !this.enable.readf(DPLL_ENABLE_LOCK) {
                 timeout.run().map_err(|()| {
-                    log::debug!("timeout while enabling DPLL {}", self.name);
+                    log::debug!("timeout while enabling DPLL {}", this.name);
                     Error::new(EIO)
                 })?;
             }
@@ -121,7 +115,7 @@ impl Dpll {
         //TODO: "Sequence After Frequency Change"
 
         // Continue to allow DPLL power
-        mem::forget(dpll_power_guard);
+        DropGuard::dismiss(this);
 
         Ok(())
     }
