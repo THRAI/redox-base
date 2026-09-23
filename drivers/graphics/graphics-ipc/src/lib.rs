@@ -33,23 +33,23 @@ impl DrmHandle {
         Ok(handle)
     }
 
-    pub fn redox_receive_events(&self) -> io::Result<impl Iterator<Item = RedoxDrmEvents>> {
+    pub fn redox_receive_events(&self) -> io::Result<impl Iterator<Item = RedoxDrmEvent>> {
         let iter = self.receive_events()?.map(|event| match event {
-            drm::control::Event::Vblank(event) => RedoxDrmEvents::Vblank(event),
-            drm::control::Event::PageFlip(event) => RedoxDrmEvents::PageFlip(event),
+            drm::control::Event::Vblank(event) => RedoxDrmEvent::Vblank(event),
+            drm::control::Event::PageFlip(event) => RedoxDrmEvent::PageFlip(event),
             drm::control::Event::Unknown(data) => {
                 assert!(data.len() >= size_of::<drm_event>());
                 let event = unsafe { ptr::read_unaligned(data.as_ptr().cast::<drm_event>()) };
                 match event.type_ {
                     REDOX_DRM_EVENT_CONNECTOR_HOTPLUG => {
                         assert_eq!(data.len(), size_of::<RedoxDrmEventConnectorHotplug>());
-                        RedoxDrmEvents::RedoxConnectorHotplug(unsafe {
+                        RedoxDrmEvent::RedoxConnectorHotplug(unsafe {
                             ptr::read_unaligned(
                                 data.as_ptr().cast::<RedoxDrmEventConnectorHotplug>(),
                             )
                         })
                     }
-                    _ => RedoxDrmEvents::Unknown(data),
+                    _ => RedoxDrmEvent::Unknown(data),
                 }
             }
         });
@@ -57,7 +57,7 @@ impl DrmHandle {
     }
 }
 
-pub enum RedoxDrmEvents {
+pub enum RedoxDrmEvent {
     Vblank(VblankEvent),
     PageFlip(PageFlipEvent),
     RedoxConnectorHotplug(RedoxDrmEventConnectorHotplug),

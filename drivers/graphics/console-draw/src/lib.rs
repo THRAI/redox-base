@@ -22,7 +22,7 @@ use drm::control::{connector, crtc, framebuffer, ClipRect, Device, Mode, RawReso
 use graphics_ipc::redox_uapi_exts::{
     RedoxDrmEventConnectorHotplug, REDOX_DRM_CLIENT_CAP_HOTPLUG_EVENTS,
 };
-use graphics_ipc::{CpuBackedBuffer, DrmHandle, RedoxDrmEvents};
+use graphics_ipc::{CpuBackedBuffer, DrmHandle, RedoxDrmEvent};
 use orbclient::FONT;
 
 pub struct V2DisplayMap {
@@ -542,12 +542,12 @@ impl TextScreen {
     pub fn handle_display_event(&mut self, map: &mut V2DisplayMap) -> io::Result<()> {
         for event in map.display_handle.redox_receive_events()? {
             match event {
-                RedoxDrmEvents::RedoxConnectorHotplug(event) => {
+                RedoxDrmEvent::RedoxConnectorHotplug(event) => {
                     self.handle_connector_hotplug(map, Some(event))?;
                 }
-                RedoxDrmEvents::Vblank(_)
-                | RedoxDrmEvents::PageFlip(_)
-                | RedoxDrmEvents::Unknown(_) => todo!(),
+                RedoxDrmEvent::Vblank(_)
+                | RedoxDrmEvent::PageFlip(_)
+                | RedoxDrmEvent::Unknown(_) => todo!(),
             }
         }
 
