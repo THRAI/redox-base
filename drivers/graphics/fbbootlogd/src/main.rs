@@ -146,27 +146,22 @@ impl Fbbootlog {
         };
 
         match V2DisplayMap::new(new_display_handle) {
-            Ok(mut display_map) => match self.text_screen.handle_handoff(&mut display_map) {
-                Ok(()) => {
-                    if let Some(old_display_map) = &self.display_map {
-                        event_queue
-                            .unsubscribe(old_display_map.event_handle().as_raw_fd() as usize)
-                            .expect("fbbootlogd: failed to unsubscribe from old drm events");
-                    }
+            Ok(mut display_map) => {
+                self.text_screen.handle_handoff(&mut display_map);
+                if let Some(old_display_map) = &self.display_map {
                     event_queue
-                        .subscribe(
-                            display_map.event_handle().as_raw_fd() as usize,
-                            Source::DisplayHandle,
-                            event::EventFlags::READ,
-                        )
-                        .expect("fbbootlogd: failed to subscribe to drm events");
-                    self.display_map = Some(display_map);
+                        .unsubscribe(old_display_map.event_handle().as_raw_fd() as usize)
+                        .expect("fbbootlogd: failed to unsubscribe from old drm events");
                 }
-                Err(err) => {
-                    eprintln!("fbbootlogd: failed to handle handoff: {err}");
-                    return;
-                }
-            },
+                event_queue
+                    .subscribe(
+                        display_map.event_handle().as_raw_fd() as usize,
+                        Source::DisplayHandle,
+                        event::EventFlags::READ,
+                    )
+                    .expect("fbbootlogd: failed to subscribe to drm events");
+                self.display_map = Some(display_map);
+            }
             Err(err) => {
                 eprintln!("fbbootlogd: failed to open display: {}", err);
                 return;

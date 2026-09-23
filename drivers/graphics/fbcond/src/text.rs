@@ -51,27 +51,22 @@ impl TextScreen {
         log::debug!("fbcond: Opened new display");
 
         match V2DisplayMap::new(new_display_handle) {
-            Ok(mut map) => match self.inner.handle_handoff(&mut map) {
-                Ok(()) => {
-                    if let Some(old_map) = &self.map {
-                        event_queue
-                            .unsubscribe(old_map.event_handle().as_raw_fd() as usize)
-                            .expect("fbcond: failed to unsubscribe from old drm events");
-                    }
+            Ok(mut map) => {
+                self.inner.handle_handoff(&mut map);
+                if let Some(old_map) = &self.map {
                     event_queue
-                        .subscribe(
-                            map.event_handle().as_raw_fd() as usize,
-                            Source::DisplayHandle,
-                            event::EventFlags::READ,
-                        )
-                        .expect("fbcond: failed to subscribe to drm events");
-                    self.map = Some(map);
+                        .unsubscribe(old_map.event_handle().as_raw_fd() as usize)
+                        .expect("fbcond: failed to unsubscribe from old drm events");
                 }
-                Err(err) => {
-                    eprintln!("fbcond: failed to handle handoff: {err}");
-                    return;
-                }
-            },
+                event_queue
+                    .subscribe(
+                        map.event_handle().as_raw_fd() as usize,
+                        Source::DisplayHandle,
+                        event::EventFlags::READ,
+                    )
+                    .expect("fbcond: failed to subscribe to drm events");
+                self.map = Some(map);
+            }
             Err(err) => {
                 eprintln!("fbcond: failed to open display: {}", err);
                 return;
