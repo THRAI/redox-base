@@ -20,7 +20,7 @@ use syscall::schemev2::NewFdFlags;
 use syscall::{EINVAL, Error, EventFlags, Result};
 
 use crate::handle::DrmHandle;
-use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState};
+use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState, KmsConnectorStatus};
 use crate::kms::crtc::{KmsCrtc, KmsCrtcDriver, KmsCrtcState};
 use crate::kms::objects::{KmsObjectId, KmsObjects};
 use crate::kms::plane::{KmsPlane, KmsPlaneDriver, KmsPlaneState};
@@ -223,6 +223,19 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
     }
 
     pub fn notify_connector_hotplug(&mut self, connector: KmsObjectId) {
+        if let KmsConnectorStatus::Connected = self
+            .kms_objects()
+            .get_connector(connector)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .connection
+        {
+            // Avoid surfacing spurious hotplug events to userspace.
+            // FIXME handle disconnects
+            return;
+        }
+
         let event = RedoxDrmEventConnectorHotplug {
             base: drm_sys::drm_event {
                 type_: REDOX_DRM_EVENT_CONNECTOR_HOTPLUG,

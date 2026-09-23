@@ -35,14 +35,18 @@ pub struct V2DisplayMap {
 impl V2DisplayMap {
     fn map_connectors_to_crtcs(
         display_handle: &DrmHandle,
-        force_probe: bool,
+        event: Option<RedoxDrmEventConnectorHotplug>,
     ) -> Result<BTreeMap<RawResourceHandle, (connector::Info, Mode)>, io::Error> {
         let resource_handles = display_handle.resource_handles()?;
 
         let active_connectors = resource_handles
             .connectors()
             .iter()
-            .map(|&connector| display_handle.get_connector(connector, force_probe))
+            .map(|&connector| {
+                let force_probe =
+                    event.map_or(true, |event| u32::from(connector) == event.connector);
+                display_handle.get_connector(connector, force_probe)
+            })
             .filter(|info| {
                 info.as_ref()
                     .map_or(true, |info| info.state() == connector::State::Connected)
@@ -88,10 +92,7 @@ impl V2DisplayMap {
         )
         .unwrap();
 
-        let crtc_connector_map = Self::map_connectors_to_crtcs(
-            &display_handle,
-            true, // force_probe
-        )?;
+        let crtc_connector_map = Self::map_connectors_to_crtcs(&display_handle, None)?;
 
         let mut displays = vec![];
         for (crtc, (connector_info, preferred_mode)) in crtc_connector_map {
@@ -529,8 +530,15 @@ impl TextScreen {
         )
     }
 
-    pub fn handle_handoff(&mut self, map: &mut V2DisplayMap) -> io::Result<()> {
-        self.handle_connector_hotplug(map, true /* new_drm_handle */)
+    pub fn handle_handoff(&mut self, map: &mut V2DisplayMap) {
+        map.with_console_map(|mut console_map| {
+            self.term.resize(TermSize::new(
+                console_map.width / self.font.width,
+                console_map.height / self.font.height,
+            ));
+            self.last_cursor = Point::new(Line(0), Column(0));
+            self.redraw(&mut console_map, true)
+        });
     }
 
     pub fn handle_display_event(&mut self, map: &mut V2DisplayMap) -> io::Result<()> {
@@ -543,13 +551,13 @@ impl TextScreen {
                     match event.type_ {
                         REDOX_DRM_EVENT_CONNECTOR_HOTPLUG => {
                             assert_eq!(data.len(), size_of::<RedoxDrmEventConnectorHotplug>());
-                            let _event = unsafe {
+                            let event = unsafe {
                                 ptr::read_unaligned(
                                     data.as_ptr().cast::<RedoxDrmEventConnectorHotplug>(),
                                 )
                             };
 
-                            self.handle_connector_hotplug(map, false /* new_drm_handle */)?;
+                            self.handle_connector_hotplug(map, Some(event))?;
                         }
                         _ => {}
                     }
@@ -563,12 +571,9 @@ impl TextScreen {
     fn handle_connector_hotplug(
         &mut self,
         map: &mut V2DisplayMap,
-        new_drm_handle: bool,
+        event: Option<RedoxDrmEventConnectorHotplug>,
     ) -> io::Result<()> {
-        let crtc_connector_map = V2DisplayMap::map_connectors_to_crtcs(
-            &map.display_handle,
-            true, // force_probe
-        )?;
+        let crtc_connector_map = V2DisplayMap::map_connectors_to_crtcs(&map.display_handle, event)?;
 
         let preferred_sizes =
             crtc_connector_map
@@ -583,7 +588,7 @@ impl TextScreen {
             .displays
             .iter()
             .map(|(_crtc, _fb, buffer)| buffer.buffer().size());
-        if !new_drm_handle && preferred_sizes.eq(current_sizes) {
+        if event.is_some() && preferred_sizes.eq(current_sizes) {
             return Ok(());
         }
 
@@ -627,7 +632,7 @@ impl TextScreen {
             )?;
         }
 
-        if !new_drm_handle {
+        if event.is_some() {
             for (_crtc, fb, buffer) in old_displays {
                 buffer.destroy(&map.display_handle)?;
                 let _ = map.display_handle.destroy_framebuffer(fb);

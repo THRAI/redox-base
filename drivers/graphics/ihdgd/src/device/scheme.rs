@@ -4,8 +4,8 @@ use driver_graphics::kms::objects::{KmsObjectId, KmsObjects};
 use driver_graphics::kms::plane::{KmsPlane, KmsPlaneDriver, KmsPlaneState};
 use driver_graphics::{Buffer, Damage, DumbBufferConfig, GraphicsAdapter};
 
-use super::buffer::GpuBuffer;
 use super::Device;
+use super::buffer::GpuBuffer;
 
 #[derive(Debug)]
 pub struct Connector {
@@ -88,14 +88,12 @@ impl GraphicsAdapter for Device {
         objects: &mut KmsObjects<Self>,
         id: KmsObjectId,
     ) -> syscall::Result<()> {
-        let ddi_name = {
-            let connector = objects.get_connector(id)?.lock().unwrap();
-            if !matches!(connector.connection, KmsConnectorStatus::Unknown) {
-                //TODO: fix probing on every frame
-                return Ok(());
-            }
-            connector.driver_data.ddi_name
-        };
+        let ddi_name = objects
+            .get_connector(id)?
+            .lock()
+            .unwrap()
+            .driver_data
+            .ddi_name;
         log::info!("probe connector {:?}: DDI {}", id, ddi_name);
         let connection = match self.probe_ddi(objects, id) {
             Ok(true) => KmsConnectorStatus::Connected,
