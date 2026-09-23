@@ -5,7 +5,7 @@ use syn::punctuated::Punctuated;
 use syn::token::Bracket;
 use syn::{Ident, LitInt, Token, Type, Visibility, braced, bracketed, parse_macro_input, token};
 
-use crate::shared::{FieldKind, RegFieldKind, kw};
+use crate::shared::{FieldKind, RegFieldKind, ShiftedMask, kw};
 
 struct Input {
     vis: Visibility,
@@ -95,14 +95,17 @@ struct InputFieldRegField {
 enum InputFieldRegFieldKind {
     Field {
         _field: kw::field,
+        default: Option<ShiftedMask>,
     },
     Flag {
         _flag: kw::flag,
+        default: Option<ShiftedMask>,
     },
     Enum {
         _enum: Token![enum],
+        default: Option<ShiftedMask>,
         _brace_token: token::Brace,
-        variants: Punctuated<Ident, Token![,]>,
+        variants: Punctuated<(Ident, Option<(Token![=], LitInt)>), Token![,]>,
     },
 }
 
@@ -111,14 +114,45 @@ impl Parse for InputFieldRegField {
         let kind: RegFieldKind = input.parse()?;
         let name = input.parse()?;
         let kind = match kind {
-            RegFieldKind::Field(_field) => InputFieldRegFieldKind::Field { _field },
-            RegFieldKind::Flag(_flag) => InputFieldRegFieldKind::Flag { _flag },
+            RegFieldKind::Field(_field) => {
+                let default = if input.peek(Token![=]) {
+                    Some(ShiftedMask::parse(input)?)
+                } else {
+                    None
+                };
+                InputFieldRegFieldKind::Field { _field, default }
+            }
+            RegFieldKind::Flag(_flag) => {
+                let default = if input.peek(Token![=]) {
+                    Some(ShiftedMask::parse_flag(input)?)
+                } else {
+                    None
+                };
+                InputFieldRegFieldKind::Flag { _flag, default }
+            }
             RegFieldKind::Enum(_enum) => {
+                let default = if input.peek(Token![=]) {
+                    Some(ShiftedMask::parse(input)?)
+                } else {
+                    None
+                };
                 let variants;
                 InputFieldRegFieldKind::Enum {
                     _enum,
+                    default,
                     _brace_token: braced!(variants in input),
-                    variants: variants.parse_terminated(Ident::parse, Token![,])?,
+                    variants: variants.parse_terminated(
+                        |input| {
+                            let variant = Ident::parse(input)?;
+                            let default = if input.peek(Token![=]) {
+                                Some((input.parse::<Token![=]>()?, input.parse::<LitInt>()?))
+                            } else {
+                                None
+                            };
+                            Ok((variant, default))
+                        },
+                        Token![,],
+                    )?,
                 }
             }
         };
@@ -134,65 +168,134 @@ impl InputFieldRegField {
     ) -> (Vec<proc_macro2::TokenStream>, Vec<proc_macro2::TokenStream>) {
         let reg_field_name = self.name;
         match self.kind {
-            InputFieldRegFieldKind::Field { _field } => {
+            InputFieldRegFieldKind::Field { _field, default } => {
                 let mask = Ident::new(&format!("{reg_field_name}_mask"), reg_field_name.span());
                 let shift = Ident::new(&format!("{reg_field_name}_shift"), reg_field_name.span());
                 let set = Ident::new(&format!("set_{reg_field_name}"), reg_field_name.span());
-                (
-                    vec![
-                        quote! { #vis #mask: #field_type },
-                        quote! { #vis #shift: #field_type },
-                    ],
-                    vec![
-                        quote! { #vis fn #reg_field_name(&self) -> #field_type {
-                            (self.0 & self.1.#mask) >> self.1.#shift
-                        }},
-                        quote! { #vis fn #set(mut self, data: #field_type) -> Self {
-                            self.0 &= !self.1.#mask;
-                            self.0 |= data << self.1.#shift;
-                            self
-                        }},
-                    ],
-                )
+                if let Some(ShiftedMask {
+                    _eq,
+                    mask,
+                    _shl,
+                    shift,
+                }) = default
+                {
+                    (
+                        vec![],
+                        vec![
+                            quote! { #vis fn #reg_field_name(&self) -> #field_type {
+                                (self.0 >> #shift) & #mask
+                            }},
+                            quote! { #vis fn #set(mut self, data: #field_type) -> Self {
+                                self.0 &= !(#mask << #shift);
+                                self.0 |= data << #shift;
+                                self
+                            }},
+                        ],
+                    )
+                } else {
+                    (
+                        vec![
+                            quote! { #vis #mask: #field_type },
+                            quote! { #vis #shift: #field_type },
+                        ],
+                        vec![
+                            quote! { #vis fn #reg_field_name(&self) -> #field_type {
+                                (self.0 & self.1.#mask) >> self.1.#shift
+                            }},
+                            quote! { #vis fn #set(mut self, data: #field_type) -> Self {
+                                self.0 &= !self.1.#mask;
+                                self.0 |= data << self.1.#shift;
+                                self
+                            }},
+                        ],
+                    )
+                }
             }
-            InputFieldRegFieldKind::Flag { _flag } => {
+            InputFieldRegFieldKind::Flag { _flag, default } => {
                 let set = Ident::new(&format!("set_{reg_field_name}"), reg_field_name.span());
-                (
-                    vec![quote! { #vis #reg_field_name: #field_type }],
-                    vec![
-                        quote! { #vis fn #reg_field_name(&self) -> bool {
-                            self.0 & self.1.#reg_field_name != 0
-                        }},
-                        quote! { #vis fn #set(mut self, val: bool) -> Self {
-                            self.0 &= !self.1.#reg_field_name;
-                            if val {
-                                self.0 |= self.1.#reg_field_name;
-                            }
-                            self
-                        }},
-                    ],
-                )
+                if let Some(ShiftedMask {
+                    _eq,
+                    mask: _,
+                    _shl,
+                    shift,
+                }) = default
+                {
+                    (
+                        vec![],
+                        vec![
+                            quote! { #vis fn #reg_field_name(&self) -> bool {
+                                self.0 & (1 << #shift) != 0
+                            }},
+                            quote! { #vis fn #set(mut self, val: bool) -> Self {
+                                self.0 &= !(1 << #shift);
+                                if val {
+                                    self.0 |= (1 << #shift);
+                                }
+                                self
+                            }},
+                        ],
+                    )
+                } else {
+                    (
+                        vec![quote! { #vis #reg_field_name: #field_type }],
+                        vec![
+                            quote! { #vis fn #reg_field_name(&self) -> bool {
+                                self.0 & self.1.#reg_field_name != 0
+                            }},
+                            quote! { #vis fn #set(mut self, val: bool) -> Self {
+                                self.0 &= !self.1.#reg_field_name;
+                                if val {
+                                    self.0 |= self.1.#reg_field_name;
+                                }
+                                self
+                            }},
+                        ],
+                    )
+                }
             }
             InputFieldRegFieldKind::Enum {
                 _enum,
+                default,
                 _brace_token,
                 variants,
             } => {
-                let mask = Ident::new(&format!("{reg_field_name}_mask"), reg_field_name.span());
-                let mut fields = vec![quote! { #vis #mask: #field_type }];
+                let mut fields = vec![];
                 let mut methods = vec![];
-                for variant in variants {
+                let (mask, shift) = if let Some(default) = default {
+                    let mask = default.mask;
+                    let shift = default.shift;
+                    (quote! { (#mask << #shift) }, quote! { #shift })
+                } else {
+                    let mask = Ident::new(&format!("{reg_field_name}_mask"), reg_field_name.span());
+                    let shift =
+                        Ident::new(&format!("{reg_field_name}_shift"), reg_field_name.span());
+                    fields.push(quote! { #vis #mask: #field_type });
+                    fields.push(quote! { #vis #shift: #field_type });
+                    (quote! { self.1.#mask }, quote! { self.1.#shift })
+                };
+
+                for (variant, variant_default) in variants {
                     let variant =
                         Ident::new(&format!("{reg_field_name}_{variant}"), variant.span());
                     let set_variant = Ident::new(&format!("set_{variant}"), variant.span());
-                    fields.push(quote! { #vis #variant: #field_type });
-                    methods.push(quote! {
+                    if let Some((_eq, variant_default)) = variant_default {
+                        methods.push(quote! {
+                            #vis fn #set_variant(mut self) -> Self {
+                                self.0 &= !#mask;
+                                self.0 |= #variant_default << #shift;
+                                self
+                            }
+                        });
+                    } else {
+                        fields.push(quote! { #vis #variant: #field_type });
+                        methods.push(quote! {
                         #vis fn #set_variant(mut self) -> Self {
-                            self.0 &= !self.1.#mask;
-                            self.0 |= self.1.#variant;
+                                self.0 &= !#mask;
+                                self.0 |= self.1.#variant << #shift;
                             self
                         }
-                    })
+                        });
+                    };
                 }
                 (fields, methods)
             }
@@ -263,6 +366,7 @@ pub(crate) fn define_regs(tokens: TokenStream) -> TokenStream {
                                 self.0
                             }
 
+                            // FIXME remove these eventually
                             #field_vis fn or_raw(self, data: #field_type) -> Self {
                                 Self(self.0 | data, self.1)
                             }

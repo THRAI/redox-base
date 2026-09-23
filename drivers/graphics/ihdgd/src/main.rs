@@ -1,3 +1,5 @@
+#![feature(drop_guard)]
+
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 

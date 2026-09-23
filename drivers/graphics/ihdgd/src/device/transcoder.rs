@@ -4,32 +4,6 @@ use ihdgd_macros::define_regs;
 use syscall::error::Result;
 
 use super::{MmioRegion, Pipe};
-
-// IHD-OS-KBL-Vol 2c-1.17 TRANS_CONF
-// IHD-OS-TGL-Vol 2c-12.21 TRANS_CONF
-const TRANS_CONF_ENABLE: u32 = 1 << 31;
-const TRANS_CONF_STATE: u32 = 1 << 30;
-pub const TRANS_CONF_MODE_MASK: u32 = 0b11 << 21;
-
-// IHD-OS-KBL-Vol 2c-1.17 TRANS_DDI_FUNC_CTL
-// IHD-OS-TGL-Vol 2c-12.21 TRANS_DDI_FUNC_CTL
-pub const TRANS_DDI_FUNC_CTL_ENABLE: u32 = 1 << 31;
-pub const TRANS_DDI_FUNC_CTL_MODE_HDMI: u32 = 0b000 << 24;
-pub const TRANS_DDI_FUNC_CTL_MODE_DVI: u32 = 0b001 << 24;
-pub const TRANS_DDI_FUNC_CTL_MODE_DP_SST: u32 = 0b010 << 24;
-pub const TRANS_DDI_FUNC_CTL_MODE_DP_MST: u32 = 0b011 << 24;
-pub const TRANS_DDI_FUNC_CTL_BPC_8: u32 = 0b000 << 20;
-pub const TRANS_DDI_FUNC_CTL_BPC_10: u32 = 0b001 << 20;
-pub const TRANS_DDI_FUNC_CTL_BPC_6: u32 = 0b010 << 20;
-pub const TRANS_DDI_FUNC_CTL_BPC_12: u32 = 0b011 << 20;
-pub const TRANS_DDI_FUNC_CTL_SYNC_POLARITY_HSHIGH: u32 = 0b01 << 16;
-pub const TRANS_DDI_FUNC_CTL_SYNC_POLARITY_VSHIGH: u32 = 0b10 << 16;
-pub const TRANS_DDI_FUNC_CTL_DSI_INPUT_PIPE_SHIFT: u32 = 12;
-pub const TRANS_DDI_FUNC_CTL_PORT_WIDTH_1: u32 = 0b000 << 1;
-pub const TRANS_DDI_FUNC_CTL_PORT_WIDTH_2: u32 = 0b001 << 1;
-pub const TRANS_DDI_FUNC_CTL_PORT_WIDTH_3: u32 = 0b010 << 1;
-pub const TRANS_DDI_FUNC_CTL_PORT_WIDTH_4: u32 = 0b011 << 1;
-
 define_regs! {
     pub struct Transcoder {
         pub let name: &'static str,
@@ -37,14 +11,46 @@ define_regs! {
         pub reg clk_sel: u32 {
             field clk_sel,
         },
+        // IHD-OS-KBL-Vol 2c-1.17 TRANS_CONF
+        // IHD-OS-TGL-Vol 2c-12.21 TRANS_CONF
         pub reg conf: u32 {
-            flag enable,
-            flag state,
+            flag enable = 1 << 31,
+            flag state = 1 << 30,
+            enum interlaced_mode = 0b11 << 21 {
+                pf_pd = 0b00,
+                pf_id = 0b01,
+                if_id = 0b11,
+            },
         },
+        // IHD-OS-KBL-Vol 2c-1.17 TRANS_DDI_FUNC_CTL
+        // IHD-OS-TGL-Vol 2c-12.21 TRANS_DDI_FUNC_CTL
         pub reg ddi_func_ctl: u32 {
+            flag enable = 1 << 31,
             field ddi,
-            flag hdmi_scrambling,
+            enum mode = 0b111 << 24 {
+                hdmi = 0b000,
+                dvi = 0b001,
+                dp_sst = 0b010,
+                dp_mst = 0b011,
+            },
+            enum bpc = 0b111 << 20 {
+                bpc8 = 0b000,
+                bpc10 = 0b001,
+                bpc6 = 0b010,
+                bpc12 = 0b011,
+            },
+            enum sync_polarity = 0b11 << 16 {
+                hshigh = 0b01,
+                vshigh = 0b10,
+            },
             flag high_tmds_char_rate,
+            enum port_width = 0b111 << 1 {
+                width1 = 0b000,
+                width2 = 0b001,
+                width3 = 0b010,
+                width4 = 0b011,
+            },
+            flag hdmi_scrambling,
         },
         pub reg ddi_func_ctl2?: u32,
         pub reg hblank: u32,
@@ -164,8 +170,6 @@ impl Transcoder {
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_CONF
                 conf: Transcoder_conf {
                     reg: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
-                    enable: TRANS_CONF_ENABLE,
-                    state: TRANS_CONF_STATE,
                 },
                 // IHD-OS-KBL-Vol 2c-1.17 TRANS_DDI_FUNC_CTL
                 ddi_func_ctl: Transcoder_ddi_func_ctl {
@@ -231,8 +235,6 @@ impl Transcoder {
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_CONF
                 conf: Transcoder_conf {
                     reg: unsafe { gttmm.mmio(0x70008 + i * 0x1000)? },
-                    enable: TRANS_CONF_ENABLE,
-                    state: TRANS_CONF_STATE,
                 },
                 // IHD-OS-TGL-Vol 2c-12.21 TRANS_DDI_FUNC_CTL
                 ddi_func_ctl: Transcoder_ddi_func_ctl {

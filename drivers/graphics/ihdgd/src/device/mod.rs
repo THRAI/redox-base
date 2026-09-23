@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
+use std::mem::DropGuard;
 use std::sync::Arc;
-use std::{fmt, mem};
 
 use common::io::{Io, MmioPtr};
 use common::timeout::Timeout;
@@ -38,31 +39,6 @@ mod scheme;
 use self::scheme::*;
 mod transcoder;
 use self::transcoder::*;
-
-//TODO: move to common?
-pub struct CallbackGuard<'a, T, F: FnOnce(&mut T)> {
-    value: &'a mut T,
-    fini: Option<F>,
-}
-
-impl<'a, T, F: FnOnce(&mut T)> CallbackGuard<'a, T, F> {
-    // Note that fini will also run if init fails
-    pub fn new(value: &'a mut T, init: impl FnOnce(&mut T) -> Result<()>, fini: F) -> Result<Self> {
-        let mut this = Self {
-            value,
-            fini: Some(fini),
-        };
-        init(&mut this.value)?;
-        Ok(this)
-    }
-}
-
-impl<'a, T, F: FnOnce(&mut T)> Drop for CallbackGuard<'a, T, F> {
-    fn drop(&mut self) {
-        let fini = self.fini.take().unwrap();
-        fini(&mut self.value);
-    }
-}
 
 pub struct ChangeDetect {
     name: &'static str,
@@ -576,7 +552,7 @@ impl Device {
             let pipe = &self.pipes[driver_data.pipe_idx];
             let transcoder = &self.transcoders[driver_data.transcoder_idx];
             for plane in pipe.planes.iter() {
-                if plane.ctl.reg.readf(PLANE_CTL_ENABLE) {
+                if plane.ctl.read().enable() {
                     plane.fetch_modeset(&mut self.alloc_buffers);
 
                     let fb = plane.fetch_framebuffer(&self.gm, &mut self.ggtt);
@@ -652,7 +628,7 @@ impl Device {
 
     pub fn dump(&self) {
         for ddi in self.ddis.iter() {
-            if ddi.buf_ctl.readf(DDI_BUF_CTL_ENABLE) {
+            if ddi.buf_ctl.read().enable() {
                 ddi.dump();
             }
         }
@@ -671,7 +647,7 @@ impl Device {
                 transcoder.dump();
                 pipe.dump();
                 for plane in pipe.planes.iter() {
-                    if plane.index == 0 || plane.ctl.reg.readf(PLANE_CTL_ENABLE) {
+                    if plane.index == 0 || plane.ctl.read().enable() {
                         eprint!("  ");
                         plane.dump();
                     }
@@ -803,27 +779,20 @@ impl Device {
             //TODO: skip if TBT
             let pwr_well_ctl_ddi_request = ddi.pwr_well_ctl_ddi_request;
             let pwr_well_ctl_ddi_state = ddi.pwr_well_ctl_ddi_state;
-            let mut pwr_well_ctl_ddi =
-                unsafe { MmioPtr::new(self.power_wells.ctl_ddi.as_mut_ptr()) };
-            let pwr_guard = CallbackGuard::new(
-                &mut pwr_well_ctl_ddi,
-                |pwr_well_ctl_ddi| {
-                    // Enable IO power
-                    pwr_well_ctl_ddi.writef(pwr_well_ctl_ddi_request, true);
-                    let timeout = Timeout::from_micros(30);
-                    while !pwr_well_ctl_ddi.readf(pwr_well_ctl_ddi_state) {
-                        timeout.run().map_err(|()| {
-                            log::debug!("timeout while requesting DDI {} IO power", ddi.name);
-                            Error::new(EIO)
-                        })?;
-                    }
-                    Ok(())
-                },
-                |pwr_well_ctl_ddi| {
-                    // Disable IO power
-                    pwr_well_ctl_ddi.writef(pwr_well_ctl_ddi_request, false);
-                },
-            )?;
+            let power_wells = &mut self.power_wells;
+            // Enable IO power
+            power_wells.ctl_ddi.writef(pwr_well_ctl_ddi_request, true);
+            let timeout = Timeout::from_micros(30);
+            while !power_wells.ctl_ddi.readf(pwr_well_ctl_ddi_state) {
+                timeout.run().map_err(|()| {
+                    log::debug!("timeout while requesting DDI {} IO power", ddi.name);
+                    Error::new(EIO)
+                })?;
+            }
+            let mut pwr_guard = DropGuard::new(power_wells, |power_wells| {
+                // Disable IO power
+                power_wells.ctl_ddi.writef(pwr_well_ctl_ddi_request, false);
+            });
 
             //TODO: Type-C DP_MODE
 
@@ -846,9 +815,8 @@ impl Device {
 
                 // Enable pipe and transcoder power wells
                 //TODO: turn off wells later if not used
-                self.power_wells.enable_well_by_pipe(pipe.name)?;
-                self.power_wells
-                    .enable_well_by_transcoder(transcoder.name)?;
+                pwr_guard.enable_well_by_pipe(pipe.name)?;
+                pwr_guard.enable_well_by_transcoder(transcoder.name)?;
 
                 // Configure transcoder clock select
                 if let Some(clock_select) = ddi.trans_clock_select {
@@ -874,13 +842,12 @@ impl Device {
 
                 // Configure and enable TRANS_DDI_FUNC_CTL
                 transcoder.ddi_func_ctl.write(|mut data| {
-                    data = data.or_raw(
-                        TRANS_DDI_FUNC_CTL_ENABLE |
+                    data = data
+                        .set_enable(true)
                         //TODO: allow different bits per color
-                        TRANS_DDI_FUNC_CTL_BPC_8 |
+                        .set_bpc_bpc8()
                         //TODO: correct port width selection
-                        TRANS_DDI_FUNC_CTL_PORT_WIDTH_4,
-                    );
+                        .set_port_width_width4();
 
                     if let Some(ddi_select) = ddi.trans_ddi_select {
                         data = data.set_ddi(ddi_select);
@@ -888,7 +855,7 @@ impl Device {
 
                     match input {
                         VideoInput::Hdmi => {
-                            data = data.or_raw(TRANS_DDI_FUNC_CTL_MODE_HDMI);
+                            data = data.set_mode_hdmi();
 
                             // Set HDMI scrambling and high TMDS char rate based on symbol rate > 340 MHz
                             if mode.clock > 340_000 {
@@ -897,16 +864,16 @@ impl Device {
                         }
                         VideoInput::Dp => {
                             //TODO: MST
-                            data = data.or_raw(TRANS_DDI_FUNC_CTL_MODE_DP_SST);
+                            data = data.set_mode_dp_sst();
                         }
                     }
 
                     // Sync polarity
                     if (mode.flags & drm_sys::DRM_MODE_FLAG_PVSYNC) != 0 {
-                        data = data.or_raw(TRANS_DDI_FUNC_CTL_SYNC_POLARITY_VSHIGH);
+                        data = data.set_sync_polarity_vshigh();
                     }
                     if (mode.flags & drm_sys::DRM_MODE_FLAG_PHSYNC) != 0 {
-                        data = data.or_raw(TRANS_DDI_FUNC_CTL_SYNC_POLARITY_HSHIGH);
+                        data = data.set_sync_polarity_hshigh();
                     }
 
                     data
@@ -915,7 +882,7 @@ impl Device {
                 // Configure and enable TRANS_CONF
                 transcoder.conf.modify(|data| {
                     // Set mode to progressive
-                    data.and_raw(!TRANS_CONF_MODE_MASK)
+                    data.set_interlaced_mode_pf_pd()
                         // Enable transcoder
                         .set_enable(true)
                 });
@@ -955,11 +922,11 @@ impl Device {
 
                 // Configure and enable DDI_BUF_CTL
                 //TODO: more DDI_BUF_CTL bits?
-                ddi.buf_ctl.writef(DDI_BUF_CTL_ENABLE, true);
+                ddi.buf_ctl.modify(|data| data.set_enable(true));
 
                 // Wait for DDI_BUF_CTL IDLE = 0, timeout after 500 us
                 let timeout = Timeout::from_micros(500);
-                while ddi.buf_ctl.readf(DDI_BUF_CTL_IDLE) {
+                while ddi.buf_ctl.read().idle() {
                     timeout.run().map_err(|()| {
                         log::warn!("timeout while waiting for DDI {} active", ddi.name);
                         Error::new(EIO)
@@ -968,12 +935,12 @@ impl Device {
             }
 
             // Keep IO power on if finished
-            mem::forget(pwr_guard);
+            DropGuard::dismiss(pwr_guard);
 
             Ok(())
         };
 
-        if ddi.buf_ctl.readf(DDI_BUF_CTL_IDLE) {
+        if ddi.buf_ctl.read().idle() {
             log::info!("DDI {} idle, will attempt mode setting", ddi.name);
             const EDID_VIDEO_INPUT_UNDEFINED: u8 = (1 << 7) | 0b0000;
             const EDID_VIDEO_INPUT_DVI: u8 = (1 << 7) | 0b0001;

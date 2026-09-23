@@ -83,43 +83,41 @@ impl<'a> Transactional for Aux<'a> {
                 self.ddi.aux_datas[i].write(u32::from_be_bytes(bytes));
             }
 
-            let mut v = self.ddi.aux_ctl.read();
-            // Set length
-            v &= !DDI_AUX_CTL_SIZE_MASK;
-            v |= (aux_data_i as u32) << DDI_AUX_CTL_SIZE_SHIFT;
-            // Set timeout
-            v &= !DDI_AUX_CTL_TIMEOUT_MASK;
-            v |= DDI_AUX_CTL_TIMEOUT_4000US;
-            // Set I/O select to legacy (cleared)
-            //TODO: TBT support?
-            v &= !DDI_AUX_CTL_IO_SELECT;
-            // Start transaction
-            v |= DDI_AUX_CTL_BUSY;
-            self.ddi.aux_ctl.write(v);
+            self.ddi.aux_ctl.modify(|v| {
+                // Set length
+                v.set_size(aux_data_i as u32)
+                    // Set timeout
+                    .set_timeout_timeout4000us()
+                    // Set I/O select to legacy (cleared)
+                    //TODO: TBT support?
+                    .set_io_select_legacy()
+                    // Start transaction
+                    .set_busy(true)
+            });
 
             // Wait while busy
             let timeout = Timeout::from_secs(1);
-            while self.ddi.aux_ctl.readf(DDI_AUX_CTL_BUSY) {
+            while self.ddi.aux_ctl.read().busy() {
                 timeout.run().map_err(|()| {
                     log::debug!(
                         "AUX I2C transaction wait timeout 0x{:08X}",
-                        self.ddi.aux_ctl.read()
+                        self.ddi.aux_ctl.read().raw()
                     );
                     ()
                 })?;
             }
 
             // Read result
-            v = self.ddi.aux_ctl.read();
-            if (v & DDI_AUX_CTL_TIMEOUT_ERROR) != 0 {
+            let v = self.ddi.aux_ctl.read();
+            if v.timeout_error() {
                 log::debug!("AUX I2C transaction timeout error");
                 return Err(());
             }
-            if (v & DDI_AUX_CTL_RECEIVE_ERROR) != 0 {
+            if v.receive_error() {
                 log::debug!("AUX I2C transaction receive error");
                 return Err(());
             }
-            if (v & DDI_AUX_CTL_DONE) == 0 {
+            if !v.done() {
                 log::debug!("AUX I2C transaction done not set");
                 return Err(());
             }
