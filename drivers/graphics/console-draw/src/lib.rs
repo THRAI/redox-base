@@ -18,13 +18,11 @@ use alacritty_terminal::term::{
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use alacritty_terminal::{vte, Term};
 use drm::buffer::{Buffer, DrmFourcc};
-use drm::control::{self, connector, crtc, framebuffer, ClipRect, Device, Mode, RawResourceHandle};
-use drm_ffi::drm_event;
+use drm::control::{connector, crtc, framebuffer, ClipRect, Device, Mode, RawResourceHandle};
 use graphics_ipc::redox_uapi_exts::{
     RedoxDrmEventConnectorHotplug, REDOX_DRM_CLIENT_CAP_HOTPLUG_EVENTS,
-    REDOX_DRM_EVENT_CONNECTOR_HOTPLUG,
 };
-use graphics_ipc::{CpuBackedBuffer, DrmHandle};
+use graphics_ipc::{CpuBackedBuffer, DrmHandle, RedoxDrmEvents};
 use orbclient::FONT;
 
 pub struct V2DisplayMap {
@@ -542,26 +540,14 @@ impl TextScreen {
     }
 
     pub fn handle_display_event(&mut self, map: &mut V2DisplayMap) -> io::Result<()> {
-        for event in map.display_handle.receive_events()? {
+        for event in map.display_handle.redox_receive_events()? {
             match event {
-                control::Event::Vblank(_) | control::Event::PageFlip(_) => todo!(),
-                control::Event::Unknown(data) => {
-                    assert!(data.len() >= size_of::<drm_event>());
-                    let event = unsafe { ptr::read_unaligned(data.as_ptr().cast::<drm_event>()) };
-                    match event.type_ {
-                        REDOX_DRM_EVENT_CONNECTOR_HOTPLUG => {
-                            assert_eq!(data.len(), size_of::<RedoxDrmEventConnectorHotplug>());
-                            let event = unsafe {
-                                ptr::read_unaligned(
-                                    data.as_ptr().cast::<RedoxDrmEventConnectorHotplug>(),
-                                )
-                            };
-
-                            self.handle_connector_hotplug(map, Some(event))?;
-                        }
-                        _ => {}
-                    }
+                RedoxDrmEvents::RedoxConnectorHotplug(event) => {
+                    self.handle_connector_hotplug(map, Some(event))?;
                 }
+                RedoxDrmEvents::Vblank(_)
+                | RedoxDrmEvents::PageFlip(_)
+                | RedoxDrmEvents::Unknown(_) => todo!(),
             }
         }
 
