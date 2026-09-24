@@ -20,7 +20,7 @@ use syscall::schemev2::NewFdFlags;
 use syscall::{EINVAL, Error, EventFlags, Result};
 
 use crate::handle::DrmHandle;
-use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState, KmsConnectorStatus};
+use crate::kms::connector::{KmsConnectorDriver, KmsConnectorState};
 use crate::kms::crtc::{KmsCrtc, KmsCrtcDriver, KmsCrtcState};
 use crate::kms::objects::{KmsObjectId, KmsObjects};
 use crate::kms::plane::{KmsPlane, KmsPlaneDriver, KmsPlaneState};

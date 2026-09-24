@@ -80,23 +80,17 @@ pub(super) fn get_cap<T: GraphicsAdapter>(
         ),
         DRM_CAP_TIMESTAMP_MONOTONIC => 1,
         DRM_CAP_CURSOR_WIDTH => {
-            // FIXME should return a default value when hardware cursors are not supported
-            // once Orbital no longer uses an EINVAL result to detect support for hardware
-            // cursors.
             if let Some((width, _height)) = adapter.cursor_size() {
                 width
             } else {
-                return Err(Error::new(EINVAL));
+                0
             }
         }
         DRM_CAP_CURSOR_HEIGHT => {
-            // FIXME should return a default value when hardware cursors are not supported
-            // once Orbital no longer uses an EINVAL result to detect support for hardware
-            // cursors.
             if let Some((_width, height)) = adapter.cursor_size() {
                 height
             } else {
-                return Err(Error::new(EINVAL));
+                0
             }
         }
         _ => return Err(Error::new(EINVAL)),
