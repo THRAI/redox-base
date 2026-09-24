@@ -15,7 +15,7 @@ use core::task::Poll::{self, *};
 
 use arrayvec::ArrayString;
 use hashbrown::hash_map::{Entry, OccupiedEntry, VacantEntry};
-use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
+use hashbrown::{DefaultHashBuilder, HashMap};
 use libredox::protocol::{
     PidfdCall, ProcCall, ProcKillTarget, ProcMeta, Rlimit, RtSigInfo, SIGCHLD, SIGCONT, SIGHUP,
     SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU, ThreadCall, WaitFlags,
@@ -488,7 +488,7 @@ const INIT_PID: ProcessId = ProcessId(1);
 struct ProcScheme<'a> {
     processes: HashMap<ProcessId, Rc<RefCell<Process>>, DefaultHashBuilder>,
     groups: HashMap<ProcessId, Rc<RefCell<Pgrp>>>,
-    sessions: HashSet<ProcessId, DefaultHashBuilder>,
+    sessions: HashMap<ProcessId, Session>,
     handles: Slab<Handle>,
 
     thread_lookup: HashMap<usize, Weak<RefCell<Thread>>>,
@@ -505,6 +505,12 @@ struct ProcScheme<'a> {
 struct Pgrp {
     processes: Vec<Weak<RefCell<Process>>>,
 }
+
+struct Session {
+    process_count: usize,
+    controlling_term: Option<FdGuard>,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum WaitpidStatus {
     Continued,
@@ -589,7 +595,7 @@ impl<'a> ProcScheme<'a> {
         ProcScheme {
             processes: HashMap::new(),
             groups: HashMap::new(),
-            sessions: HashSet::new(),
+            sessions: HashMap::new(),
             thread_lookup: HashMap::new(),
             handles: Slab::new(),
             init_claimed: false,
@@ -665,12 +671,56 @@ impl<'a> ProcScheme<'a> {
                     })),
                 );
                 self.processes.insert(INIT_PID, process);
-                self.sessions.insert(INIT_PID);
+                self.sessions.insert(
+                    INIT_PID,
+                    Session {
+                        process_count: 1,
+                        controlling_term: None,
+                    },
+                );
 
                 self.thread_lookup.insert(fd_out, thread_weak);
 
                 *st = Handle::Proc(INIT_PID);
                 Response::ok(0, req)
+            }
+            Handle::ProcObj(pid) => {
+                let metadata = req.metadata();
+                let Some(verb) = ProcCall::try_from_raw(metadata[0] as usize) else {
+                    return Response::err(EINVAL, req);
+                };
+                match verb {
+                    ProcCall::ControlTerm => {
+                        let Some(caller_proc_rc) = self.processes.get(&pid) else {
+                            return Response::new(Err(Error::new(EINVAL)), req);
+                        };
+                        let caller_proc = caller_proc_rc.borrow_mut();
+                        // Only a session leader should be able to acquire a controlling terminal
+                        if caller_proc.pgid != caller_proc.pid && caller_proc.sid != caller_proc.pid
+                        {
+                            return Response::new(Err(Error::new(EPERM)), req);
+                        }
+                        let mut fd_out = usize::MAX;
+                        if let Err(e) = req.obtain_fd(
+                            socket,
+                            FobtainFdFlags::empty(),
+                            core::slice::from_mut(&mut fd_out),
+                        ) {
+                            return Response::new(Err(e), req);
+                        };
+                        let cont_term = FdGuard::new(fd_out);
+                        // Can only assign a controlling terminal if the session doesn't have one
+                        if let Some(session) = self.sessions.get_mut(&pid)
+                            && session.controlling_term.is_none()
+                        {
+                            session.controlling_term = Some(cont_term);
+                            Response::ok(0, req)
+                        } else {
+                            Response::new(Err(Error::new(EINVAL)), req)
+                        }
+                    }
+                    _ => Response::err(EINVAL, req),
+                }
             }
             _ => Response::err(EBADF, req),
         }
@@ -751,6 +801,9 @@ impl<'a> ProcScheme<'a> {
 
         self.processes.insert(child_pid, new_process);
         self.thread_lookup.insert(thread_ident, thread_weak);
+        if let Some(session) = self.sessions.get_mut(&sid) {
+            session.process_count += 1;
+        }
         Ok(child_pid)
     }
     fn new_thread(&mut self, pid: ProcessId) -> Result<Rc<RefCell<Thread>>> {
@@ -972,9 +1025,6 @@ impl<'a> ProcScheme<'a> {
                     return Response::ready_err(EINVAL, op);
                 };
                 match verb {
-                    ProcCall::ControlTerm => {
-                        return Response::ready_err(EINVAL, op);
-                    }
                     ProcCall::Exit => self.on_exit_start(
                         fd_pid,
                         metadata[1] as u16,
@@ -1144,6 +1194,7 @@ impl<'a> ProcScheme<'a> {
                             op,
                         ))
                     }
+                    ProcCall::ControlTerm => Response::ready_err(EINVAL, op),
                 }
             }
             Handle::ProcObj(fd_pid) => {
@@ -1282,9 +1333,30 @@ impl<'a> ProcScheme<'a> {
             caller_pid,
             awoken,
         )?;
+
+        // It is possible that the process calling setsid was the last process
+        // in the old session.
+        let mut remove_session = false;
+        if let Some(session) = self.sessions.get_mut(&caller_proc.sid) {
+            if session.process_count > 1 {
+                session.process_count -= 1;
+            } else {
+                remove_session = true;
+            }
+        }
+        if remove_session {
+            self.sessions.remove(&caller_proc.sid);
+        }
+
         caller_proc.sid = caller_pid;
 
-        // TODO: Remove controlling terminal
+        self.sessions.insert(
+            caller_pid,
+            Session {
+                process_count: 1,
+                controlling_term: None,
+            },
+        );
         Ok(())
     }
     fn on_getppid(&mut self, caller_pid: ProcessId) -> Result<ProcessId> {
@@ -1861,6 +1933,23 @@ impl<'a> ProcScheme<'a> {
 
                     proc.status = ProcessStatus::Exited { signal, status };
 
+                    let mut remove_session = false;
+                    if let Some(session) = self.sessions.get_mut(&proc.sid) {
+                        if session.process_count > 1 {
+                            session.process_count -= 1;
+                            // Terminating a session leader dissociates the
+                            // controlling terminal from the session
+                            if proc.sid == proc.pid {
+                                session.controlling_term = None;
+                            }
+                        } else {
+                            remove_session = true;
+                        }
+                    }
+                    if remove_session {
+                        self.sessions.remove(&proc.sid);
+                    }
+
                     let (ppid, pgid) = (proc.ppid, proc.pgid);
                     drop(proc_guard);
 
@@ -2386,7 +2475,7 @@ impl<'a> ProcScheme<'a> {
                                 .expect("TODO");
                         }
                     }
-                    KillTarget::Proc(proc) => {
+                    KillTarget::Proc(_) => {
                         match mode {
                             KillMode::Queued(arg) => {
                                 if sig_group != 1 {
