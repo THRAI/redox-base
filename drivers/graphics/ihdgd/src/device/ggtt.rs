@@ -63,10 +63,11 @@ impl GlobalGtt {
 
         log::info!("Base DSM: {:X}", base_dsm);
         log::info!(
-            "GGC: {:X} => global GTT size: {}MiB; DSM size: {}MiB",
+            "GGC: {:X} => global GTT size: {}MiB; DSM size: {}MiB; GM size: {}MiB",
             ggc,
             gtt_size / 1024 / 1024,
             dsm_size / 1024 / 1024,
+            gm_size / 1024 / 1024,
         );
 
         let gm_alloc = RangeAllocator::new(0..gm_size / GTT_PAGE_SIZE);
@@ -93,9 +94,7 @@ impl GlobalGtt {
         assert!(surf_size.is_multiple_of(GTT_PAGE_SIZE));
 
         self.gm_alloc
-            .allocate_exact_range(
-                surf / GTT_PAGE_SIZE..surf / GTT_PAGE_SIZE + surf_size / GTT_PAGE_SIZE,
-            )
+            .allocate_exact_range(surf / GTT_PAGE_SIZE..(surf + surf_size) / GTT_PAGE_SIZE)
             .unwrap_or_else(|err| {
                 panic!(
                     "failed to allocate pre-existing surface at 0x{:x} of size {}: {:?}",

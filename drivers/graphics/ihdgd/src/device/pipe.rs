@@ -46,14 +46,21 @@ impl Plane {
         let buf_cfg = self.buf_cfg.read();
         let buffer_start = buf_cfg & 0x7FF;
         let buffer_end = (buf_cfg >> 16) & 0x7FF;
-        alloc_buffers
-            .allocate_exact_range(buffer_start..(buffer_end + 1))
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to allocate pre-existing buffer blocks {} to {}: {:?}",
-                    buffer_start, buffer_end, err
-                );
-            });
+        log::info!(
+            "plane {} modeset {}:{}",
+            self.name,
+            buffer_start,
+            buffer_end
+        );
+        if let Err(err) = alloc_buffers.allocate_exact_range(buffer_start..(buffer_end + 1)) {
+            //TODO: firmware often allocates these oddly
+            log::error!(
+                "failed to allocate pre-existing buffer blocks {} to {}: {:?}",
+                buffer_start,
+                buffer_end,
+                err
+            );
+        }
     }
 
     pub fn modeset(&mut self, alloc_buffers: &mut RangeAllocator<u32>) -> syscall::Result<()> {

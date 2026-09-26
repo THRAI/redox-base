@@ -556,7 +556,7 @@ impl Device {
                     plane.fetch_modeset(&mut self.alloc_buffers);
 
                     let fb = plane.fetch_framebuffer(&self.gm, &mut self.ggtt);
-                    log::info!("plane {}{}: {:?}", plane.name, pipe.name, fb);
+                    log::info!("plane {}{}: {:?}", pipe.name, plane.name, fb);
 
                     //TODO: use EDID for firmware mode instead of modeinfo_for_size
                     objects

@@ -94,11 +94,11 @@ impl GraphicsAdapter for Device {
             .unwrap()
             .driver_data
             .ddi_name;
-        log::info!("probe connector {:?}: DDI {}", id, ddi_name);
+        log::debug!("probe connector {:?}: DDI {}", id, ddi_name);
         let connection = match self.probe_ddi(objects, id) {
             Ok(true) => KmsConnectorStatus::Connected,
             Ok(false) => {
-                log::warn!("timeout probing {}", ddi_name);
+                log::debug!("timeout probing {}", ddi_name);
                 KmsConnectorStatus::Disconnected
             }
             Err(err) => {
