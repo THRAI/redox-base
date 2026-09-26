@@ -1309,7 +1309,7 @@ impl<const N: usize> Xhci<N> {
             // device driver may be required for each alternate. For now, we will use
             // only the default alternate setting (0)
             if ifdesc.alternate_setting != 0 {
-                warn!(
+                debug!(
                     "ignoring port {} iface {} alternate {} class {}.{} proto {}",
                     port,
                     ifdesc.number,
@@ -1390,7 +1390,7 @@ impl<const N: usize> Xhci<N> {
                     Some(children)
                 });
             } else {
-                warn!(
+                debug!(
                     "No driver for port {} iface {} alternate {} class {}.{} proto {}",
                     port,
                     ifdesc.number,
