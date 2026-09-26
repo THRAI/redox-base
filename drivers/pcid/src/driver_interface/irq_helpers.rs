@@ -341,6 +341,10 @@ impl InterruptVector {
         self.vector
     }
 
+    pub fn is_legacy(&self) -> bool {
+        matches!(self.kind, InterruptVectorKind::Legacy)
+    }
+
     pub fn set_masked_if_fast(&mut self, masked: bool) -> bool {
         match self.kind {
             InterruptVectorKind::Legacy | InterruptVectorKind::Msi => false,

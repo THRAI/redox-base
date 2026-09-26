@@ -114,6 +114,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
 
     let interrupt_vector = irq_helpers::pci_allocate_interrupt_vector(&mut pcid_handle, "nvmed");
     let iv = interrupt_vector.vector();
+    let intx = interrupt_vector.is_legacy();
     let irq_handle = interrupt_vector.irq_handle().try_clone().unwrap();
 
     let mut nvme = Nvme::new(address.as_ptr() as usize, interrupt_vector, pcid_handle)
@@ -123,7 +124,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     log::debug!("Finished base initialization");
     let nvme = Arc::new(nvme);
 
-    let executor = nvme::executor::init(Arc::clone(&nvme), iv, false /* FIXME */, irq_handle);
+    let executor = nvme::executor::init(Arc::clone(&nvme), iv, intx, irq_handle);
 
     let mut time_handle = File::open(&format!("/scheme/time/{}", libredox::flag::CLOCK_MONOTONIC))
         .expect("failed to open time handle");
